@@ -1,0 +1,26 @@
+{
+    "Group": "Scyphoz",
+    "Name": "DapperMap",
+    "Version": "0.0.1",
+    "Description": "A lightweight and sophisticated minimap mod for Hytale",
+    "Authors": [
+        {
+            "Name": "Scyphoz",
+            "Email": "325493213+Scyphoz@users.noreply.github.com"
+        }
+    ],
+    "Website": "https://your-plugin-website.com",
+    "ServerVersion": ">=0.6.3 <0.7.0",
+    "Dependencies": {
+        "Hytale:AssetModule": "*"
+    },
+    "OptionalDependencies": {
+        
+    },
+    "DisabledByDefault": false,
+    "Main": "dev.scyphoz.dappermap.DapperMap",
+    "IncludesAssetPack": true,
+    "UpdateChecker": {
+        "CurseForge": ""
+    }
+}

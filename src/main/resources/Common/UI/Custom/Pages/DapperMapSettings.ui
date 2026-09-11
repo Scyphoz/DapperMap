@@ -1,0 +1,54 @@
+$C = "../Common.ui";
+
+$C.@PageOverlay {}
+
+$C.@DecoratedContainer {
+  Anchor: (Width: 700, Height: 760);
+
+  #Title {
+    Label #PageTitle {
+      Style: (
+        ...$C.@TitleStyle,
+        HorizontalAlignment: Center,
+        TextColor: #ffd66b,
+      );
+      Padding: (Horizontal: 19);
+    }
+  }
+
+  #Content {
+    LayoutMode: Top;
+    Padding: (Horizontal: 14);
+
+    Group #DapperMapHeader {
+      Anchor: (Height: 76);
+      Background: #0b1822(0.96);
+      LayoutMode: Top;
+      Padding: (Horizontal: 16, Vertical: 10);
+
+      Label #DapperMapKicker {
+        Anchor: (Height: 20);
+        Text: "MINIMAP CONTROLS";
+        Style: (FontSize: 13, RenderBold: true, TextColor: #ffd66b, HorizontalAlignment: Center, VerticalAlignment: Center);
+      }
+
+      Label #DapperMapSettingsSummary {
+        Anchor: (Height: 32);
+        Style: (FontSize: 15, RenderBold: true, TextColor: #d9eefc, HorizontalAlignment: Center, VerticalAlignment: Center);
+      }
+    }
+
+    Group #DapperMapSettingsListContainer {
+      FlexWeight: 1;
+      LayoutMode: TopScrolling;
+      ScrollbarStyle: $C.@DefaultScrollbarStyle;
+      Padding: (Top: 10, Left: 8, Right: 8);
+
+      Group #DapperMapSettingsList {
+        LayoutMode: Top;
+      }
+    }
+  }
+}
+
+$C.@BackButton {}

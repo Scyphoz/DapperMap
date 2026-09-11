@@ -1,0 +1,306 @@
+@PanelText = (FontSize: 11, TextColor: #cfe0ef, HorizontalAlignment: Center, VerticalAlignment: Center);
+@MutedText = (FontSize: 10, TextColor: #8ea2b5, HorizontalAlignment: Center, VerticalAlignment: Center);
+@MarkerText = (FontSize: 10, TextColor: #edf4fb, HorizontalAlignment: Center, VerticalAlignment: Center);
+
+Group #WayfinderMinimapRoot {
+  Anchor: (Right: 18, Top: 24, Width: 248, Height: 306);
+  LayoutMode: Top;
+  Background: #06111a(0.78);
+  Padding: (Full: 8);
+
+  Group {
+    Anchor: (Height: 22);
+    LayoutMode: Left;
+    Background: #122536(0.92);
+    Padding: (Left: 8, Right: 8);
+
+    Label {
+      Text: "WAYFINDER";
+      FlexWeight: 1;
+      Style: (FontSize: 11, TextColor: #e8f3ff, RenderBold: true, HorizontalAlignment: Center, VerticalAlignment: Center);
+    }
+
+    Label #ModeText {
+      Text: "round";
+      Anchor: (Width: 54);
+      Style: @MutedText;
+    }
+  }
+
+  Group { Anchor: (Height: 7); }
+
+  Group #MapSurface {
+    Anchor: (Height: 184);
+    LayoutMode: Top;
+    Background: #0d1c20(0.94);
+    Padding: (Full: 6);
+
+    Group {
+      Anchor: (Height: 18);
+      LayoutMode: Center;
+
+      Label {
+        Text: "N";
+        Anchor: (Width: 24, Height: 18);
+        Style: (FontSize: 12, TextColor: #eaf6ff, RenderBold: true, HorizontalAlignment: Center, VerticalAlignment: Center);
+      }
+    }
+
+    Group {
+      FlexWeight: 1;
+      LayoutMode: Center;
+
+      Label {
+        Text: "W";
+        Anchor: (Width: 30, Height: 132);
+        Style: @PanelText;
+      }
+
+      Group {
+        Anchor: (Width: 132, Height: 132);
+        LayoutMode: Full;
+        Background: #173a32(0.95);
+
+        Group #TileGrid {
+          Anchor: (Full: 0);
+          LayoutMode: Top;
+
+          Group #TileRow0 { Anchor: (Height: 4); LayoutMode: Left; }
+          Group #TileRow1 { Anchor: (Height: 4); LayoutMode: Left; }
+          Group #TileRow2 { Anchor: (Height: 4); LayoutMode: Left; }
+          Group #TileRow3 { Anchor: (Height: 4); LayoutMode: Left; }
+          Group #TileRow4 { Anchor: (Height: 4); LayoutMode: Left; }
+          Group #TileRow5 { Anchor: (Height: 4); LayoutMode: Left; }
+          Group #TileRow6 { Anchor: (Height: 4); LayoutMode: Left; }
+          Group #TileRow7 { Anchor: (Height: 4); LayoutMode: Left; }
+          Group #TileRow8 { Anchor: (Height: 4); LayoutMode: Left; }
+          Group #TileRow9 { Anchor: (Height: 4); LayoutMode: Left; }
+          Group #TileRow10 { Anchor: (Height: 4); LayoutMode: Left; }
+          Group #TileRow11 { Anchor: (Height: 4); LayoutMode: Left; }
+          Group #TileRow12 { Anchor: (Height: 4); LayoutMode: Left; }
+          Group #TileRow13 { Anchor: (Height: 4); LayoutMode: Left; }
+          Group #TileRow14 { Anchor: (Height: 4); LayoutMode: Left; }
+          Group #TileRow15 { Anchor: (Height: 4); LayoutMode: Left; }
+          Group #TileRow16 { Anchor: (Height: 4); LayoutMode: Left; }
+          Group #TileRow17 { Anchor: (Height: 4); LayoutMode: Left; }
+          Group #TileRow18 { Anchor: (Height: 4); LayoutMode: Left; }
+          Group #TileRow19 { Anchor: (Height: 4); LayoutMode: Left; }
+          Group #TileRow20 { Anchor: (Height: 4); LayoutMode: Left; }
+          Group #TileRow21 { Anchor: (Height: 4); LayoutMode: Left; }
+          Group #TileRow22 { Anchor: (Height: 4); LayoutMode: Left; }
+          Group #TileRow23 { Anchor: (Height: 4); LayoutMode: Left; }
+          Group #TileRow24 { Anchor: (Height: 4); LayoutMode: Left; }
+          Group #TileRow25 { Anchor: (Height: 4); LayoutMode: Left; }
+          Group #TileRow26 { Anchor: (Height: 4); LayoutMode: Left; }
+          Group #TileRow27 { Anchor: (Height: 4); LayoutMode: Left; }
+          Group #TileRow28 { Anchor: (Height: 4); LayoutMode: Left; }
+          Group #TileRow29 { Anchor: (Height: 4); LayoutMode: Left; }
+          Group #TileRow30 { Anchor: (Height: 4); LayoutMode: Left; }
+          Group #TileRow31 { Anchor: (Height: 4); LayoutMode: Left; }
+          Group #TileRow32 { Anchor: (Height: 4); LayoutMode: Left; }
+        }
+
+        Group #MapContainer {
+          Anchor: (Full: 0);
+          Background: #000000(0.0);
+          LayoutMode: Full;
+          MaskTexturePath: "MapMask.png";
+        }
+      }
+
+      Group #MarkerLayer {
+        Anchor: (Width: 132, Height: 132, Left: -132);
+
+        Label #HeadingArrow {
+          Text: "^";
+          Anchor: (Left: 52, Top: 52, Width: 28, Height: 28);
+          Style: (FontSize: 25, TextColor: #f8fbff, RenderBold: true, HorizontalAlignment: Center, VerticalAlignment: Center);
+        }
+
+        Label #MarkerDot0 {
+          Text: "+";
+          Visible: false;
+          Anchor: (Left: 61, Top: 61, Width: 9, Height: 9);
+          Style: (FontSize: 11, TextColor: #ffe47a, RenderBold: true, HorizontalAlignment: Center, VerticalAlignment: Center);
+        }
+
+        Label #MarkerDot1 {
+          Text: "+";
+          Visible: false;
+          Anchor: (Left: 61, Top: 61, Width: 9, Height: 9);
+          Style: (FontSize: 11, TextColor: #f0f7ff, RenderBold: true, HorizontalAlignment: Center, VerticalAlignment: Center);
+        }
+
+        Label #MarkerDot2 {
+          Text: "+";
+          Visible: false;
+          Anchor: (Left: 61, Top: 61, Width: 9, Height: 9);
+          Style: (FontSize: 11, TextColor: #f0f7ff, RenderBold: true, HorizontalAlignment: Center, VerticalAlignment: Center);
+        }
+
+        Label #MarkerDot3 {
+          Text: "+";
+          Visible: false;
+          Anchor: (Left: 61, Top: 61, Width: 9, Height: 9);
+          Style: (FontSize: 11, TextColor: #f0f7ff, RenderBold: true, HorizontalAlignment: Center, VerticalAlignment: Center);
+        }
+
+        Label #MarkerDot4 {
+          Text: "+";
+          Visible: false;
+          Anchor: (Left: 61, Top: 61, Width: 9, Height: 9);
+          Style: (FontSize: 11, TextColor: #f0f7ff, RenderBold: true, HorizontalAlignment: Center, VerticalAlignment: Center);
+        }
+
+        Label #EntityDot0 {
+          Text: "N";
+          Visible: false;
+          Anchor: (Left: 61, Top: 61, Width: 9, Height: 9);
+          Style: (FontSize: 10, TextColor: #ff4f58, RenderBold: true, HorizontalAlignment: Center, VerticalAlignment: Center);
+        }
+
+        Label #EntityDot1 {
+          Text: "N";
+          Visible: false;
+          Anchor: (Left: 61, Top: 61, Width: 9, Height: 9);
+          Style: (FontSize: 10, TextColor: #ff4f58, RenderBold: true, HorizontalAlignment: Center, VerticalAlignment: Center);
+        }
+
+        Label #EntityDot2 {
+          Text: "N";
+          Visible: false;
+          Anchor: (Left: 61, Top: 61, Width: 9, Height: 9);
+          Style: (FontSize: 10, TextColor: #ff4f58, RenderBold: true, HorizontalAlignment: Center, VerticalAlignment: Center);
+        }
+
+        Label #EntityDot3 {
+          Text: "N";
+          Visible: false;
+          Anchor: (Left: 61, Top: 61, Width: 9, Height: 9);
+          Style: (FontSize: 10, TextColor: #ff4f58, RenderBold: true, HorizontalAlignment: Center, VerticalAlignment: Center);
+        }
+
+        Label #EntityDot4 {
+          Text: "N";
+          Visible: false;
+          Anchor: (Left: 61, Top: 61, Width: 9, Height: 9);
+          Style: (FontSize: 10, TextColor: #ff4f58, RenderBold: true, HorizontalAlignment: Center, VerticalAlignment: Center);
+        }
+
+        Label #EntityDot5 {
+          Text: "N";
+          Visible: false;
+          Anchor: (Left: 61, Top: 61, Width: 9, Height: 9);
+          Style: (FontSize: 10, TextColor: #ff4f58, RenderBold: true, HorizontalAlignment: Center, VerticalAlignment: Center);
+        }
+
+        Label #EntityDot6 {
+          Text: "N";
+          Visible: false;
+          Anchor: (Left: 61, Top: 61, Width: 9, Height: 9);
+          Style: (FontSize: 10, TextColor: #ff4f58, RenderBold: true, HorizontalAlignment: Center, VerticalAlignment: Center);
+        }
+
+        Label #EntityDot7 {
+          Text: "N";
+          Visible: false;
+          Anchor: (Left: 61, Top: 61, Width: 9, Height: 9);
+          Style: (FontSize: 10, TextColor: #ff4f58, RenderBold: true, HorizontalAlignment: Center, VerticalAlignment: Center);
+        }
+
+        Label #EntityDot8 {
+          Text: "N";
+          Visible: false;
+          Anchor: (Left: 61, Top: 61, Width: 9, Height: 9);
+          Style: (FontSize: 10, TextColor: #ff4f58, RenderBold: true, HorizontalAlignment: Center, VerticalAlignment: Center);
+        }
+
+        Label #EntityDot9 {
+          Text: "N";
+          Visible: false;
+          Anchor: (Left: 61, Top: 61, Width: 9, Height: 9);
+          Style: (FontSize: 10, TextColor: #ff4f58, RenderBold: true, HorizontalAlignment: Center, VerticalAlignment: Center);
+        }
+
+        Label #EntityDot10 {
+          Text: "N";
+          Visible: false;
+          Anchor: (Left: 61, Top: 61, Width: 9, Height: 9);
+          Style: (FontSize: 10, TextColor: #ff4f58, RenderBold: true, HorizontalAlignment: Center, VerticalAlignment: Center);
+        }
+
+        Label #EntityDot11 {
+          Text: "N";
+          Visible: false;
+          Anchor: (Left: 61, Top: 61, Width: 9, Height: 9);
+          Style: (FontSize: 10, TextColor: #ff4f58, RenderBold: true, HorizontalAlignment: Center, VerticalAlignment: Center);
+        }
+      }
+
+      Label {
+        Text: "E";
+        Anchor: (Width: 30, Height: 132);
+        Style: @PanelText;
+      }
+    }
+
+    Group {
+      Anchor: (Height: 18);
+      LayoutMode: Center;
+
+      Label {
+        Text: "S";
+        Anchor: (Width: 24, Height: 18);
+        Style: @PanelText;
+      }
+    }
+  }
+
+  Group { Anchor: (Height: 7); }
+
+  Label #CoordsText {
+    Text: "X 0  Y 0  Z 0";
+    Anchor: (Height: 18);
+    Style: @PanelText;
+  }
+
+  Label #HeadingText {
+    Text: "N  0 deg";
+    Anchor: (Height: 16);
+    Style: @MutedText;
+  }
+
+  Group {
+    Anchor: (Height: 1);
+    Background: #365069(0.7);
+  }
+
+  Label #WaypointText {
+    Text: "Nearest: none";
+    Anchor: (Height: 18);
+    Style: @MarkerText;
+  }
+
+  Label #DeathText {
+    Text: "Death marker: none";
+    Anchor: (Height: 16);
+    Style: @MutedText;
+  }
+
+  Group {
+    LayoutMode: Left;
+    Anchor: (Height: 15);
+
+    Label #RadiusText {
+      Text: "Radius 96 blocks";
+      FlexWeight: 1;
+      Style: @MutedText;
+    }
+
+    Label #UpdateText {
+      Text: "Refresh 10 ticks";
+      Anchor: (Width: 92);
+      Style: @MutedText;
+    }
+  }
+}
