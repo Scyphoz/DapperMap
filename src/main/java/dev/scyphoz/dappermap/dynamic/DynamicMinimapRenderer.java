@@ -39,6 +39,10 @@ public final class DynamicMinimapRenderer {
     private DynamicMinimapRenderer() {
     }
 
+    /**
+     * Logical Hytale UI pixels per world block. Session pan and marker math deliberately
+     * stays in this coordinate space so UI sizing is independent of raster resolution.
+     */
     public static double pixelsPerBlock(DynamicMinimapSetting settings) {
         return (double)settings.sizePixels / ((double)2.0F * (double)Math.max(16, settings.zoomBlocks));
     }
@@ -47,9 +51,21 @@ public final class DynamicMinimapRenderer {
         return Math.max(32, settings.sizePixels / 2);
     }
 
+    /** Logical UI size of the terrain buffer, not its PNG pixel dimensions. */
     public static int bufferPixels(DynamicMinimapSetting settings) {
         int buffer = settings.sizePixels + 2 * panMarginPixels(settings);
         return (buffer & 1) == 0 ? buffer : buffer + 1;
+    }
+
+    /** Raster pixels per logical UI pixel. */
+    public static double textureScale(DynamicMinimapSetting settings) {
+        return (double)Math.max(1, settings.textureResolution) / (double)Math.max(1, settings.sizePixels);
+    }
+
+    /** Actual PNG width/height used for the terrain buffer. */
+    public static int textureBufferPixels(DynamicMinimapSetting settings) {
+        int pixels = (int)Math.round((double)bufferPixels(settings) * textureScale(settings));
+        return Math.max(2, (pixels & 1) == 0 ? pixels : pixels + 1);
     }
 
     public static double bufferOriginWorld(double center, DynamicMinimapSetting settings) {
@@ -57,43 +73,46 @@ public final class DynamicMinimapRenderer {
     }
 
     public static Terrain renderTerrain(WorldMapManager worldMapManager, double centerX, double centerZ, DynamicMinimapSetting settings) {
-        int buffer = bufferPixels(settings);
-        double pixelsPerBlock = pixelsPerBlock(settings);
+        int logicalBuffer = bufferPixels(settings);
+        int textureBuffer = textureBufferPixels(settings);
+        double logicalPixelsPerBlock = pixelsPerBlock(settings);
+        double rasterScale = (double)textureBuffer / (double)logicalBuffer;
+        double texturePixelsPerBlock = logicalPixelsPerBlock * rasterScale;
         double originX = bufferOriginWorld(centerX, settings);
         double originZ = bufferOriginWorld(centerZ, settings);
-        BufferedImage terrain = new BufferedImage(buffer, buffer, 2);
+        BufferedImage terrain = new BufferedImage(textureBuffer, textureBuffer, 2);
         Graphics2D graphics = terrain.createGraphics();
         graphics.setColor(BACKGROUND);
-        graphics.fillRect(0, 0, buffer, buffer);
+        graphics.fillRect(0, 0, textureBuffer, textureBuffer);
         int present = 0;
         int total = 0;
         if (worldMapManager != null) {
             graphics.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR);
-            double worldSize = (double)buffer / pixelsPerBlock;
+            double worldSize = (double)logicalBuffer / logicalPixelsPerBlock;
             int minChunkX = ChunkUtil.chunkCoordinate((int)Math.floor(originX));
             int minChunkZ = ChunkUtil.chunkCoordinate((int)Math.floor(originZ));
             int maxChunkX = ChunkUtil.chunkCoordinate((int)Math.ceil(originX + worldSize));
             int maxChunkZ = ChunkUtil.chunkCoordinate((int)Math.ceil(originZ + worldSize));
-            int chunkPixels = (int)Math.ceil((double)32.0F * pixelsPerBlock);
+            int chunkPixels = (int)Math.ceil((double)CHUNK_SIZE * texturePixelsPerBlock);
 
             for(int chunkZ = minChunkZ; chunkZ <= maxChunkZ; ++chunkZ) {
                 for(int chunkX = minChunkX; chunkX <= maxChunkX; ++chunkX) {
                     ++total;
 
                     try {
-                        MapImage image = (MapImage)worldMapManager.getImageAsync(chunkX, chunkZ).getNow(null);
+                        MapImage image = worldMapManager.getImageAsync(chunkX, chunkZ).getNow(null);
                         if (image != null && image.width > 0 && image.height > 0) {
                             int[] pixels = decodePixels(image);
                             if (pixels != null) {
                                 BufferedImage chunk = new BufferedImage(image.width, image.height, 2);
                                 chunk.setRGB(0, 0, image.width, image.height, pixels, 0, image.width);
-                                int drawX = (int)Math.round(((double)chunkX * (double)32.0F - originX) * pixelsPerBlock);
-                                int drawZ = (int)Math.round(((double)chunkZ * (double)32.0F - originZ) * pixelsPerBlock);
+                                int drawX = (int)Math.round(((double)chunkX * (double)CHUNK_SIZE - originX) * texturePixelsPerBlock);
+                                int drawZ = (int)Math.round(((double)chunkZ * (double)CHUNK_SIZE - originZ) * texturePixelsPerBlock);
                                 graphics.drawImage(chunk, drawX, drawZ, chunkPixels, chunkPixels, (ImageObserver)null);
                                 ++present;
                             }
                         }
-                    } catch (Throwable var31) {
+                    } catch (Throwable ignored) {
                     }
                 }
             }
@@ -143,21 +162,24 @@ public final class DynamicMinimapRenderer {
     }
 
     public static byte[] renderShapeMask(DynamicMinimapSetting settings) {
-        String var10000 = settings.isCircle() ? "c" : "r";
-        String key = var10000 + settings.sizePixels;
-        byte[] cached = (byte[])MASK_CACHE.get(key);
+        String shape = settings.isCircle() ? "c" : "r";
+        String key = shape + settings.sizePixels + "@" + settings.textureResolution;
+        byte[] cached = MASK_CACHE.get(key);
         if (cached != null) {
             return cached;
         } else {
-            int size = settings.sizePixels;
-            BufferedImage image = new BufferedImage(size, size, 2);
+            int logicalSize = settings.sizePixels;
+            int textureSize = settings.textureResolution;
+            double scale = (double)textureSize / (double)logicalSize;
+            BufferedImage image = new BufferedImage(textureSize, textureSize, 2);
             Graphics2D graphics = image.createGraphics();
             graphics.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            graphics.scale(scale, scale);
             graphics.setColor(Color.WHITE);
             if (settings.isCircle()) {
-                graphics.fill(new Ellipse2D.Double((double)0.0F, (double)0.0F, (double)size, (double)size));
+                graphics.fill(new Ellipse2D.Double(0.0, 0.0, logicalSize, logicalSize));
             } else {
-                graphics.fillRect(0, 0, size, size);
+                graphics.fillRect(0, 0, logicalSize, logicalSize);
             }
 
             graphics.dispose();
@@ -171,25 +193,28 @@ public final class DynamicMinimapRenderer {
     }
 
     public static byte[] renderFrame(DynamicMinimapSetting settings) {
-        String var10000 = settings.isCircle() ? "c" : "r";
-        String key = var10000 + settings.sizePixels + (settings.showBorder ? "b" : "");
-        byte[] cached = (byte[])FRAME_CACHE.get(key);
+        String shape = settings.isCircle() ? "c" : "r";
+        String key = shape + settings.sizePixels + "@" + settings.textureResolution + (settings.showBorder ? "b" : "");
+        byte[] cached = FRAME_CACHE.get(key);
         if (cached != null) {
             return cached;
         } else {
-            int size = settings.sizePixels;
-            BufferedImage image = new BufferedImage(size, size, 2);
+            int logicalSize = settings.sizePixels;
+            int textureSize = settings.textureResolution;
+            double scale = (double)textureSize / (double)logicalSize;
+            BufferedImage image = new BufferedImage(textureSize, textureSize, 2);
             Graphics2D graphics = image.createGraphics();
             graphics.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            graphics.scale(scale, scale);
             if (settings.showBorder) {
                 if (settings.isCircle()) {
-                    drawNauticalCircleFrame(graphics, size);
+                    drawNauticalCircleFrame(graphics, logicalSize);
                 } else {
-                    drawNauticalSquareFrame(graphics, size);
+                    drawNauticalSquareFrame(graphics, logicalSize);
                 }
             }
 
-            drawCardinals(graphics, size, settings.isCircle());
+            drawCardinals(graphics, logicalSize, settings.isCircle());
             graphics.dispose();
             byte[] png = toPng(image);
             if (png != null) {

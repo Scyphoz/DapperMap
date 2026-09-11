@@ -12,7 +12,10 @@ public final class DynamicMinimapSetting {
     public boolean enabled = true;
     public int rotationMode = 0;
     public int zoomBlocks = 96;
+    /** Logical Hytale UI size of the minimap viewport. */
     public int sizePixels = 220;
+    /** Raster resolution used to render minimap textures. Kept separate from UI size. */
+    public int textureResolution = 384;
     public int shape = 1;
     public boolean showBorder = true;
     public boolean showOtherPlayers = true;
@@ -52,6 +55,7 @@ public final class DynamicMinimapSetting {
         copy.rotationMode = this.rotationMode;
         copy.zoomBlocks = this.zoomBlocks;
         copy.sizePixels = this.sizePixels;
+        copy.textureResolution = this.textureResolution;
         copy.shape = this.shape;
         copy.showBorder = this.showBorder;
         copy.showOtherPlayers = this.showOtherPlayers;
@@ -77,9 +81,9 @@ public final class DynamicMinimapSetting {
             this.shape = 1;
         }
 
-        this.showBorder = true;
         this.zoomBlocks = clamp(this.zoomBlocks, 16, 256);
         this.sizePixels = clamp(this.sizePixels, 120, 360);
+        this.textureResolution = clamp(this.textureResolution, 256, 512);
         this.mobVerticalRange = clamp(this.mobVerticalRange, 4, 256);
         if (this.position < 0 || this.position > 3) {
             this.position = 1;

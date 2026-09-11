@@ -15,7 +15,8 @@ public final class DynamicMinimapHud extends CustomUIHud {
     private final PlayerRef ownerRef;
     private final UUID uuid;
     private final DynamicMinimapSetting settings;
-    private final int mapSize;
+    /** Logical Hytale UI size. This is deliberately separate from raster texture resolution. */
+    private final int uiSize;
     private final int bufferPixels;
     private final int selfSize;
     private final String slug;
@@ -45,12 +46,12 @@ public final class DynamicMinimapHud extends CustomUIHud {
         this.settings = settings.copy();
         this.settings.normalize();
         this.position = this.settings.position;
-        this.mapSize = this.settings.sizePixels;
+        this.uiSize = this.settings.sizePixels;
         this.bufferPixels = DynamicMinimapRenderer.bufferPixels(this.settings);
-        this.selfSize = Math.max(18, this.mapSize / 10);
+        this.selfSize = Math.max(18, this.uiSize / 10);
         this.slug = this.uuid != null ? this.uuid.toString().replace("-", "") : "anon";
         String var10000 = this.settings.isCircle() ? "circle" : "square";
-        String shapeId = var10000 + "-" + this.mapSize + "-nautical" + (this.settings.showBorder ? "-b" : "");
+        String shapeId = var10000 + "-" + this.uiSize + "-r" + this.settings.textureResolution + "-nautical" + (this.settings.showBorder ? "-b" : "");
         this.maskFile = "DapperMap-" + this.slug + "-" + shapeId + "-mask.png";
         this.blankPath = "UI/DapperMap/blank-" + this.slug + ".png";
         this.framePath = "UI/DapperMap/frame-" + this.slug + "-" + shapeId + ".png";
@@ -245,7 +246,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
                 anchor.setTop(Value.of(10));
             }
 
-            anchor.setWidth(Value.of(this.mapSize));
+            anchor.setWidth(Value.of(this.uiSize));
             anchor.setHeight(Value.of(this.rootHeight()));
             UICommandBuilder builder = new UICommandBuilder();
             builder.setObject("#WayfinderMmRoot.Anchor", anchor);
@@ -255,10 +256,10 @@ public final class DynamicMinimapHud extends CustomUIHud {
     }
 
     private String buildMarkup() {
-        int selfInset = (this.mapSize - this.selfSize) / 2;
+        int selfInset = (this.uiSize - this.selfSize) / 2;
         StringBuilder out = new StringBuilder(4096);
-        out.append("Group #WayfinderMmRoot { ").append("Anchor: (").append(this.rootAnchorEdges()).append(", Width: ").append(this.mapSize).append(", Height: ").append(this.rootHeight()).append("); ");
-        out.append("Group #WayfinderMmClip { ").append("Anchor: (Left: 0, Top: 0, Width: ").append(this.mapSize).append(", Height: ").append(this.mapSize).append("); ").append("MaskTexturePath: \"").append(this.maskFile).append("\"; ").append("Background: #0a1218(0.92); ");
+        out.append("Group #WayfinderMmRoot { ").append("Anchor: (").append(this.rootAnchorEdges()).append(", Width: ").append(this.uiSize).append(", Height: ").append(this.rootHeight()).append("); ");
+        out.append("Group #WayfinderMmClip { ").append("Anchor: (Left: 0, Top: 0, Width: ").append(this.uiSize).append(", Height: ").append(this.uiSize).append("); ").append("MaskTexturePath: \"").append(this.maskFile).append("\"; ").append("Background: #0a1218(0.92); ");
         out.append("AssetImage #WayfinderMmTerrain { ").append("Anchor: (Left: ").append(this.panLeft).append(", Top: ").append(this.panTop).append(", Width: ").append(this.bufferPixels).append(", Height: ").append(this.bufferPixels).append("); AssetPath: \"").append(this.blankPath).append("\"; Visible: false; } ");
         out.append("Group #WayfinderMmMarkers { ").append("Anchor: (Left: ").append(this.panLeft).append(", Top: ").append(this.panTop).append(", Width: ").append(this.bufferPixels).append(", Height: ").append(this.bufferPixels).append("); ");
 
@@ -267,15 +268,15 @@ public final class DynamicMinimapHud extends CustomUIHud {
         }
 
         out.append("} } ");
-        out.append("AssetImage #WayfinderMmFrame { Anchor: (Left: 0, Top: 0, Width: ").append(this.mapSize).append(", Height: ").append(this.mapSize).append("); AssetPath: \"").append(this.framePath).append("\"; Visible: true; } ");
+        out.append("AssetImage #WayfinderMmFrame { Anchor: (Left: 0, Top: 0, Width: ").append(this.uiSize).append(", Height: ").append(this.uiSize).append("); AssetPath: \"").append(this.framePath).append("\"; Visible: true; } ");
         out.append("AssetImage #WayfinderMmSelf { Anchor: (Left: ").append(selfInset).append(", Top: ").append(selfInset).append(", Width: ").append(this.selfSize).append(", Height: ").append(this.selfSize).append("); AssetPath: \"").append(this.selfPath).append("\"; Visible: true; } ");
-        out.append("Group #WayfinderMmReadout { Anchor: (Left: 0, Top: ").append(this.mapSize + 4).append(", Width: ").append(this.mapSize).append(", Height: 88); Background: #071016(0.96); LayoutMode: Top; Padding: (Horizontal: 8, Vertical: 5); ").append("Label #WayfinderMmBrand { Anchor: (Height: 12); Text: \"DapperMap\"; Style: LabelStyle(FontSize: 9, RenderBold: true, TextColor: #ffd66b, HorizontalAlignment: Center, VerticalAlignment: Center); } ").append("Group #WayfinderMmCoordsBand { Anchor: (Height: 22); Background: #102232(0.98); LayoutMode: CenterMiddle; ").append("Label #WayfinderMmCoords { Style: LabelStyle(FontSize: 12, RenderBold: true, TextColor: #f5f7fb, HorizontalAlignment: Center, VerticalAlignment: Center); } } ").append("Group #WayfinderMmMetaBand { Anchor: (Height: 26); LayoutMode: Left; Padding: (Top: 4); ").append("Group #WayfinderMmCompassBox { FlexWeight: 1; Background: #132733(0.9); LayoutMode: CenterMiddle; Padding: (Right: 3); ").append("Label #WayfinderMmCompass { Style: LabelStyle(FontSize: 10, RenderBold: true, TextColor: #ffd66b, HorizontalAlignment: Center, VerticalAlignment: Center); } } ").append("Group #WayfinderMmClockBox { FlexWeight: 1; Background: #183040(0.9); LayoutMode: CenterMiddle; Padding: (Left: 3); ").append("Label #WayfinderMmClock { Style: LabelStyle(FontSize: 10, RenderBold: true, TextColor: #9ddcff, HorizontalAlignment: Center, VerticalAlignment: Center); } } ").append("} ").append("Group #WayfinderMmBiomeBand { Anchor: (Height: 18); Background: #0f1f29(0.92); LayoutMode: CenterMiddle; ").append("Label #WayfinderMmBiome { Style: LabelStyle(FontSize: 9, RenderBold: true, TextColor: #cfe0ef, HorizontalAlignment: Center, VerticalAlignment: Center); } } ").append("} ");
+        out.append("Group #WayfinderMmReadout { Anchor: (Left: 0, Top: ").append(this.uiSize + 4).append(", Width: ").append(this.uiSize).append(", Height: 88); Background: #071016(0.96); LayoutMode: Top; Padding: (Horizontal: 8, Vertical: 5); ").append("Label #WayfinderMmBrand { Anchor: (Height: 12); Text: \"DapperMap\"; Style: LabelStyle(FontSize: 9, RenderBold: true, TextColor: #ffd66b, HorizontalAlignment: Center, VerticalAlignment: Center); } ").append("Group #WayfinderMmCoordsBand { Anchor: (Height: 22); Background: #102232(0.98); LayoutMode: CenterMiddle; ").append("Label #WayfinderMmCoords { Style: LabelStyle(FontSize: 12, RenderBold: true, TextColor: #f5f7fb, HorizontalAlignment: Center, VerticalAlignment: Center); } } ").append("Group #WayfinderMmMetaBand { Anchor: (Height: 26); LayoutMode: Left; Padding: (Top: 4); ").append("Group #WayfinderMmCompassBox { FlexWeight: 1; Background: #132733(0.9); LayoutMode: CenterMiddle; Padding: (Right: 3); ").append("Label #WayfinderMmCompass { Style: LabelStyle(FontSize: 10, RenderBold: true, TextColor: #ffd66b, HorizontalAlignment: Center, VerticalAlignment: Center); } } ").append("Group #WayfinderMmClockBox { FlexWeight: 1; Background: #183040(0.9); LayoutMode: CenterMiddle; Padding: (Left: 3); ").append("Label #WayfinderMmClock { Style: LabelStyle(FontSize: 10, RenderBold: true, TextColor: #9ddcff, HorizontalAlignment: Center, VerticalAlignment: Center); } } ").append("} ").append("Group #WayfinderMmBiomeBand { Anchor: (Height: 18); Background: #0f1f29(0.92); LayoutMode: CenterMiddle; ").append("Label #WayfinderMmBiome { Style: LabelStyle(FontSize: 9, RenderBold: true, TextColor: #cfe0ef, HorizontalAlignment: Center, VerticalAlignment: Center); } } ").append("} ");
         out.append("}");
         return out.toString();
     }
 
     private int rootHeight() {
-        return this.mapSize + 4 + 88;
+        return this.uiSize + 4 + 88;
     }
 
     private void writeStatus(UICommandBuilder builder) {
