@@ -1,0 +1,63 @@
+$C = "../Common.ui";
+
+Group {
+  Anchor: (Height: 58);
+  Background: #132331(0.96);
+  LayoutMode: Left;
+  Padding: (Horizontal: 12, Vertical: 7);
+
+  Group #Accent {
+    Anchor: (Width: 4, Height: 42);
+    Background: #9ddcff;
+  }
+
+  Group #Info {
+    FlexWeight: 1;
+    LayoutMode: CenterMiddle;
+    Padding: (Left: 12, Right: 8);
+
+    Label #RowLabel {
+      Anchor: (Height: 36);
+      Style: (
+        FontSize: 15,
+        RenderBold: true,
+        TextColor: #f4f7fb,
+        VerticalAlignment: Center
+      );
+    }
+  }
+
+  $C.@DropdownBox #ValueDropdown {
+    @Anchor = (Width: 230, Height: 38);
+    ShowLabel: true;
+
+    DropdownEntry {
+      Value: "75";
+      Text: "75%";
+    }
+    DropdownEntry {
+      Value: "85";
+      Text: "85%";
+    }
+    DropdownEntry {
+      Value: "100";
+      Text: "100%";
+    }
+    DropdownEntry {
+      Value: "110";
+      Text: "110%";
+    }
+    DropdownEntry {
+      Value: "125";
+      Text: "125%";
+    }
+    DropdownEntry {
+      Value: "140";
+      Text: "140%";
+    }
+    DropdownEntry {
+      Value: "160";
+      Text: "160%";
+    }
+  }
+}
