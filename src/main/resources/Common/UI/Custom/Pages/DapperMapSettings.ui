@@ -51,10 +51,20 @@ $C.@DecoratedContainer {
 
     Group #DapperMapResetFooter {
       Anchor: (Height: 62);
-      LayoutMode: CenterMiddle;
-      Padding: (Top: 10, Bottom: 8, Horizontal: 120);
+      LayoutMode: Left;
+      Padding: (Top: 10, Bottom: 8, Horizontal: 80);
+
+      Group #DapperMapMoveButtonSlot {
+        FlexWeight: 1;
+        Anchor: (Height: 40);
+      }
+
+      Group {
+        Anchor: (Width: 14);
+      }
 
       Group #DapperMapResetButtonSlot {
+        FlexWeight: 1;
         Anchor: (Height: 40);
       }
     }

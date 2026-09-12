@@ -8,6 +8,7 @@ import com.hypixel.hytale.component.Store;
 import com.hypixel.hytale.protocol.packets.interface_.CustomPageLifetime;
 import com.hypixel.hytale.protocol.packets.interface_.CustomUIEventBindingType;
 import com.hypixel.hytale.server.core.Message;
+import com.hypixel.hytale.server.core.entity.entities.Player;
 import com.hypixel.hytale.server.core.entity.entities.player.pages.InteractiveCustomUIPage;
 import com.hypixel.hytale.server.core.ui.builder.EventData;
 import com.hypixel.hytale.server.core.ui.builder.UICommandBuilder;
@@ -76,13 +77,30 @@ public final class DapperMapSettingsPage
         builder.set("#DapperMapSettingsSummary.Text", summary(settings));
 
         this.renderList(builder, events, settings);
-        this.bindResetButton(builder, events);
+        this.bindFooterButtons(builder, events);
     }
 
-    private void bindResetButton(
+    private void bindFooterButtons(
             UICommandBuilder builder,
             UIEventBuilder events
     ) {
+        builder.append(
+                "#DapperMapMoveButtonSlot",
+                "Pages/BasicTextButton.ui"
+        );
+
+        builder.set(
+                "#DapperMapMoveButtonSlot[0].TextSpans",
+                Message.raw("MOVE MINIMAP").color(BLUE)
+        );
+
+        events.addEventBinding(
+                CustomUIEventBindingType.Activating,
+                "#DapperMapMoveButtonSlot[0]",
+                EventData.of("Action", "move_minimap"),
+                false
+        );
+
         builder.append(
                 "#DapperMapResetButtonSlot",
                 "Pages/BasicTextButton.ui"
@@ -318,6 +336,28 @@ public final class DapperMapSettingsPage
         String action = event.action;
 
         if (action == null || action.isEmpty()) {
+            return;
+        }
+
+        if ("move_minimap".equals(action)) {
+            Player player =
+                    (Player) store.getComponent(
+                            ref,
+                            Player.getComponentType()
+                    );
+
+            if (player != null) {
+                player.getPageManager().openCustomPage(
+                        ref,
+                        store,
+                        new MoveMinimapPage(
+                                this.playerRef,
+                                this.sessions,
+                                this.config
+                        )
+                );
+            }
+
             return;
         }
 

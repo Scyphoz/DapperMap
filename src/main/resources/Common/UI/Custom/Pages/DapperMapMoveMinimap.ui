@@ -1,0 +1,553 @@
+$C = "../Common.ui";
+
+$C.@PageOverlay {}
+
+$C.@DecoratedContainer {
+  Anchor: (Width: 820, Height: 760);
+
+  #Title {
+    Label #MoveMinimapTitle {
+      Text: "Move Minimap";
+      Style: (
+        ...$C.@TitleStyle,
+        HorizontalAlignment: Center,
+        TextColor: #ffd66b,
+      );
+      Padding: (Horizontal: 19);
+    }
+  }
+
+  #Content {
+    LayoutMode: Top;
+    Padding: (Horizontal: 14);
+
+    Group #MoveMinimapHeader {
+      Anchor: (Height: 94);
+      Background: #0b1822(0.96);
+      LayoutMode: Top;
+      Padding: (Horizontal: 16, Vertical: 10);
+
+      Label #MoveMinimapHint {
+        Anchor: (Height: 24);
+        Text: "Click anywhere in the preview to place the minimap. Save when finished.";
+        Style: (
+          FontSize: 13,
+          TextColor: #d9eefc,
+          HorizontalAlignment: Center,
+          VerticalAlignment: Center
+        );
+      }
+
+      Label #MoveMinimapPosition {
+        Anchor: (Height: 32);
+        Style: (
+          FontSize: 15,
+          RenderBold: true,
+          TextColor: #9ddcff,
+          HorizontalAlignment: Center,
+          VerticalAlignment: Center
+        );
+      }
+
+      Label #MovePreviewDescription {
+        Anchor: (Height: 18);
+        Style: (
+          FontSize: 11,
+          TextColor: #cfe0ef,
+          HorizontalAlignment: Center,
+          VerticalAlignment: Center
+        );
+      }
+    }
+
+    Group #MovePreviewArea {
+      Anchor: (Height: 500);
+      Background: #071016(0.82);
+      Padding: (Horizontal: 10, Vertical: 10);
+
+      Group #MovePreviewCanvas {
+        Anchor: (Full: 0);
+      }
+
+      Group #MovePreviewClickGrid {
+        Anchor: (Full: 0);
+        LayoutMode: Top;
+
+      Group {
+        FlexWeight: 1;
+        LayoutMode: Left;
+
+        Group #MovePreviewSlot00 {
+          FlexWeight: 1;
+          Anchor: (Height: 44);
+          LayoutMode: CenterMiddle;
+        }
+        Group #MovePreviewSlot01 {
+          FlexWeight: 1;
+          Anchor: (Height: 44);
+          LayoutMode: CenterMiddle;
+        }
+        Group #MovePreviewSlot02 {
+          FlexWeight: 1;
+          Anchor: (Height: 44);
+          LayoutMode: CenterMiddle;
+        }
+        Group #MovePreviewSlot03 {
+          FlexWeight: 1;
+          Anchor: (Height: 44);
+          LayoutMode: CenterMiddle;
+        }
+        Group #MovePreviewSlot04 {
+          FlexWeight: 1;
+          Anchor: (Height: 44);
+          LayoutMode: CenterMiddle;
+        }
+        Group #MovePreviewSlot05 {
+          FlexWeight: 1;
+          Anchor: (Height: 44);
+          LayoutMode: CenterMiddle;
+        }
+        Group #MovePreviewSlot06 {
+          FlexWeight: 1;
+          Anchor: (Height: 44);
+          LayoutMode: CenterMiddle;
+        }
+        Group #MovePreviewSlot07 {
+          FlexWeight: 1;
+          Anchor: (Height: 44);
+          LayoutMode: CenterMiddle;
+        }
+        Group #MovePreviewSlot08 {
+          FlexWeight: 1;
+          Anchor: (Height: 44);
+          LayoutMode: CenterMiddle;
+        }
+      }
+      Group {
+        FlexWeight: 1;
+        LayoutMode: Left;
+
+        Group #MovePreviewSlot10 {
+          FlexWeight: 1;
+          Anchor: (Height: 44);
+          LayoutMode: CenterMiddle;
+        }
+        Group #MovePreviewSlot11 {
+          FlexWeight: 1;
+          Anchor: (Height: 44);
+          LayoutMode: CenterMiddle;
+        }
+        Group #MovePreviewSlot12 {
+          FlexWeight: 1;
+          Anchor: (Height: 44);
+          LayoutMode: CenterMiddle;
+        }
+        Group #MovePreviewSlot13 {
+          FlexWeight: 1;
+          Anchor: (Height: 44);
+          LayoutMode: CenterMiddle;
+        }
+        Group #MovePreviewSlot14 {
+          FlexWeight: 1;
+          Anchor: (Height: 44);
+          LayoutMode: CenterMiddle;
+        }
+        Group #MovePreviewSlot15 {
+          FlexWeight: 1;
+          Anchor: (Height: 44);
+          LayoutMode: CenterMiddle;
+        }
+        Group #MovePreviewSlot16 {
+          FlexWeight: 1;
+          Anchor: (Height: 44);
+          LayoutMode: CenterMiddle;
+        }
+        Group #MovePreviewSlot17 {
+          FlexWeight: 1;
+          Anchor: (Height: 44);
+          LayoutMode: CenterMiddle;
+        }
+        Group #MovePreviewSlot18 {
+          FlexWeight: 1;
+          Anchor: (Height: 44);
+          LayoutMode: CenterMiddle;
+        }
+      }
+      Group {
+        FlexWeight: 1;
+        LayoutMode: Left;
+
+        Group #MovePreviewSlot20 {
+          FlexWeight: 1;
+          Anchor: (Height: 44);
+          LayoutMode: CenterMiddle;
+        }
+        Group #MovePreviewSlot21 {
+          FlexWeight: 1;
+          Anchor: (Height: 44);
+          LayoutMode: CenterMiddle;
+        }
+        Group #MovePreviewSlot22 {
+          FlexWeight: 1;
+          Anchor: (Height: 44);
+          LayoutMode: CenterMiddle;
+        }
+        Group #MovePreviewSlot23 {
+          FlexWeight: 1;
+          Anchor: (Height: 44);
+          LayoutMode: CenterMiddle;
+        }
+        Group #MovePreviewSlot24 {
+          FlexWeight: 1;
+          Anchor: (Height: 44);
+          LayoutMode: CenterMiddle;
+        }
+        Group #MovePreviewSlot25 {
+          FlexWeight: 1;
+          Anchor: (Height: 44);
+          LayoutMode: CenterMiddle;
+        }
+        Group #MovePreviewSlot26 {
+          FlexWeight: 1;
+          Anchor: (Height: 44);
+          LayoutMode: CenterMiddle;
+        }
+        Group #MovePreviewSlot27 {
+          FlexWeight: 1;
+          Anchor: (Height: 44);
+          LayoutMode: CenterMiddle;
+        }
+        Group #MovePreviewSlot28 {
+          FlexWeight: 1;
+          Anchor: (Height: 44);
+          LayoutMode: CenterMiddle;
+        }
+      }
+      Group {
+        FlexWeight: 1;
+        LayoutMode: Left;
+
+        Group #MovePreviewSlot30 {
+          FlexWeight: 1;
+          Anchor: (Height: 44);
+          LayoutMode: CenterMiddle;
+        }
+        Group #MovePreviewSlot31 {
+          FlexWeight: 1;
+          Anchor: (Height: 44);
+          LayoutMode: CenterMiddle;
+        }
+        Group #MovePreviewSlot32 {
+          FlexWeight: 1;
+          Anchor: (Height: 44);
+          LayoutMode: CenterMiddle;
+        }
+        Group #MovePreviewSlot33 {
+          FlexWeight: 1;
+          Anchor: (Height: 44);
+          LayoutMode: CenterMiddle;
+        }
+        Group #MovePreviewSlot34 {
+          FlexWeight: 1;
+          Anchor: (Height: 44);
+          LayoutMode: CenterMiddle;
+        }
+        Group #MovePreviewSlot35 {
+          FlexWeight: 1;
+          Anchor: (Height: 44);
+          LayoutMode: CenterMiddle;
+        }
+        Group #MovePreviewSlot36 {
+          FlexWeight: 1;
+          Anchor: (Height: 44);
+          LayoutMode: CenterMiddle;
+        }
+        Group #MovePreviewSlot37 {
+          FlexWeight: 1;
+          Anchor: (Height: 44);
+          LayoutMode: CenterMiddle;
+        }
+        Group #MovePreviewSlot38 {
+          FlexWeight: 1;
+          Anchor: (Height: 44);
+          LayoutMode: CenterMiddle;
+        }
+      }
+      Group {
+        FlexWeight: 1;
+        LayoutMode: Left;
+
+        Group #MovePreviewSlot40 {
+          FlexWeight: 1;
+          Anchor: (Height: 44);
+          LayoutMode: CenterMiddle;
+        }
+        Group #MovePreviewSlot41 {
+          FlexWeight: 1;
+          Anchor: (Height: 44);
+          LayoutMode: CenterMiddle;
+        }
+        Group #MovePreviewSlot42 {
+          FlexWeight: 1;
+          Anchor: (Height: 44);
+          LayoutMode: CenterMiddle;
+        }
+        Group #MovePreviewSlot43 {
+          FlexWeight: 1;
+          Anchor: (Height: 44);
+          LayoutMode: CenterMiddle;
+        }
+        Group #MovePreviewSlot44 {
+          FlexWeight: 1;
+          Anchor: (Height: 44);
+          LayoutMode: CenterMiddle;
+        }
+        Group #MovePreviewSlot45 {
+          FlexWeight: 1;
+          Anchor: (Height: 44);
+          LayoutMode: CenterMiddle;
+        }
+        Group #MovePreviewSlot46 {
+          FlexWeight: 1;
+          Anchor: (Height: 44);
+          LayoutMode: CenterMiddle;
+        }
+        Group #MovePreviewSlot47 {
+          FlexWeight: 1;
+          Anchor: (Height: 44);
+          LayoutMode: CenterMiddle;
+        }
+        Group #MovePreviewSlot48 {
+          FlexWeight: 1;
+          Anchor: (Height: 44);
+          LayoutMode: CenterMiddle;
+        }
+      }
+      Group {
+        FlexWeight: 1;
+        LayoutMode: Left;
+
+        Group #MovePreviewSlot50 {
+          FlexWeight: 1;
+          Anchor: (Height: 44);
+          LayoutMode: CenterMiddle;
+        }
+        Group #MovePreviewSlot51 {
+          FlexWeight: 1;
+          Anchor: (Height: 44);
+          LayoutMode: CenterMiddle;
+        }
+        Group #MovePreviewSlot52 {
+          FlexWeight: 1;
+          Anchor: (Height: 44);
+          LayoutMode: CenterMiddle;
+        }
+        Group #MovePreviewSlot53 {
+          FlexWeight: 1;
+          Anchor: (Height: 44);
+          LayoutMode: CenterMiddle;
+        }
+        Group #MovePreviewSlot54 {
+          FlexWeight: 1;
+          Anchor: (Height: 44);
+          LayoutMode: CenterMiddle;
+        }
+        Group #MovePreviewSlot55 {
+          FlexWeight: 1;
+          Anchor: (Height: 44);
+          LayoutMode: CenterMiddle;
+        }
+        Group #MovePreviewSlot56 {
+          FlexWeight: 1;
+          Anchor: (Height: 44);
+          LayoutMode: CenterMiddle;
+        }
+        Group #MovePreviewSlot57 {
+          FlexWeight: 1;
+          Anchor: (Height: 44);
+          LayoutMode: CenterMiddle;
+        }
+        Group #MovePreviewSlot58 {
+          FlexWeight: 1;
+          Anchor: (Height: 44);
+          LayoutMode: CenterMiddle;
+        }
+      }
+      Group {
+        FlexWeight: 1;
+        LayoutMode: Left;
+
+        Group #MovePreviewSlot60 {
+          FlexWeight: 1;
+          Anchor: (Height: 44);
+          LayoutMode: CenterMiddle;
+        }
+        Group #MovePreviewSlot61 {
+          FlexWeight: 1;
+          Anchor: (Height: 44);
+          LayoutMode: CenterMiddle;
+        }
+        Group #MovePreviewSlot62 {
+          FlexWeight: 1;
+          Anchor: (Height: 44);
+          LayoutMode: CenterMiddle;
+        }
+        Group #MovePreviewSlot63 {
+          FlexWeight: 1;
+          Anchor: (Height: 44);
+          LayoutMode: CenterMiddle;
+        }
+        Group #MovePreviewSlot64 {
+          FlexWeight: 1;
+          Anchor: (Height: 44);
+          LayoutMode: CenterMiddle;
+        }
+        Group #MovePreviewSlot65 {
+          FlexWeight: 1;
+          Anchor: (Height: 44);
+          LayoutMode: CenterMiddle;
+        }
+        Group #MovePreviewSlot66 {
+          FlexWeight: 1;
+          Anchor: (Height: 44);
+          LayoutMode: CenterMiddle;
+        }
+        Group #MovePreviewSlot67 {
+          FlexWeight: 1;
+          Anchor: (Height: 44);
+          LayoutMode: CenterMiddle;
+        }
+        Group #MovePreviewSlot68 {
+          FlexWeight: 1;
+          Anchor: (Height: 44);
+          LayoutMode: CenterMiddle;
+        }
+      }
+      Group {
+        FlexWeight: 1;
+        LayoutMode: Left;
+
+        Group #MovePreviewSlot70 {
+          FlexWeight: 1;
+          Anchor: (Height: 44);
+          LayoutMode: CenterMiddle;
+        }
+        Group #MovePreviewSlot71 {
+          FlexWeight: 1;
+          Anchor: (Height: 44);
+          LayoutMode: CenterMiddle;
+        }
+        Group #MovePreviewSlot72 {
+          FlexWeight: 1;
+          Anchor: (Height: 44);
+          LayoutMode: CenterMiddle;
+        }
+        Group #MovePreviewSlot73 {
+          FlexWeight: 1;
+          Anchor: (Height: 44);
+          LayoutMode: CenterMiddle;
+        }
+        Group #MovePreviewSlot74 {
+          FlexWeight: 1;
+          Anchor: (Height: 44);
+          LayoutMode: CenterMiddle;
+        }
+        Group #MovePreviewSlot75 {
+          FlexWeight: 1;
+          Anchor: (Height: 44);
+          LayoutMode: CenterMiddle;
+        }
+        Group #MovePreviewSlot76 {
+          FlexWeight: 1;
+          Anchor: (Height: 44);
+          LayoutMode: CenterMiddle;
+        }
+        Group #MovePreviewSlot77 {
+          FlexWeight: 1;
+          Anchor: (Height: 44);
+          LayoutMode: CenterMiddle;
+        }
+        Group #MovePreviewSlot78 {
+          FlexWeight: 1;
+          Anchor: (Height: 44);
+          LayoutMode: CenterMiddle;
+        }
+      }
+      Group {
+        FlexWeight: 1;
+        LayoutMode: Left;
+
+        Group #MovePreviewSlot80 {
+          FlexWeight: 1;
+          Anchor: (Height: 44);
+          LayoutMode: CenterMiddle;
+        }
+        Group #MovePreviewSlot81 {
+          FlexWeight: 1;
+          Anchor: (Height: 44);
+          LayoutMode: CenterMiddle;
+        }
+        Group #MovePreviewSlot82 {
+          FlexWeight: 1;
+          Anchor: (Height: 44);
+          LayoutMode: CenterMiddle;
+        }
+        Group #MovePreviewSlot83 {
+          FlexWeight: 1;
+          Anchor: (Height: 44);
+          LayoutMode: CenterMiddle;
+        }
+        Group #MovePreviewSlot84 {
+          FlexWeight: 1;
+          Anchor: (Height: 44);
+          LayoutMode: CenterMiddle;
+        }
+        Group #MovePreviewSlot85 {
+          FlexWeight: 1;
+          Anchor: (Height: 44);
+          LayoutMode: CenterMiddle;
+        }
+        Group #MovePreviewSlot86 {
+          FlexWeight: 1;
+          Anchor: (Height: 44);
+          LayoutMode: CenterMiddle;
+        }
+        Group #MovePreviewSlot87 {
+          FlexWeight: 1;
+          Anchor: (Height: 44);
+          LayoutMode: CenterMiddle;
+        }
+        Group #MovePreviewSlot88 {
+          FlexWeight: 1;
+          Anchor: (Height: 44);
+          LayoutMode: CenterMiddle;
+        }
+      }
+      }
+    }
+
+    Group #MoveMinimapFooter {
+      Anchor: (Height: 58);
+      LayoutMode: Left;
+      Padding: (Top: 10, Bottom: 8, Horizontal: 100);
+
+      Group #MoveMinimapSaveSlot {
+        FlexWeight: 1;
+        Anchor: (Height: 40);
+        LayoutMode: CenterMiddle;
+      }
+
+      Group #MoveMinimapFooterGap {
+        Anchor: (Width: 14);
+      }
+
+      Group #MoveMinimapCancelSlot {
+        FlexWeight: 1;
+        Anchor: (Height: 40);
+        LayoutMode: CenterMiddle;
+      }
+    }
+  }
+}
+
+$C.@BackButton {}
