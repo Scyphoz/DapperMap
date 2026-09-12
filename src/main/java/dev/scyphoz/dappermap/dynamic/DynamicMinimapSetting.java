@@ -16,6 +16,12 @@ public final class DynamicMinimapSetting {
     public int sizePixels = 220;
     /** Raster resolution used to render minimap textures. Kept separate from UI size. */
     public int textureResolution = 384;
+    /**
+     * Presentation-only scale for the complete custom HUD.
+     * 100 means the logical minimap/UI dimensions are sent unchanged.
+     * This must not be used by world-space or terrain sampling calculations.
+     */
+    public int interfaceScalePercent = 100;
     public int shape = 1;
     public boolean showBorder = true;
     public boolean showOtherPlayers = true;
@@ -56,6 +62,7 @@ public final class DynamicMinimapSetting {
         copy.zoomBlocks = this.zoomBlocks;
         copy.sizePixels = this.sizePixels;
         copy.textureResolution = this.textureResolution;
+        copy.interfaceScalePercent = this.interfaceScalePercent;
         copy.shape = this.shape;
         copy.showBorder = this.showBorder;
         copy.showOtherPlayers = this.showOtherPlayers;
@@ -84,12 +91,32 @@ public final class DynamicMinimapSetting {
         this.zoomBlocks = clamp(this.zoomBlocks, 16, 256);
         this.sizePixels = clamp(this.sizePixels, 120, 360);
         this.textureResolution = clamp(this.textureResolution, 256, 512);
+        this.interfaceScalePercent = clamp(this.interfaceScalePercent, 75, 160);
         this.mobVerticalRange = clamp(this.mobVerticalRange, 4, 256);
         if (this.position < 0 || this.position > 3) {
             this.position = 1;
         }
 
         this.updateSpeed = clamp(this.updateSpeed, 0, 3);
+    }
+
+    /** Presentation scale as a multiplier, e.g. 125 -> 1.25. */
+    public double interfaceScale() {
+        return (double)this.interfaceScalePercent / 100.0D;
+    }
+
+    /** Convert a signed logical HUD coordinate into display-space units. */
+    public int displayCoordinate(int logicalValue) {
+        return (int)Math.round((double)logicalValue * this.interfaceScale());
+    }
+
+    /** Convert a logical HUD dimension into a positive display-space size. */
+    public int displaySize(int logicalValue) {
+        if (logicalValue <= 0) {
+            return 0;
+        }
+
+        return Math.max(1, this.displayCoordinate(logicalValue));
     }
 
     public long panIntervalMs() {

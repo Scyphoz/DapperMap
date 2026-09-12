@@ -12,18 +12,45 @@ import java.util.UUID;
 public final class DynamicMinimapHud extends CustomUIHud {
     public static final String KEY = "DapperMapDynamicMinimapHud";
     public static final int MARKER_SLOTS = 48;
+
+    // All constants below are logical HUD units. They are converted to display units
+    // only when markup/Anchor values are produced.
+    private static final int HUD_MARGIN = 10;
+    private static final int READOUT_GAP = 4;
+    private static final int READOUT_HEIGHT = 88;
+    private static final int READOUT_PADDING_H = 8;
+    private static final int READOUT_PADDING_V = 5;
+    private static final int BRAND_HEIGHT = 12;
+    private static final int COORDS_HEIGHT = 22;
+    private static final int META_HEIGHT = 26;
+    private static final int BIOME_HEIGHT = 18;
+    private static final int META_TOP_PADDING = 4;
+    private static final int META_INNER_PADDING = 3;
+    private static final int BRAND_FONT_SIZE = 9;
+    private static final int COORDS_FONT_SIZE = 12;
+    private static final int META_FONT_SIZE = 10;
+    private static final int BIOME_FONT_SIZE = 9;
+
     private final PlayerRef ownerRef;
     private final UUID uuid;
     private final DynamicMinimapSetting settings;
-    /** Logical Hytale UI size. This is deliberately separate from raster texture resolution. */
-    private final int uiSize;
-    private final int bufferPixels;
-    private final int selfSize;
+    /** Base logical UI size. World/pan/marker math remains in this coordinate space. */
+    private int logicalUiSize;
+    /** Logical terrain-buffer size. Kept compatible with DynamicMinimapSession. */
+    private int bufferPixels;
+    /** Base logical size of the self arrow. */
+    private int selfSize;
+    /**
+     * Mutable presentation-only scale. Kept separate from the copied settings so
+     * scale changes can be applied to the existing HUD without recreating it.
+     */
+    private int interfaceScalePercent;
     private final String slug;
-    private final String maskFile;
+    private String maskFile;
     private final String blankPath;
-    private final String framePath;
+    private String framePath;
     private String selfPath;
+    private String terrainPath;
     private boolean built = false;
     private boolean terrainShown = false;
     private int position;
@@ -46,18 +73,18 @@ public final class DynamicMinimapHud extends CustomUIHud {
         this.settings = settings.copy();
         this.settings.normalize();
         this.position = this.settings.position;
-        this.uiSize = this.settings.sizePixels;
+        this.logicalUiSize = this.settings.sizePixels;
         this.bufferPixels = DynamicMinimapRenderer.bufferPixels(this.settings);
-        this.selfSize = Math.max(18, this.uiSize / 10);
+        this.selfSize = Math.max(18, this.logicalUiSize / 10);
+        this.interfaceScalePercent = this.settings.interfaceScalePercent;
         this.slug = this.uuid != null ? this.uuid.toString().replace("-", "") : "anon";
-        String var10000 = this.settings.isCircle() ? "circle" : "square";
-        String shapeId = var10000 + "-" + this.uiSize + "-r" + this.settings.textureResolution + "-nautical" + (this.settings.showBorder ? "-b" : "");
-        this.maskFile = "DapperMap-" + this.slug + "-" + shapeId + "-mask.png";
         this.blankPath = "UI/DapperMap/blank-" + this.slug + ".png";
-        this.framePath = "UI/DapperMap/frame-" + this.slug + "-" + shapeId + ".png";
         this.selfPath = "UI/DapperMap/self-" + this.slug + "-0.png";
+        this.terrainPath = this.blankPath;
+        this.updateStaticAssetPaths();
     }
 
+    /** Logical terrain-buffer size expected by the existing session/world calculations. */
     public int bufferPixels() {
         return this.bufferPixels;
     }
@@ -77,7 +104,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
             DynamicAssetPublisher.deliver(this.ownerRef, this.framePath, frame);
         }
 
-        byte[] self = DynamicMinimapRenderer.renderSelfArrow((double)0.0F);
+        byte[] self = DynamicMinimapRenderer.renderSelfArrow(0.0D);
         if (self != null) {
             DynamicAssetPublisher.deliver(this.ownerRef, this.selfPath, self);
         }
@@ -86,7 +113,6 @@ public final class DynamicMinimapHud extends CustomUIHud {
         if (mask != null) {
             DynamicAssetPublisher.deliverWithRebuild(this.ownerRef, "UI/Custom/" + this.maskFile, mask);
         }
-
     }
 
     public void show() {
@@ -102,8 +128,10 @@ public final class DynamicMinimapHud extends CustomUIHud {
         this.writeStatus(builder);
     }
 
+    /** left/top are logical minimap coordinates supplied by DynamicMinimapSession. */
     public void setTerrain(String assetPath, int left, int top) {
         if (this.built && assetPath != null) {
+            this.terrainPath = assetPath;
             this.panLeft = left;
             this.panTop = top;
             UICommandBuilder builder = new UICommandBuilder();
@@ -114,9 +142,9 @@ public final class DynamicMinimapHud extends CustomUIHud {
             this.terrainShown = true;
             this.update(false, builder);
         }
-
     }
 
+    /** left/top stay logical; conversion happens only when the Anchor is emitted. */
     public void pan(int left, int top) {
         if (this.built && this.terrainShown && (left != this.panLeft || top != this.panTop)) {
             this.panLeft = left;
@@ -126,7 +154,6 @@ public final class DynamicMinimapHud extends CustomUIHud {
             builder.setObject("#WayfinderMmRoot #WayfinderMmClip #WayfinderMmMarkers.Anchor", this.fullAnchor(left, top));
             this.update(false, builder);
         }
-
     }
 
     public void setSelf(String assetPath) {
@@ -136,9 +163,9 @@ public final class DynamicMinimapHud extends CustomUIHud {
             builder.set("#WayfinderMmRoot #WayfinderMmSelf.AssetPath", assetPath);
             this.update(false, builder);
         }
-
     }
 
+    /** Slot coordinates and sizes are logical minimap values, converted here for display. */
     public void setMarkers(Slot[] slots) {
         if (this.built) {
             UICommandBuilder builder = new UICommandBuilder();
@@ -151,14 +178,22 @@ public final class DynamicMinimapHud extends CustomUIHud {
                 int left = visible ? slot.left : 0;
                 int top = visible ? slot.top : 0;
                 int size = visible ? slot.size : 0;
-                if (!Objects.equals(this.slotPath[i], path) || this.slotVisible[i] != visible || this.slotLeft[i] != left || this.slotTop[i] != top || this.slotSize[i] != size) {
+                if (!Objects.equals(this.slotPath[i], path)
+                        || this.slotVisible[i] != visible
+                        || this.slotLeft[i] != left
+                        || this.slotTop[i] != top
+                        || this.slotSize[i] != size) {
                     this.slotPath[i] = path;
                     this.slotVisible[i] = visible;
                     this.slotLeft[i] = left;
                     this.slotTop[i] = top;
                     this.slotSize[i] = size;
                     String selector = "#WayfinderMmRoot #WayfinderMmClip #WayfinderMmMarkers #WayfinderMmMk" + i;
-                    builder.setObject(selector + ".Anchor", anchor(left, top, size, size));
+                    builder.setObject(selector + ".Anchor", anchor(
+                            this.displayCoordinate(left),
+                            this.displayCoordinate(top),
+                            this.displaySize(size),
+                            this.displaySize(size)));
                     builder.set(selector + ".AssetPath", visible ? path : this.blankPath);
                     builder.set(selector + ".Visible", visible);
                     changed = true;
@@ -169,7 +204,6 @@ public final class DynamicMinimapHud extends CustomUIHud {
                 this.update(false, builder);
             }
         }
-
     }
 
     public void setCoords(String coords) {
@@ -181,7 +215,6 @@ public final class DynamicMinimapHud extends CustomUIHud {
                 this.update(false, builder);
             }
         }
-
     }
 
     public void setStatus(String coords, String compass, String clock, String biome) {
@@ -211,7 +244,6 @@ public final class DynamicMinimapHud extends CustomUIHud {
             this.writeStatus(builder);
             this.update(false, builder);
         }
-
     }
 
     public void removeFromClient() {
@@ -227,56 +259,316 @@ public final class DynamicMinimapHud extends CustomUIHud {
                 this.slotVisible[i] = false;
             }
         }
-
     }
 
     public void setPosition(int position) {
         this.position = position;
         if (this.built) {
-            Anchor anchor = new Anchor();
-            if (this.anchorRight()) {
-                anchor.setRight(Value.of(10));
-            } else {
-                anchor.setLeft(Value.of(10));
-            }
-
-            if (this.anchorBottom()) {
-                anchor.setBottom(Value.of(10));
-            } else {
-                anchor.setTop(Value.of(10));
-            }
-
-            anchor.setWidth(Value.of(this.uiSize));
-            anchor.setHeight(Value.of(this.rootHeight()));
             UICommandBuilder builder = new UICommandBuilder();
-            builder.setObject("#WayfinderMmRoot.Anchor", anchor);
+            builder.setObject("#WayfinderMmRoot.Anchor", this.rootAnchor());
             this.update(false, builder);
         }
+    }
 
+    /**
+     * Changes the logical minimap size without recreating the CustomUIHud root.
+     *
+     * Size affects map/world coordinate space and buffer dimensions, so the
+     * map subtree is replaced atomically while the root HUD remains mounted.
+     * Static mask/frame assets are reused at every size. Terrain is intentionally
+     * reset to blank until
+     * the session delivers a freshly rendered buffer for the new logical size.
+     */
+    public void setMapSize(int newSize) {
+        int normalized = Math.max(120, Math.min(360, newSize));
+        if (normalized == this.logicalUiSize) {
+            return;
+        }
+
+        this.settings.sizePixels = normalized;
+        this.settings.normalize();
+
+        this.logicalUiSize = this.settings.sizePixels;
+        this.bufferPixels = DynamicMinimapRenderer.bufferPixels(this.settings);
+        this.selfSize = Math.max(18, this.logicalUiSize / 10);
+
+        // Frame and mask are reused across logical map sizes. Only terrain and
+        // layout geometry depend on size at runtime.
+        this.panLeft = 0;
+        this.panTop = 0;
+        this.terrainPath = this.blankPath;
+        this.terrainShown = false;
+
+        if (!this.built) {
+            return;
+        }
+
+        UICommandBuilder builder = new UICommandBuilder();
+
+        // Keep the Custom HUD/root mounted. Only replace size-dependent children.
+        builder.setObject("#WayfinderMmRoot.Anchor", this.rootAnchor());
+
+        builder.remove("#WayfinderMmRoot #WayfinderMmClip");
+        builder.remove("#WayfinderMmRoot #WayfinderMmFrame");
+        builder.remove("#WayfinderMmRoot #WayfinderMmSelf");
+        builder.appendInline("#WayfinderMmRoot", this.buildMapMarkup());
+
+        builder.remove("#WayfinderMmRoot #WayfinderMmReadout");
+        builder.appendInline("#WayfinderMmRoot", this.buildReadoutMarkup());
+        this.writeStatus(builder);
+
+        this.update(false, builder);
+    }
+
+    /**
+     * Applies a presentation-scale change to the existing HUD tree.
+     *
+     * This intentionally avoids removeFromClient(), appendInline(), update(true),
+     * and static-asset rebuilds. World/map coordinates remain logical and are
+     * converted only when Anchor values are emitted.
+     */
+    public void setInterfaceScale(int percent) {
+        int normalized = Math.max(75, Math.min(160, percent));
+        if (normalized == this.interfaceScalePercent) {
+            return;
+        }
+
+        this.interfaceScalePercent = normalized;
+
+        if (!this.built) {
+            return;
+        }
+
+        int displayUiSize = this.displaySize(this.logicalUiSize);
+        int selfInset = this.displayCoordinate((this.logicalUiSize - this.selfSize) / 2);
+        int displaySelfSize = this.displaySize(this.selfSize);
+
+        UICommandBuilder builder = new UICommandBuilder();
+
+        // Root and principal map layers.
+        builder.setObject("#WayfinderMmRoot.Anchor", this.rootAnchor());
+        builder.setObject(
+                "#WayfinderMmRoot #WayfinderMmClip.Anchor",
+                anchor(0, 0, displayUiSize, displayUiSize)
+        );
+        builder.setObject(
+                "#WayfinderMmRoot #WayfinderMmClip #WayfinderMmTerrain.Anchor",
+                this.fullAnchor(this.panLeft, this.panTop)
+        );
+        builder.setObject(
+                "#WayfinderMmRoot #WayfinderMmClip #WayfinderMmMarkers.Anchor",
+                this.fullAnchor(this.panLeft, this.panTop)
+        );
+        builder.setObject(
+                "#WayfinderMmRoot #WayfinderMmFrame.Anchor",
+                anchor(0, 0, displayUiSize, displayUiSize)
+        );
+        builder.setObject(
+                "#WayfinderMmRoot #WayfinderMmSelf.Anchor",
+                anchor(selfInset, selfInset, displaySelfSize, displaySelfSize)
+        );
+
+        // Re-emit marker anchors because setMarkers() normally suppresses
+        // unchanged slots, while a scale change still requires new display
+        // coordinates.
+        for (int i = 0; i < MARKER_SLOTS; ++i) {
+            if (!this.slotVisible[i]) {
+                continue;
+            }
+
+            String selector =
+                    "#WayfinderMmRoot #WayfinderMmClip #WayfinderMmMarkers #WayfinderMmMk" + i;
+            builder.setObject(
+                    selector + ".Anchor",
+                    anchor(
+                            this.displayCoordinate(this.slotLeft[i]),
+                            this.displayCoordinate(this.slotTop[i]),
+                            this.displaySize(this.slotSize[i]),
+                            this.displaySize(this.slotSize[i])
+                    )
+            );
+        }
+
+        // Rebuild only the readout child group so Hytale reparses the scaled
+        // LabelStyle and Padding values from normal UI markup. The Custom HUD
+        // itself remains mounted, avoiding the full HUD lifecycle that caused
+        // Escape-menu flicker.
+        builder.remove("#WayfinderMmRoot #WayfinderMmReadout");
+        builder.appendInline("#WayfinderMmRoot", this.buildReadoutMarkup());
+        this.writeStatus(builder);
+
+        this.update(false, builder);
     }
 
     private String buildMarkup() {
-        int selfInset = (this.uiSize - this.selfSize) / 2;
-        StringBuilder out = new StringBuilder(4096);
-        out.append("Group #WayfinderMmRoot { ").append("Anchor: (").append(this.rootAnchorEdges()).append(", Width: ").append(this.uiSize).append(", Height: ").append(this.rootHeight()).append("); ");
-        out.append("Group #WayfinderMmClip { ").append("Anchor: (Left: 0, Top: 0, Width: ").append(this.uiSize).append(", Height: ").append(this.uiSize).append("); ").append("MaskTexturePath: \"").append(this.maskFile).append("\"; ").append("Background: #0a1218(0.92); ");
-        out.append("AssetImage #WayfinderMmTerrain { ").append("Anchor: (Left: ").append(this.panLeft).append(", Top: ").append(this.panTop).append(", Width: ").append(this.bufferPixels).append(", Height: ").append(this.bufferPixels).append("); AssetPath: \"").append(this.blankPath).append("\"; Visible: false; } ");
-        out.append("Group #WayfinderMmMarkers { ").append("Anchor: (Left: ").append(this.panLeft).append(", Top: ").append(this.panTop).append(", Width: ").append(this.bufferPixels).append(", Height: ").append(this.bufferPixels).append("); ");
+        StringBuilder out = new StringBuilder(4600);
+        out.append("Group #WayfinderMmRoot { ")
+                .append("Anchor: (").append(this.rootAnchorEdges())
+                .append(", Width: ").append(this.displaySize(this.logicalUiSize))
+                .append(", Height: ").append(this.rootHeight()).append("); ");
 
-        for(int i = 0; i < 48; ++i) {
-            out.append("AssetImage #WayfinderMmMk").append(i).append(" { Anchor: (Left: 0, Top: 0, Width: 0, Height: 0); AssetPath: \"").append(this.blankPath).append("\"; Visible: false; } ");
-        }
-
-        out.append("} } ");
-        out.append("AssetImage #WayfinderMmFrame { Anchor: (Left: 0, Top: 0, Width: ").append(this.uiSize).append(", Height: ").append(this.uiSize).append("); AssetPath: \"").append(this.framePath).append("\"; Visible: true; } ");
-        out.append("AssetImage #WayfinderMmSelf { Anchor: (Left: ").append(selfInset).append(", Top: ").append(selfInset).append(", Width: ").append(this.selfSize).append(", Height: ").append(this.selfSize).append("); AssetPath: \"").append(this.selfPath).append("\"; Visible: true; } ");
-        out.append("Group #WayfinderMmReadout { Anchor: (Left: 0, Top: ").append(this.uiSize + 4).append(", Width: ").append(this.uiSize).append(", Height: 88); Background: #071016(0.96); LayoutMode: Top; Padding: (Horizontal: 8, Vertical: 5); ").append("Label #WayfinderMmBrand { Anchor: (Height: 12); Text: \"DapperMap\"; Style: LabelStyle(FontSize: 9, RenderBold: true, TextColor: #ffd66b, HorizontalAlignment: Center, VerticalAlignment: Center); } ").append("Group #WayfinderMmCoordsBand { Anchor: (Height: 22); Background: #102232(0.98); LayoutMode: CenterMiddle; ").append("Label #WayfinderMmCoords { Style: LabelStyle(FontSize: 12, RenderBold: true, TextColor: #f5f7fb, HorizontalAlignment: Center, VerticalAlignment: Center); } } ").append("Group #WayfinderMmMetaBand { Anchor: (Height: 26); LayoutMode: Left; Padding: (Top: 4); ").append("Group #WayfinderMmCompassBox { FlexWeight: 1; Background: #132733(0.9); LayoutMode: CenterMiddle; Padding: (Right: 3); ").append("Label #WayfinderMmCompass { Style: LabelStyle(FontSize: 10, RenderBold: true, TextColor: #ffd66b, HorizontalAlignment: Center, VerticalAlignment: Center); } } ").append("Group #WayfinderMmClockBox { FlexWeight: 1; Background: #183040(0.9); LayoutMode: CenterMiddle; Padding: (Left: 3); ").append("Label #WayfinderMmClock { Style: LabelStyle(FontSize: 10, RenderBold: true, TextColor: #9ddcff, HorizontalAlignment: Center, VerticalAlignment: Center); } } ").append("} ").append("Group #WayfinderMmBiomeBand { Anchor: (Height: 18); Background: #0f1f29(0.92); LayoutMode: CenterMiddle; ").append("Label #WayfinderMmBiome { Style: LabelStyle(FontSize: 9, RenderBold: true, TextColor: #cfe0ef, HorizontalAlignment: Center, VerticalAlignment: Center); } } ").append("} ");
+        out.append(this.buildMapMarkup());
+        out.append(this.buildReadoutMarkup());
         out.append("}");
         return out.toString();
     }
 
+    /**
+     * Builds the size-dependent map subtree. Marker state is restored from the
+     * HUD's logical marker cache so a subtree replacement does not lose icons.
+     */
+    private String buildMapMarkup() {
+        int displayUiSize = this.displaySize(this.logicalUiSize);
+        int displayBuffer = this.displaySize(this.bufferPixels);
+        int selfInset = this.displayCoordinate((this.logicalUiSize - this.selfSize) / 2);
+        int displaySelfSize = this.displaySize(this.selfSize);
+
+        StringBuilder out = new StringBuilder(3200);
+        out.append("Group #WayfinderMmClip { ")
+                .append("Anchor: (Left: 0, Top: 0, Width: ").append(displayUiSize)
+                .append(", Height: ").append(displayUiSize).append("); ")
+                .append("MaskTexturePath: \"").append(this.maskFile).append("\"; ")
+                .append("Background: #0a1218(0.92); ");
+
+        out.append("AssetImage #WayfinderMmTerrain { ")
+                .append("Anchor: (Left: ").append(this.displayCoordinate(this.panLeft))
+                .append(", Top: ").append(this.displayCoordinate(this.panTop))
+                .append(", Width: ").append(displayBuffer)
+                .append(", Height: ").append(displayBuffer)
+                .append("); AssetPath: \"").append(this.terrainPath)
+                .append("\"; Visible: ").append(this.terrainShown).append("; } ");
+
+        out.append("Group #WayfinderMmMarkers { ")
+                .append("Anchor: (Left: ").append(this.displayCoordinate(this.panLeft))
+                .append(", Top: ").append(this.displayCoordinate(this.panTop))
+                .append(", Width: ").append(displayBuffer)
+                .append(", Height: ").append(displayBuffer).append("); ");
+
+        for (int i = 0; i < MARKER_SLOTS; ++i) {
+            boolean visible = this.slotVisible[i] && this.slotPath[i] != null;
+            out.append("AssetImage #WayfinderMmMk").append(i).append(" { Anchor: (Left: ")
+                    .append(visible ? this.displayCoordinate(this.slotLeft[i]) : 0)
+                    .append(", Top: ")
+                    .append(visible ? this.displayCoordinate(this.slotTop[i]) : 0)
+                    .append(", Width: ")
+                    .append(visible ? this.displaySize(this.slotSize[i]) : 0)
+                    .append(", Height: ")
+                    .append(visible ? this.displaySize(this.slotSize[i]) : 0)
+                    .append("); AssetPath: \"")
+                    .append(visible ? this.slotPath[i] : this.blankPath)
+                    .append("\"; Visible: ").append(visible).append("; } ");
+        }
+
+        out.append("} } ");
+
+        out.append("AssetImage #WayfinderMmFrame { Anchor: (Left: 0, Top: 0, Width: ")
+                .append(displayUiSize).append(", Height: ").append(displayUiSize)
+                .append("); AssetPath: \"").append(this.framePath)
+                .append("\"; Visible: true; } ");
+
+        out.append("AssetImage #WayfinderMmSelf { Anchor: (Left: ").append(selfInset)
+                .append(", Top: ").append(selfInset)
+                .append(", Width: ").append(displaySelfSize)
+                .append(", Height: ").append(displaySelfSize)
+                .append("); AssetPath: \"").append(this.selfPath)
+                .append("\"; Visible: true; } ");
+
+        return out.toString();
+    }
+
+    /**
+     * Static visual assets are intentionally independent of logical map size.
+     *
+     * Hytale stretches the mask/frame AssetImage to the current UI Anchor, so a
+     * circle/square mask and nautical frame can be reused at every map size.
+     * This avoids introducing a new mask resource during live map-size changes.
+     */
+    private void updateStaticAssetPaths() {
+        String shape = this.settings.isCircle() ? "circle" : "square";
+        String shapeId = shape + "-r" + this.settings.textureResolution
+                + "-nautical" + (this.settings.showBorder ? "-b" : "");
+
+        this.maskFile = "DapperMap-" + this.slug + "-" + shapeId + "-mask.png";
+        this.framePath = "UI/DapperMap/frame-" + this.slug + "-" + shapeId + ".png";
+    }
+
+    /**
+     * Builds just the readout subtree using the current presentation scale.
+     *
+     * Keeping this as normal UI markup means FontSize and Padding are parsed by
+     * the same client code used during the initial HUD build. On a scale change
+     * we can replace only this child group instead of recreating the Custom HUD.
+     */
+    private String buildReadoutMarkup() {
+        int displayUiSize = this.displaySize(this.logicalUiSize);
+        int readoutTop = this.displayCoordinate(this.logicalUiSize + READOUT_GAP);
+
+        StringBuilder out = new StringBuilder(2200);
+        out.append("Group #WayfinderMmReadout { Anchor: (Left: 0, Top: ").append(readoutTop)
+                .append(", Width: ").append(displayUiSize)
+                .append(", Height: ").append(this.displaySize(READOUT_HEIGHT)).append("); ")
+                .append("Background: #071016(0.96); LayoutMode: Top; Padding: (Horizontal: ")
+                .append(this.displaySize(READOUT_PADDING_H)).append(", Vertical: ")
+                .append(this.displaySize(READOUT_PADDING_V)).append("); ")
+
+                .append("Label #WayfinderMmBrand { Anchor: (Height: ")
+                .append(this.displaySize(BRAND_HEIGHT)).append("); Text: \"DapperMap\"; ")
+                .append("Style: LabelStyle(FontSize: ").append(this.displaySize(BRAND_FONT_SIZE))
+                .append(", RenderBold: true, TextColor: #ffd66b, HorizontalAlignment: Center, VerticalAlignment: Center); } ")
+
+                .append("Group #WayfinderMmCoordsBand { Anchor: (Height: ")
+                .append(this.displaySize(COORDS_HEIGHT)).append("); Background: #102232(0.98); LayoutMode: CenterMiddle; ")
+                .append("Label #WayfinderMmCoords { Style: LabelStyle(FontSize: ")
+                .append(this.displaySize(COORDS_FONT_SIZE))
+                .append(", RenderBold: true, TextColor: #f5f7fb, HorizontalAlignment: Center, VerticalAlignment: Center); } } ")
+
+                .append("Group #WayfinderMmMetaBand { Anchor: (Height: ")
+                .append(this.displaySize(META_HEIGHT)).append("); LayoutMode: Left; Padding: (Top: ")
+                .append(this.displaySize(META_TOP_PADDING)).append("); ")
+                .append("Group #WayfinderMmCompassBox { FlexWeight: 1; Background: #132733(0.9); LayoutMode: CenterMiddle; Padding: (Right: ")
+                .append(this.displaySize(META_INNER_PADDING)).append("); ")
+                .append("Label #WayfinderMmCompass { Style: LabelStyle(FontSize: ")
+                .append(this.displaySize(META_FONT_SIZE))
+                .append(", RenderBold: true, TextColor: #ffd66b, HorizontalAlignment: Center, VerticalAlignment: Center); } } ")
+                .append("Group #WayfinderMmClockBox { FlexWeight: 1; Background: #183040(0.9); LayoutMode: CenterMiddle; Padding: (Left: ")
+                .append(this.displaySize(META_INNER_PADDING)).append("); ")
+                .append("Label #WayfinderMmClock { Style: LabelStyle(FontSize: ")
+                .append(this.displaySize(META_FONT_SIZE))
+                .append(", RenderBold: true, TextColor: #9ddcff, HorizontalAlignment: Center, VerticalAlignment: Center); } } ")
+                .append("} ")
+
+                .append("Group #WayfinderMmBiomeBand { Anchor: (Height: ")
+                .append(this.displaySize(BIOME_HEIGHT)).append("); Background: #0f1f29(0.92); LayoutMode: CenterMiddle; ")
+                .append("Label #WayfinderMmBiome { Style: LabelStyle(FontSize: ")
+                .append(this.displaySize(BIOME_FONT_SIZE))
+                .append(", RenderBold: true, TextColor: #cfe0ef, HorizontalAlignment: Center, VerticalAlignment: Center); } } ")
+                .append("} ");
+
+        return out.toString();
+    }
+
     private int rootHeight() {
-        return this.uiSize + 4 + 88;
+        return this.displaySize(this.logicalUiSize + READOUT_GAP + READOUT_HEIGHT);
+    }
+
+    private Anchor rootAnchor() {
+        Anchor anchor = new Anchor();
+        int margin = this.displaySize(HUD_MARGIN);
+        if (this.anchorRight()) {
+            anchor.setRight(Value.of(margin));
+        } else {
+            anchor.setLeft(Value.of(margin));
+        }
+
+        if (this.anchorBottom()) {
+            anchor.setBottom(Value.of(margin));
+        } else {
+            anchor.setTop(Value.of(margin));
+        }
+
+        anchor.setWidth(Value.of(this.displaySize(this.logicalUiSize)));
+        anchor.setHeight(Value.of(this.rootHeight()));
+        return anchor;
     }
 
     private void writeStatus(UICommandBuilder builder) {
@@ -295,13 +587,33 @@ public final class DynamicMinimapHud extends CustomUIHud {
     }
 
     private String rootAnchorEdges() {
-        String horizontal = this.anchorRight() ? "Right: 10" : "Left: 10";
-        String vertical = this.anchorBottom() ? "Bottom: 10" : "Top: 10";
+        int margin = this.displaySize(HUD_MARGIN);
+        String horizontal = this.anchorRight() ? "Right: " + margin : "Left: " + margin;
+        String vertical = this.anchorBottom() ? "Bottom: " + margin : "Top: " + margin;
         return horizontal + ", " + vertical;
     }
 
-    private Anchor fullAnchor(int left, int top) {
-        return anchor(left, top, this.bufferPixels, this.bufferPixels);
+    private Anchor fullAnchor(int logicalLeft, int logicalTop) {
+        return anchor(
+                this.displayCoordinate(logicalLeft),
+                this.displayCoordinate(logicalTop),
+                this.displaySize(this.bufferPixels),
+                this.displaySize(this.bufferPixels));
+    }
+
+    private int displayCoordinate(int logicalValue) {
+        return Math.round(logicalValue * this.interfaceScalePercent / 100.0F);
+    }
+
+    private int displaySize(int logicalValue) {
+        if (logicalValue <= 0) {
+            return 0;
+        }
+
+        return Math.max(
+                1,
+                Math.round(logicalValue * this.interfaceScalePercent / 100.0F)
+        );
     }
 
     private static Anchor anchor(int left, int top, int width, int height) {

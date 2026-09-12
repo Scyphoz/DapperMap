@@ -59,9 +59,13 @@ public class MinimapSessionManager {
         DynamicMinimapSession session = (DynamicMinimapSession)this.sessionsByPlayer.get(playerUuid);
         if (session != null) {
             session.settings().enabled = settings.enabled;
+            session.settings().rotationMode = settings.rotationMode;
             session.settings().zoomBlocks = settings.zoomBlocks;
             session.settings().sizePixels = settings.sizePixels;
+            session.settings().textureResolution = settings.textureResolution;
+            session.settings().interfaceScalePercent = settings.interfaceScalePercent;
             session.settings().shape = settings.shape;
+            session.settings().showBorder = settings.showBorder;
             session.settings().showOtherPlayers = settings.showOtherPlayers;
             session.settings().showEntities = settings.showEntities;
             session.settings().showDeathMarker = settings.showDeathMarker;

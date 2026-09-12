@@ -33,6 +33,11 @@ public final class DapperMapSettingsPage
     private static final int SIZE_STEP = 20;
     private static final int VRANGE_STEP = 8;
 
+    // Deliberately discrete so players can quickly return to known-good HUD scales.
+    private static final int[] INTERFACE_SCALE_STEPS = {
+            75, 85, 100, 110, 125, 140, 160
+    };
+
     private static final Row[] ROWS;
 
     private final PlayerRef playerRef;
@@ -313,6 +318,13 @@ public final class DapperMapSettingsPage
             case "size" ->
                     settings.sizePixels += direction * SIZE_STEP;
 
+            case "interface_scale" ->
+                    settings.interfaceScalePercent =
+                            stepInterfaceScale(
+                                    settings.interfaceScalePercent,
+                                    direction
+                            );
+
             case "speed" ->
                     settings.updateSpeed += direction;
 
@@ -441,6 +453,9 @@ public final class DapperMapSettingsPage
             case "size" ->
                     settings.sizePixels + " px";
 
+            case "interface_scale" ->
+                    settings.interfaceScalePercent + "%";
+
             case "speed" ->
                     displaySpeed(settings.updateSpeed);
 
@@ -452,6 +467,33 @@ public final class DapperMapSettingsPage
 
             default -> "";
         };
+    }
+
+    private static int stepInterfaceScale(
+            int current,
+            int direction
+    ) {
+        if (direction == 0) {
+            return current;
+        }
+
+        if (direction > 0) {
+            for (int scale : INTERFACE_SCALE_STEPS) {
+                if (scale > current) {
+                    return scale;
+                }
+            }
+
+            return INTERFACE_SCALE_STEPS[INTERFACE_SCALE_STEPS.length - 1];
+        }
+
+        for (int index = INTERFACE_SCALE_STEPS.length - 1; index >= 0; --index) {
+            if (INTERFACE_SCALE_STEPS[index] < current) {
+                return INTERFACE_SCALE_STEPS[index];
+            }
+        }
+
+        return INTERFACE_SCALE_STEPS[0];
     }
 
     private static String displaySpeed(int speed) {
@@ -482,7 +524,9 @@ public final class DapperMapSettingsPage
                 + settings.zoomBlocks
                 + " block radius  |  "
                 + displaySpeed(settings.updateSpeed)
-                + " updates";
+                + " updates  |  UI "
+                + settings.interfaceScalePercent
+                + "%";
     }
 
     static {
@@ -502,6 +546,11 @@ public final class DapperMapSettingsPage
                 new Row(
                         "size",
                         "Map size",
+                        Kind.STEPPER
+                ),
+                new Row(
+                        "interface_scale",
+                        "Interface scale",
                         Kind.STEPPER
                 ),
                 new Row(

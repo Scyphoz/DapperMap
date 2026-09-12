@@ -52,6 +52,8 @@ public final class DynamicMinimapSession {
     private int builtShape = -1;
     private int builtZoom = -1;
     private int builtPosition = -1;
+    private int builtInterfaceScale = -1;
+    private int builtTextureResolution = -1;
     private boolean firstTerrainForHud = false;
     private double bufferCenterX = Double.NaN;
     private double bufferCenterZ = Double.NaN;
@@ -173,6 +175,28 @@ public final class DynamicMinimapSession {
                 return;
             }
 
+            if (this.settings.sizePixels != this.builtSize) {
+                this.builtSize = this.settings.sizePixels;
+                this.hud.setMapSize(this.settings.sizePixels);
+
+                // Logical size changes pixels-per-block and buffer dimensions.
+                // Invalidate the old terrain buffer and let the normal render
+                // path create a fresh one without recreating the Custom HUD.
+                this.bufferCenterX = Double.NaN;
+                this.bufferCenterZ = Double.NaN;
+                this.bufferComplete = false;
+                this.warmupUntilMs = 0L;
+                this.lastSignature = 0L;
+                this.lastSignatureMs = 0L;
+                this.lastTerrainMs = 0L;
+                this.lastMarkerMs = 0L;
+            }
+
+            if (this.settings.interfaceScalePercent != this.builtInterfaceScale) {
+                this.builtInterfaceScale = this.settings.interfaceScalePercent;
+                this.hud.setInterfaceScale(this.settings.interfaceScalePercent);
+            }
+
             if (this.settings.position != this.builtPosition) {
                 this.builtPosition = this.settings.position;
                 this.hud.setPosition(this.settings.position);
@@ -233,7 +257,10 @@ public final class DynamicMinimapSession {
     }
 
     private void ensureHud() {
-        if (this.hud != null && this.hud.isShown() && this.settings.sizePixels == this.builtSize && this.settings.shape == this.builtShape) {
+        if (this.hud != null
+                && this.hud.isShown()
+                && this.settings.shape == this.builtShape
+                && this.settings.textureResolution == this.builtTextureResolution) {
             if (this.settings.zoomBlocks != this.builtZoom) {
                 this.builtZoom = this.settings.zoomBlocks;
                 this.bufferCenterX = Double.NaN;
@@ -249,6 +276,8 @@ public final class DynamicMinimapSession {
             this.builtShape = this.settings.shape;
             this.builtZoom = this.settings.zoomBlocks;
             this.builtPosition = this.settings.position;
+            this.builtInterfaceScale = this.settings.interfaceScalePercent;
+            this.builtTextureResolution = this.settings.textureResolution;
             this.hud.deliverStaticAssets();
             this.hud.show();
             this.bufferCenterX = Double.NaN;

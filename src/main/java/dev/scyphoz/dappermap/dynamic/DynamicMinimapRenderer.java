@@ -23,6 +23,11 @@ import javax.imageio.ImageIO;
 
 public final class DynamicMinimapRenderer {
     private static final int CHUNK_SIZE = 32;
+    /**
+     * Static frame artwork is authored in this logical coordinate space and
+     * stretched by Hytale to the selected HUD map size.
+     */
+    private static final int STATIC_ASSET_LOGICAL_SIZE = 220;
     private static final Color BACKGROUND = new Color(10, 18, 24, 235);
     private static final Color BORDER = new Color(206, 214, 226, 225);
     private static final Color CARDINAL = new Color(255, 220, 80, 255);
@@ -40,8 +45,9 @@ public final class DynamicMinimapRenderer {
     }
 
     /**
-     * Logical Hytale UI pixels per world block. Session pan and marker math deliberately
-     * stays in this coordinate space so UI sizing is independent of raster resolution.
+     * Logical minimap pixels per world block. Session pan and marker math deliberately
+     * stay in this coordinate space so both raster resolution and interfaceScalePercent
+     * remain presentation-only and never alter zoom/world coverage.
      */
     public static double pixelsPerBlock(DynamicMinimapSetting settings) {
         return (double)settings.sizePixels / ((double)2.0F * (double)Math.max(16, settings.zoomBlocks));
@@ -163,66 +169,79 @@ public final class DynamicMinimapRenderer {
 
     public static byte[] renderShapeMask(DynamicMinimapSetting settings) {
         String shape = settings.isCircle() ? "c" : "r";
-        String key = shape + settings.sizePixels + "@" + settings.textureResolution;
+        String key = shape + "@" + settings.textureResolution;
         byte[] cached = MASK_CACHE.get(key);
         if (cached != null) {
             return cached;
-        } else {
-            int logicalSize = settings.sizePixels;
-            int textureSize = settings.textureResolution;
-            double scale = (double)textureSize / (double)logicalSize;
-            BufferedImage image = new BufferedImage(textureSize, textureSize, 2);
-            Graphics2D graphics = image.createGraphics();
-            graphics.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-            graphics.scale(scale, scale);
-            graphics.setColor(Color.WHITE);
-            if (settings.isCircle()) {
-                graphics.fill(new Ellipse2D.Double(0.0, 0.0, logicalSize, logicalSize));
-            } else {
-                graphics.fillRect(0, 0, logicalSize, logicalSize);
-            }
-
-            graphics.dispose();
-            byte[] png = toPng(image);
-            if (png != null) {
-                MASK_CACHE.put(key, png);
-            }
-
-            return png;
         }
+
+        int textureSize = Math.max(1, settings.textureResolution);
+        BufferedImage image = new BufferedImage(textureSize, textureSize, 2);
+        Graphics2D graphics = image.createGraphics();
+        graphics.setRenderingHint(
+                RenderingHints.KEY_ANTIALIASING,
+                RenderingHints.VALUE_ANTIALIAS_ON
+        );
+        graphics.setColor(Color.WHITE);
+
+        if (settings.isCircle()) {
+            graphics.fill(new Ellipse2D.Double(
+                    0.0,
+                    0.0,
+                    textureSize,
+                    textureSize
+            ));
+        } else {
+            graphics.fillRect(0, 0, textureSize, textureSize);
+        }
+
+        graphics.dispose();
+        byte[] png = toPng(image);
+        if (png != null) {
+            MASK_CACHE.put(key, png);
+        }
+
+        return png;
     }
 
     public static byte[] renderFrame(DynamicMinimapSetting settings) {
         String shape = settings.isCircle() ? "c" : "r";
-        String key = shape + settings.sizePixels + "@" + settings.textureResolution + (settings.showBorder ? "b" : "");
+        String key = shape + "@" + settings.textureResolution
+                + (settings.showBorder ? "b" : "");
         byte[] cached = FRAME_CACHE.get(key);
         if (cached != null) {
             return cached;
-        } else {
-            int logicalSize = settings.sizePixels;
-            int textureSize = settings.textureResolution;
-            double scale = (double)textureSize / (double)logicalSize;
-            BufferedImage image = new BufferedImage(textureSize, textureSize, 2);
-            Graphics2D graphics = image.createGraphics();
-            graphics.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-            graphics.scale(scale, scale);
-            if (settings.showBorder) {
-                if (settings.isCircle()) {
-                    drawNauticalCircleFrame(graphics, logicalSize);
-                } else {
-                    drawNauticalSquareFrame(graphics, logicalSize);
-                }
-            }
-
-            drawCardinals(graphics, logicalSize, settings.isCircle());
-            graphics.dispose();
-            byte[] png = toPng(image);
-            if (png != null) {
-                FRAME_CACHE.put(key, png);
-            }
-
-            return png;
         }
+
+        int logicalSize = STATIC_ASSET_LOGICAL_SIZE;
+        int textureSize = Math.max(1, settings.textureResolution);
+        double scale = (double)textureSize / (double)logicalSize;
+
+        BufferedImage image = new BufferedImage(textureSize, textureSize, 2);
+        Graphics2D graphics = image.createGraphics();
+        graphics.setRenderingHint(
+                RenderingHints.KEY_ANTIALIASING,
+                RenderingHints.VALUE_ANTIALIAS_ON
+        );
+        graphics.scale(scale, scale);
+
+        if (settings.showBorder) {
+            if (settings.isCircle()) {
+                drawNauticalCircleFrame(graphics, logicalSize);
+            } else {
+                drawNauticalSquareFrame(graphics, logicalSize);
+            }
+        }
+
+        drawCardinals(graphics, logicalSize, settings.isCircle());
+        graphics.dispose();
+
+        byte[] png = toPng(image);
+        if (png != null) {
+            FRAME_CACHE.put(key, png);
+        }
+
+        return png;
     }
 
     public static byte[] renderDot(int rgb) {

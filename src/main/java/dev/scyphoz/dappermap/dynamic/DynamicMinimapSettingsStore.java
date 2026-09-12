@@ -27,16 +27,59 @@ public final class DynamicMinimapSettingsStore {
     }
 
     public void save(UUID uuid) {
-        DynamicMinimapSetting settings = (DynamicMinimapSetting)this.cache.get(uuid);
+        DynamicMinimapSetting settings = this.cache.get(uuid);
         if (uuid != null && settings != null) {
             try {
                 Files.createDirectories(this.dataDir);
                 Path file = this.dataDir.resolve(String.valueOf(uuid) + ".json");
-                Files.writeString(file, "{\n  \"enabled\": %s,\n  \"rotationMode\": %d,\n  \"zoomBlocks\": %d,\n  \"sizePixels\": %d,\n  \"shape\": %d,\n  \"showBorder\": %s,\n  \"showOtherPlayers\": %s,\n  \"showEntities\": %s,\n  \"showDeathMarker\": %s,\n  \"limitMobHeight\": %s,\n  \"mobVerticalRange\": %d,\n  \"position\": %d,\n  \"updateSpeed\": %d,\n  \"clock24Hour\": %s,\n  \"showClock\": %s,\n  \"showCompass\": %s,\n  \"showBiome\": %s\n}\n".formatted(settings.enabled, settings.rotationMode, settings.zoomBlocks, settings.sizePixels, settings.shape, settings.showBorder, settings.showOtherPlayers, settings.showEntities, settings.showDeathMarker, settings.limitMobHeight, settings.mobVerticalRange, settings.position, settings.updateSpeed, settings.clock24Hour, settings.showClock, settings.showCompass, settings.showBiome));
-            } catch (IOException var4) {
+
+                Files.writeString(
+                        file,
+                        ("{\n"
+                                + "  \"enabled\": %s,\n"
+                                + "  \"rotationMode\": %d,\n"
+                                + "  \"zoomBlocks\": %d,\n"
+                                + "  \"sizePixels\": %d,\n"
+                                + "  \"textureResolution\": %d,\n"
+                                + "  \"interfaceScalePercent\": %d,\n"
+                                + "  \"shape\": %d,\n"
+                                + "  \"showBorder\": %s,\n"
+                                + "  \"showOtherPlayers\": %s,\n"
+                                + "  \"showEntities\": %s,\n"
+                                + "  \"showDeathMarker\": %s,\n"
+                                + "  \"limitMobHeight\": %s,\n"
+                                + "  \"mobVerticalRange\": %d,\n"
+                                + "  \"position\": %d,\n"
+                                + "  \"updateSpeed\": %d,\n"
+                                + "  \"clock24Hour\": %s,\n"
+                                + "  \"showClock\": %s,\n"
+                                + "  \"showCompass\": %s,\n"
+                                + "  \"showBiome\": %s\n"
+                                + "}\n").formatted(
+                                settings.enabled,
+                                settings.rotationMode,
+                                settings.zoomBlocks,
+                                settings.sizePixels,
+                                settings.textureResolution,
+                                settings.interfaceScalePercent,
+                                settings.shape,
+                                settings.showBorder,
+                                settings.showOtherPlayers,
+                                settings.showEntities,
+                                settings.showDeathMarker,
+                                settings.limitMobHeight,
+                                settings.mobVerticalRange,
+                                settings.position,
+                                settings.updateSpeed,
+                                settings.clock24Hour,
+                                settings.showClock,
+                                settings.showCompass,
+                                settings.showBiome
+                        )
+                );
+            } catch (IOException ignored) {
             }
         }
-
     }
 
     private DynamicMinimapSetting load(UUID uuid, DynamicMinimapSetting defaults) {
@@ -53,6 +96,8 @@ public final class DynamicMinimapSettingsStore {
                     Integer rotationMode = extractInt(json, "rotationMode");
                     Integer zoomBlocks = extractInt(json, "zoomBlocks");
                     Integer sizePixels = extractInt(json, "sizePixels");
+                    Integer textureResolution = extractInt(json, "textureResolution");
+                    Integer interfaceScalePercent = extractInt(json, "interfaceScalePercent");
                     Integer shape = extractInt(json, "shape");
                     Boolean showBorder = extractBool(json, "showBorder");
                     Boolean showOtherPlayers = extractBool(json, "showOtherPlayers");
@@ -80,6 +125,14 @@ public final class DynamicMinimapSettingsStore {
 
                     if (sizePixels != null) {
                         settings.sizePixels = sizePixels;
+                    }
+
+                    if (textureResolution != null) {
+                        settings.textureResolution = textureResolution;
+                    }
+
+                    if (interfaceScalePercent != null) {
+                        settings.interfaceScalePercent = interfaceScalePercent;
                     }
 
                     if (shape != null) {
