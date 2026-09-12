@@ -50,6 +50,9 @@ public final class DynamicMinimapSettingsStore {
                                 + "  \"limitMobHeight\": %s,\n"
                                 + "  \"mobVerticalRange\": %d,\n"
                                 + "  \"position\": %d,\n"
+                                + "  \"hudPositionX\": %d,\n"
+                                + "  \"hudPositionY\": %d,\n"
+                                + "  \"infoPanelPosition\": %d,\n"
                                 + "  \"updateSpeed\": %d,\n"
                                 + "  \"clock24Hour\": %s,\n"
                                 + "  \"showClock\": %s,\n"
@@ -70,6 +73,9 @@ public final class DynamicMinimapSettingsStore {
                                 settings.limitMobHeight,
                                 settings.mobVerticalRange,
                                 settings.position,
+                                settings.hudPositionX,
+                                settings.hudPositionY,
+                                settings.infoPanelPosition,
                                 settings.updateSpeed,
                                 settings.clock24Hour,
                                 settings.showClock,
@@ -106,6 +112,9 @@ public final class DynamicMinimapSettingsStore {
                     Boolean limitMobHeight = extractBool(json, "limitMobHeight");
                     Integer mobVerticalRange = extractInt(json, "mobVerticalRange");
                     Integer position = extractInt(json, "position");
+                    Integer hudPositionX = extractInt(json, "hudPositionX");
+                    Integer hudPositionY = extractInt(json, "hudPositionY");
+                    Integer infoPanelPosition = extractInt(json, "infoPanelPosition");
                     Integer updateSpeed = extractInt(json, "updateSpeed");
                     Boolean clock24Hour = extractBool(json, "clock24Hour");
                     Boolean showClock = extractBool(json, "showClock");
@@ -165,6 +174,28 @@ public final class DynamicMinimapSettingsStore {
 
                     if (position != null) {
                         settings.position = position;
+                    }
+
+                    // Old settings files only have the four-corner "position".
+                    // Migrate that value unless the new X/Y fields are present.
+                    if (hudPositionX == null || hudPositionY == null) {
+                        settings.applyLegacyPosition(
+                                position != null
+                                        ? position
+                                        : settings.position
+                        );
+                    }
+
+                    if (hudPositionX != null) {
+                        settings.hudPositionX = hudPositionX;
+                    }
+
+                    if (hudPositionY != null) {
+                        settings.hudPositionY = hudPositionY;
+                    }
+
+                    if (infoPanelPosition != null) {
+                        settings.infoPanelPosition = infoPanelPosition;
                     }
 
                     if (updateSpeed != null) {

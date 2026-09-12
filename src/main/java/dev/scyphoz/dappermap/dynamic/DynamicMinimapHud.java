@@ -18,6 +18,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
     private static final int HUD_MARGIN = 10;
     private static final int READOUT_GAP = 4;
     private static final int READOUT_HEIGHT = 88;
+    private static final int SIDE_READOUT_WIDTH = 140;
     private static final int READOUT_PADDING_H = 8;
     private static final int READOUT_PADDING_V = 5;
     private static final int BRAND_HEIGHT = 12;
@@ -53,7 +54,9 @@ public final class DynamicMinimapHud extends CustomUIHud {
     private String terrainPath;
     private boolean built = false;
     private boolean terrainShown = false;
-    private int position;
+    private int hudPositionX;
+    private int hudPositionY;
+    private int infoPanelPosition;
     private int panLeft = 0;
     private int panTop = 0;
     private String coordsText = "X: ?  Y: ?  Z: ?";
@@ -72,7 +75,9 @@ public final class DynamicMinimapHud extends CustomUIHud {
         this.uuid = playerRef.getUuid();
         this.settings = settings.copy();
         this.settings.normalize();
-        this.position = this.settings.position;
+        this.hudPositionX = this.settings.hudPositionX;
+        this.hudPositionY = this.settings.hudPositionY;
+        this.infoPanelPosition = this.settings.infoPanelPosition;
         this.logicalUiSize = this.settings.sizePixels;
         this.bufferPixels = DynamicMinimapRenderer.bufferPixels(this.settings);
         this.selfSize = Math.max(18, this.logicalUiSize / 10);
@@ -274,12 +279,68 @@ public final class DynamicMinimapHud extends CustomUIHud {
         }
     }
 
+    /**
+     * Backward-compatible four-corner positioning entry point.
+     */
     public void setPosition(int position) {
-        this.position = position;
+        int x;
+        int y;
+
+        switch (position) {
+            case DynamicMinimapSetting.POS_TOP_LEFT -> {
+                x = 0;
+                y = 0;
+            }
+            case DynamicMinimapSetting.POS_BOTTOM_LEFT -> {
+                x = 0;
+                y = 100;
+            }
+            case DynamicMinimapSetting.POS_BOTTOM_RIGHT -> {
+                x = 100;
+                y = 100;
+            }
+            case DynamicMinimapSetting.POS_TOP_RIGHT -> {
+                x = 100;
+                y = 0;
+            }
+            default -> {
+                x = 100;
+                y = 0;
+            }
+        }
+
+        this.setLayoutPosition(x, y, this.infoPanelPosition);
+    }
+
+    /**
+     * Moves the complete minimap widget and/or relocates the information panel.
+     * The Custom HUD root remains mounted; only the positioning subtree is
+     * replaced, matching the flicker-free strategy used elsewhere.
+     */
+    public void setLayoutPosition(
+            int xPercent,
+            int yPercent,
+            int panelPosition
+    ) {
+        int x = Math.max(0, Math.min(100, xPercent));
+        int y = Math.max(0, Math.min(100, yPercent));
+        int panel = Math.max(
+                DynamicMinimapSetting.INFO_BELOW,
+                Math.min(DynamicMinimapSetting.INFO_RIGHT, panelPosition)
+        );
+
+        if (x == this.hudPositionX
+                && y == this.hudPositionY
+                && panel == this.infoPanelPosition) {
+            return;
+        }
+
+        this.hudPositionX = x;
+        this.hudPositionY = y;
+        this.infoPanelPosition = panel;
+
         if (this.built) {
-            UICommandBuilder builder = new UICommandBuilder();
-            builder.setObject("#WayfinderMmRoot.Anchor", this.rootAnchor());
-            this.update(false, builder);
+            this.rebuildPositionLayout();
         }
     }
 
@@ -316,21 +377,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
             return;
         }
 
-        UICommandBuilder builder = new UICommandBuilder();
-
-        // Keep the Custom HUD/root mounted. Only replace size-dependent children.
-        builder.setObject("#WayfinderMmRoot.Anchor", this.rootAnchor());
-
-        builder.remove("#WayfinderMmRoot #WayfinderMmClip");
-        builder.remove("#WayfinderMmRoot #WayfinderMmFrame");
-        builder.remove("#WayfinderMmRoot #WayfinderMmSelf");
-        builder.appendInline("#WayfinderMmRoot", this.buildMapMarkup());
-
-        builder.remove("#WayfinderMmRoot #WayfinderMmReadout");
-        builder.appendInline("#WayfinderMmRoot", this.buildReadoutMarkup());
-        this.writeStatus(builder);
-
-        this.update(false, builder);
+        this.rebuildPositionLayout();
     }
 
     /**
@@ -348,97 +395,97 @@ public final class DynamicMinimapHud extends CustomUIHud {
 
         this.interfaceScalePercent = normalized;
 
-        if (!this.built) {
-            return;
+        if (this.built) {
+            this.rebuildPositionLayout();
         }
-
-        int displayUiSize = this.displaySize(this.logicalUiSize);
-        int selfInset = this.displayCoordinate((this.logicalUiSize - this.selfSize) / 2);
-        int displaySelfSize = this.displaySize(this.selfSize);
-
-        UICommandBuilder builder = new UICommandBuilder();
-
-        // Root and principal map layers.
-        builder.setObject("#WayfinderMmRoot.Anchor", this.rootAnchor());
-        builder.setObject(
-                "#WayfinderMmRoot #WayfinderMmClip.Anchor",
-                anchor(0, 0, displayUiSize, displayUiSize)
-        );
-        builder.setObject(
-                "#WayfinderMmRoot #WayfinderMmClip #WayfinderMmTerrain.Anchor",
-                this.fullAnchor(this.panLeft, this.panTop)
-        );
-        builder.setObject(
-                "#WayfinderMmRoot #WayfinderMmClip #WayfinderMmMarkers.Anchor",
-                this.fullAnchor(this.panLeft, this.panTop)
-        );
-        builder.setObject(
-                "#WayfinderMmRoot #WayfinderMmFrame.Anchor",
-                anchor(0, 0, displayUiSize, displayUiSize)
-        );
-        builder.setObject(
-                "#WayfinderMmRoot #WayfinderMmSelf.Anchor",
-                anchor(selfInset, selfInset, displaySelfSize, displaySelfSize)
-        );
-
-        // Re-emit marker anchors because setMarkers() normally suppresses
-        // unchanged slots, while a scale change still requires new display
-        // coordinates.
-        for (int i = 0; i < MARKER_SLOTS; ++i) {
-            if (!this.slotVisible[i]) {
-                continue;
-            }
-
-            String selector =
-                    "#WayfinderMmRoot #WayfinderMmClip #WayfinderMmMarkers #WayfinderMmMk" + i;
-            builder.setObject(
-                    selector + ".Anchor",
-                    anchor(
-                            this.displayCoordinate(this.slotLeft[i]),
-                            this.displayCoordinate(this.slotTop[i]),
-                            this.displaySize(this.slotSize[i]),
-                            this.displaySize(this.slotSize[i])
-                    )
-            );
-        }
-
-        // Rebuild only the readout child group so Hytale reparses the scaled
-        // LabelStyle and Padding values from normal UI markup. The Custom HUD
-        // itself remains mounted, avoiding the full HUD lifecycle that caused
-        // Escape-menu flicker.
-        builder.remove("#WayfinderMmRoot #WayfinderMmReadout");
-        builder.appendInline("#WayfinderMmRoot", this.buildReadoutMarkup());
-        this.writeStatus(builder);
-
-        this.update(false, builder);
     }
 
     private String buildMarkup() {
-        StringBuilder out = new StringBuilder(4600);
+        StringBuilder out = new StringBuilder(6200);
         out.append("Group #WayfinderMmRoot { ")
-                .append("Anchor: (").append(this.rootAnchorEdges())
-                .append(", Width: ").append(this.displaySize(this.logicalUiSize))
-                .append(", Height: ").append(this.rootHeight()).append("); ");
+                .append("Anchor: (Full: 0); ")
+                .append("Padding: (Full: ").append(this.displaySize(HUD_MARGIN)).append("); ")
+                .append("LayoutMode: Full; ");
 
-        out.append(this.buildMapMarkup());
-        out.append(this.buildReadoutMarkup());
+        out.append(this.buildPositionLayoutMarkup());
         out.append("}");
         return out.toString();
     }
 
     /**
-     * Builds the size-dependent map subtree. Marker state is restored from the
-     * HUD's logical marker cache so a subtree replacement does not lose icons.
+     * Creates a resolution-independent positioning layout.
+     *
+     * The fixed-size widget consumes its own width/height. Flex spacers divide
+     * only the remaining screen space, so X/Y percentages naturally describe
+     * the widget's position while keeping it fully on screen.
+     */
+    private String buildPositionLayoutMarkup() {
+        int widgetWidth = this.widgetWidth();
+        int widgetHeight = this.widgetHeight();
+
+        StringBuilder out = new StringBuilder(5600);
+        out.append("Group #WayfinderMmPositionLayout { Anchor: (Full: 0); LayoutMode: Top; ");
+
+        if (this.hudPositionY > 0) {
+            out.append("Group #WayfinderMmTopSpacer { FlexWeight: ")
+                    .append(this.hudPositionY)
+                    .append("; } ");
+        }
+
+        out.append("Group #WayfinderMmPositionRow { Anchor: (Height: ")
+                .append(widgetHeight)
+                .append("); LayoutMode: Left; ");
+
+        if (this.hudPositionX > 0) {
+            out.append("Group #WayfinderMmLeftSpacer { FlexWeight: ")
+                    .append(this.hudPositionX)
+                    .append("; } ");
+        }
+
+        out.append("Group #WayfinderMmWidget { Anchor: (Width: ")
+                .append(widgetWidth)
+                .append(", Height: ").append(widgetHeight)
+                .append("); LayoutMode: Full; ");
+
+        out.append(this.buildMapMarkup());
+        out.append(this.buildReadoutMarkup());
+        out.append("} ");
+
+        if (this.hudPositionX < 100) {
+            out.append("Group #WayfinderMmRightSpacer { FlexWeight: ")
+                    .append(100 - this.hudPositionX)
+                    .append("; } ");
+        }
+
+        out.append("} ");
+
+        if (this.hudPositionY < 100) {
+            out.append("Group #WayfinderMmBottomSpacer { FlexWeight: ")
+                    .append(100 - this.hudPositionY)
+                    .append("; } ");
+        }
+
+        out.append("} ");
+        return out.toString();
+    }
+
+    /**
+     * Builds the map subtree at the origin determined by the selected
+     * information-panel side.
      */
     private String buildMapMarkup() {
         int displayUiSize = this.displaySize(this.logicalUiSize);
         int displayBuffer = this.displaySize(this.bufferPixels);
+        int mapLeft = this.mapOriginX();
+        int mapTop = this.mapOriginY();
         int selfInset = this.displayCoordinate((this.logicalUiSize - this.selfSize) / 2);
         int displaySelfSize = this.displaySize(this.selfSize);
 
         StringBuilder out = new StringBuilder(3200);
         out.append("Group #WayfinderMmClip { ")
-                .append("Anchor: (Left: 0, Top: 0, Width: ").append(displayUiSize)
+                .append("Anchor: (Left: ").append(mapLeft)
+                .append(", Top: ").append(mapTop)
+                .append(", Width: ").append(displayUiSize)
                 .append(", Height: ").append(displayUiSize).append("); ")
                 .append("MaskTexturePath: \"").append(this.maskFile).append("\"; ")
                 .append("Background: #0a1218(0.92); ");
@@ -474,13 +521,16 @@ public final class DynamicMinimapHud extends CustomUIHud {
 
         out.append("} } ");
 
-        out.append("AssetImage #WayfinderMmFrame { Anchor: (Left: 0, Top: 0, Width: ")
-                .append(displayUiSize).append(", Height: ").append(displayUiSize)
+        out.append("AssetImage #WayfinderMmFrame { Anchor: (Left: ")
+                .append(mapLeft).append(", Top: ").append(mapTop)
+                .append(", Width: ").append(displayUiSize)
+                .append(", Height: ").append(displayUiSize)
                 .append("); AssetPath: \"").append(this.framePath)
                 .append("\"; Visible: true; } ");
 
-        out.append("AssetImage #WayfinderMmSelf { Anchor: (Left: ").append(selfInset)
-                .append(", Top: ").append(selfInset)
+        out.append("AssetImage #WayfinderMmSelf { Anchor: (Left: ")
+                .append(mapLeft + selfInset)
+                .append(", Top: ").append(mapTop + selfInset)
                 .append(", Width: ").append(displaySelfSize)
                 .append(", Height: ").append(displaySelfSize)
                 .append("); AssetPath: \"").append(this.selfPath)
@@ -513,13 +563,16 @@ public final class DynamicMinimapHud extends CustomUIHud {
      * we can replace only this child group instead of recreating the Custom HUD.
      */
     private String buildReadoutMarkup() {
-        int displayUiSize = this.displaySize(this.logicalUiSize);
-        int readoutTop = this.displayCoordinate(this.logicalUiSize + READOUT_GAP);
+        int readoutLeft = this.readoutOriginX();
+        int readoutTop = this.readoutOriginY();
+        int readoutWidth = this.readoutWidth();
+        int readoutHeight = this.displaySize(READOUT_HEIGHT);
 
-        StringBuilder out = new StringBuilder(2200);
-        out.append("Group #WayfinderMmReadout { Anchor: (Left: 0, Top: ").append(readoutTop)
-                .append(", Width: ").append(displayUiSize)
-                .append(", Height: ").append(this.displaySize(READOUT_HEIGHT)).append("); ")
+        StringBuilder out = new StringBuilder(2300);
+        out.append("Group #WayfinderMmReadout { Anchor: (Left: ").append(readoutLeft)
+                .append(", Top: ").append(readoutTop)
+                .append(", Width: ").append(readoutWidth)
+                .append(", Height: ").append(readoutHeight).append("); ")
                 .append("Background: #071016(0.96); LayoutMode: Top; Padding: (Horizontal: ")
                 .append(this.displaySize(READOUT_PADDING_H)).append(", Vertical: ")
                 .append(this.displaySize(READOUT_PADDING_V)).append("); ")
@@ -560,28 +613,88 @@ public final class DynamicMinimapHud extends CustomUIHud {
         return out.toString();
     }
 
-    private int rootHeight() {
-        return this.displaySize(this.logicalUiSize + READOUT_GAP + READOUT_HEIGHT);
+    private void rebuildPositionLayout() {
+        if (!this.built) {
+            return;
+        }
+
+        UICommandBuilder builder = new UICommandBuilder();
+        builder.remove("#WayfinderMmRoot #WayfinderMmPositionLayout");
+        builder.appendInline("#WayfinderMmRoot", this.buildPositionLayoutMarkup());
+        this.writeStatus(builder);
+        this.update(false, builder);
     }
 
-    private Anchor rootAnchor() {
-        Anchor anchor = new Anchor();
-        int margin = this.displaySize(HUD_MARGIN);
-        if (this.anchorRight()) {
-            anchor.setRight(Value.of(margin));
-        } else {
-            anchor.setLeft(Value.of(margin));
+    private int widgetWidth() {
+        if (this.infoPanelPosition == DynamicMinimapSetting.INFO_LEFT
+                || this.infoPanelPosition == DynamicMinimapSetting.INFO_RIGHT) {
+            return this.displaySize(
+                    this.logicalUiSize + READOUT_GAP + SIDE_READOUT_WIDTH
+            );
         }
 
-        if (this.anchorBottom()) {
-            anchor.setBottom(Value.of(margin));
-        } else {
-            anchor.setTop(Value.of(margin));
+        return this.displaySize(this.logicalUiSize);
+    }
+
+    private int widgetHeight() {
+        if (this.infoPanelPosition == DynamicMinimapSetting.INFO_LEFT
+                || this.infoPanelPosition == DynamicMinimapSetting.INFO_RIGHT) {
+            return this.displaySize(this.logicalUiSize);
         }
 
-        anchor.setWidth(Value.of(this.displaySize(this.logicalUiSize)));
-        anchor.setHeight(Value.of(this.rootHeight()));
-        return anchor;
+        return this.displaySize(
+                this.logicalUiSize + READOUT_GAP + READOUT_HEIGHT
+        );
+    }
+
+    private int mapOriginX() {
+        if (this.infoPanelPosition == DynamicMinimapSetting.INFO_LEFT) {
+            return this.displaySize(SIDE_READOUT_WIDTH + READOUT_GAP);
+        }
+
+        return 0;
+    }
+
+    private int mapOriginY() {
+        if (this.infoPanelPosition == DynamicMinimapSetting.INFO_ABOVE) {
+            return this.displaySize(READOUT_HEIGHT + READOUT_GAP);
+        }
+
+        return 0;
+    }
+
+    private int readoutOriginX() {
+        if (this.infoPanelPosition == DynamicMinimapSetting.INFO_RIGHT) {
+            return this.displaySize(this.logicalUiSize + READOUT_GAP);
+        }
+
+        return 0;
+    }
+
+    private int readoutOriginY() {
+        if (this.infoPanelPosition == DynamicMinimapSetting.INFO_BELOW) {
+            return this.displaySize(this.logicalUiSize + READOUT_GAP);
+        }
+
+        if (this.infoPanelPosition == DynamicMinimapSetting.INFO_LEFT
+                || this.infoPanelPosition == DynamicMinimapSetting.INFO_RIGHT) {
+            int logicalTop = Math.max(
+                    0,
+                    (this.logicalUiSize - READOUT_HEIGHT) / 2
+            );
+            return this.displayCoordinate(logicalTop);
+        }
+
+        return 0;
+    }
+
+    private int readoutWidth() {
+        if (this.infoPanelPosition == DynamicMinimapSetting.INFO_LEFT
+                || this.infoPanelPosition == DynamicMinimapSetting.INFO_RIGHT) {
+            return this.displaySize(SIDE_READOUT_WIDTH);
+        }
+
+        return this.displaySize(this.logicalUiSize);
     }
 
     private void writeStatus(UICommandBuilder builder) {
@@ -591,20 +704,8 @@ public final class DynamicMinimapHud extends CustomUIHud {
         builder.set("#WayfinderMmRoot #WayfinderMmReadout #WayfinderMmBiome.TextSpans", Message.raw(this.biomeText));
     }
 
-    private boolean anchorRight() {
-        return this.position == 1 || this.position == 3;
-    }
 
-    private boolean anchorBottom() {
-        return this.position == 2 || this.position == 3;
-    }
 
-    private String rootAnchorEdges() {
-        int margin = this.displaySize(HUD_MARGIN);
-        String horizontal = this.anchorRight() ? "Right: " + margin : "Left: " + margin;
-        String vertical = this.anchorBottom() ? "Bottom: " + margin : "Top: " + margin;
-        return horizontal + ", " + vertical;
-    }
 
     private Anchor fullAnchor(int logicalLeft, int logicalTop) {
         return anchor(

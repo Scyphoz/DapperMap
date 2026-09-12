@@ -115,6 +115,8 @@ public final class DapperMapSettingsPage
                 this.toggleRow(builder, events, index, row, settings);
             } else if (row.kind == Kind.DROPDOWN) {
                 this.dropdownRow(builder, events, index, row, settings);
+            } else if (row.kind == Kind.SLIDER) {
+                this.sliderRow(builder, events, index, row, settings);
             } else {
                 this.stepperRow(builder, events, index, row, settings);
             }
@@ -212,12 +214,41 @@ public final class DapperMapSettingsPage
             case "speed" ->
                     "Pages/DapperMapDropdownSpeedRow.ui";
 
-            case "position" ->
-                    "Pages/DapperMapDropdownPositionRow.ui";
+            case "panel_position" ->
+                    "Pages/DapperMapDropdownPanelRow.ui";
 
             default ->
                     "Pages/DapperMapStepperRow.ui";
         };
+    }
+
+    private void sliderRow(
+            UICommandBuilder builder,
+            UIEventBuilder events,
+            int index,
+            Row row,
+            DynamicMinimapSetting settings
+    ) {
+        String selector = "#DapperMapSettingsList[" + index + "]";
+
+        builder.append(
+                "#DapperMapSettingsList",
+                "Pages/DapperMapSliderRow.ui"
+        );
+
+        builder.set(selector + " #RowLabel.Text", row.label);
+        builder.set(selector + " #ValueLabel.Text", sliderValueText(row.id, settings));
+
+        String sliderSelector = selector + " #ValueSlider";
+        builder.set(sliderSelector + ".Value", sliderValue(row.id, settings));
+
+        events.addEventBinding(
+                CustomUIEventBindingType.ValueChanged,
+                sliderSelector,
+                EventData.of("Action", "slider_" + row.id)
+                        .append("@SliderValue", sliderSelector + ".Value"),
+                false
+        );
     }
 
     private void stepperRow(
@@ -309,6 +340,13 @@ public final class DapperMapSettingsPage
                     event.value
             );
 
+        } else if (action.startsWith("slider_")) {
+            applySlider(
+                    settings,
+                    action.substring("slider_".length()),
+                    event.sliderValue
+            );
+
         } else if (action.endsWith("_minus")) {
             applyStep(
                     settings,
@@ -343,7 +381,19 @@ public final class DapperMapSettingsPage
                 summary(settings)
         );
 
-        this.renderList(builder, events, settings);
+        if (action.startsWith("slider_")) {
+            String id = action.substring("slider_".length());
+            int rowIndex = rowIndex(id);
+            if (rowIndex >= 0) {
+                builder.set(
+                        "#DapperMapSettingsList[" + rowIndex + "] #ValueLabel.Text",
+                        sliderValueText(id, settings)
+                );
+            }
+        } else {
+            this.renderList(builder, events, settings);
+        }
+
         this.sendUpdate(builder, events, false);
     }
 
@@ -423,8 +473,8 @@ public final class DapperMapSettingsPage
                 case "speed" ->
                         settings.updateSpeed = Integer.parseInt(value);
 
-                case "position" ->
-                        settings.position = Integer.parseInt(value);
+                case "panel_position" ->
+                        settings.infoPanelPosition = Integer.parseInt(value);
 
                 default -> {
                     return;
@@ -434,6 +484,26 @@ public final class DapperMapSettingsPage
             settings.normalize();
         } catch (NumberFormatException ignored) {
         }
+    }
+
+    private static void applySlider(
+            DynamicMinimapSetting settings,
+            String id,
+            int value
+    ) {
+        switch (id) {
+            case "hud_x" ->
+                    settings.hudPositionX = value;
+
+            case "hud_y" ->
+                    settings.hudPositionY = value;
+
+            default -> {
+                return;
+            }
+        }
+
+        settings.normalize();
     }
 
     private static void applyStep(
@@ -608,8 +678,46 @@ public final class DapperMapSettingsPage
             case "size" -> Integer.toString(settings.sizePixels);
             case "interface_scale" -> Integer.toString(settings.interfaceScalePercent);
             case "speed" -> Integer.toString(settings.updateSpeed);
-            case "position" -> Integer.toString(settings.position);
+            case "panel_position" -> Integer.toString(settings.infoPanelPosition);
             default -> "";
+        };
+    }
+
+    private static int sliderValue(
+            String id,
+            DynamicMinimapSetting settings
+    ) {
+        return switch (id) {
+            case "hud_x" -> settings.hudPositionX;
+            case "hud_y" -> settings.hudPositionY;
+            default -> 0;
+        };
+    }
+
+    private static String sliderValueText(
+            String id,
+            DynamicMinimapSetting settings
+    ) {
+        return sliderValue(id, settings) + "%";
+    }
+
+    private static int rowIndex(String id) {
+        for (int i = 0; i < ROWS.length; ++i) {
+            if (ROWS[i].id.equals(id)) {
+                return i;
+            }
+        }
+
+        return -1;
+    }
+
+    private static String displayPanelPosition(int panelPosition) {
+        return switch (panelPosition) {
+            case DynamicMinimapSetting.INFO_ABOVE -> "Above";
+            case DynamicMinimapSetting.INFO_LEFT -> "Left";
+            case DynamicMinimapSetting.INFO_RIGHT -> "Right";
+            case DynamicMinimapSetting.INFO_BELOW -> "Below";
+            default -> "Below";
         };
     }
 
@@ -663,7 +771,12 @@ public final class DapperMapSettingsPage
     private static String summary(
             DynamicMinimapSetting settings
     ) {
-        return displayPosition(settings.position)
+        return "Position "
+                + settings.hudPositionX
+                + "% / "
+                + settings.hudPositionY
+                + "%  |  Info "
+                + displayPanelPosition(settings.infoPanelPosition).toLowerCase()
                 + "  |  "
                 + settings.zoomBlocks
                 + " block radius  |  "
@@ -708,8 +821,18 @@ public final class DapperMapSettingsPage
                         Kind.TOGGLE
                 ),
                 new Row(
-                        "position",
-                        "Screen corner",
+                        "hud_x",
+                        "Horizontal position",
+                        Kind.SLIDER
+                ),
+                new Row(
+                        "hud_y",
+                        "Vertical position",
+                        Kind.SLIDER
+                ),
+                new Row(
+                        "panel_position",
+                        "Information panel",
                         Kind.DROPDOWN
                 ),
                 new Row(
@@ -771,6 +894,7 @@ public final class DapperMapSettingsPage
 
         private String action = "";
         private String value = "";
+        private int sliderValue = 0;
 
         public Ev() {
         }
@@ -801,6 +925,18 @@ public final class DapperMapSettingsPage
                                     ev.value
                     )
                     .add()
+                    .append(
+                            new KeyedCodec<>(
+                                    "@SliderValue",
+                                    Codec.INTEGER,
+                                    true
+                            ),
+                            (ev, value) ->
+                                    ev.sliderValue = value,
+                            ev ->
+                                    ev.sliderValue
+                    )
+                    .add()
                     .build();
         }
     }
@@ -808,7 +944,8 @@ public final class DapperMapSettingsPage
     private enum Kind {
         TOGGLE,
         STEPPER,
-        DROPDOWN
+        DROPDOWN,
+        SLIDER
     }
 
     private static final class Row {

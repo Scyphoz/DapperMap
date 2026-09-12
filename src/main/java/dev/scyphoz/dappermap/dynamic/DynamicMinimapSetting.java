@@ -11,6 +11,11 @@ public final class DynamicMinimapSetting {
     public static final int POS_BOTTOM_RIGHT = 3;
     public static final int ROTATION_NORTH_UP = 0;
     public static final int ROTATION_PLAYER_UP = 1;
+
+    public static final int INFO_BELOW = 0;
+    public static final int INFO_ABOVE = 1;
+    public static final int INFO_LEFT = 2;
+    public static final int INFO_RIGHT = 3;
     public boolean enabled = true;
     public int rotationMode = 0;
     public int zoomBlocks = 96;
@@ -31,7 +36,23 @@ public final class DynamicMinimapSetting {
     public boolean showDeathMarker = true;
     public boolean limitMobHeight = true;
     public int mobVerticalRange = 32;
-    public int position = 1;
+
+    /**
+     * Legacy four-corner setting retained for migration/backward compatibility.
+     * New code should use hudPositionX / hudPositionY.
+     */
+    public int position = POS_TOP_RIGHT;
+
+    /**
+     * Position of the complete minimap widget within the available screen area.
+     * 0 = left/top edge, 50 = centered, 100 = right/bottom edge.
+     */
+    public int hudPositionX = 100;
+    public int hudPositionY = 0;
+
+    /** Position of the information panel relative to the map image. */
+    public int infoPanelPosition = INFO_BELOW;
+
     public int updateSpeed = 2;
     public boolean clock24Hour = true;
     public boolean showClock = true;
@@ -73,6 +94,9 @@ public final class DynamicMinimapSetting {
         copy.limitMobHeight = this.limitMobHeight;
         copy.mobVerticalRange = this.mobVerticalRange;
         copy.position = this.position;
+        copy.hudPositionX = this.hudPositionX;
+        copy.hudPositionY = this.hudPositionY;
+        copy.infoPanelPosition = this.infoPanelPosition;
         copy.updateSpeed = this.updateSpeed;
         copy.clock24Hour = this.clock24Hour;
         copy.showClock = this.showClock;
@@ -97,10 +121,45 @@ public final class DynamicMinimapSetting {
         this.interfaceScalePercent = clamp(this.interfaceScalePercent, 75, 160);
         this.mobVerticalRange = clamp(this.mobVerticalRange, 4, 256);
         if (this.position < 0 || this.position > 3) {
-            this.position = 1;
+            this.position = POS_TOP_RIGHT;
         }
 
+        this.hudPositionX = clamp(this.hudPositionX, 0, 100);
+        this.hudPositionY = clamp(this.hudPositionY, 0, 100);
+        this.infoPanelPosition = clamp(this.infoPanelPosition, INFO_BELOW, INFO_RIGHT);
+
         this.updateSpeed = clamp(this.updateSpeed, 0, 3);
+    }
+
+    /**
+     * Converts the old four-corner setting into the new normalized X/Y model.
+     * Used only when loading an older player settings file.
+     */
+    public void applyLegacyPosition(int legacyPosition) {
+        this.position = clamp(legacyPosition, POS_TOP_LEFT, POS_BOTTOM_RIGHT);
+
+        switch (this.position) {
+            case POS_TOP_LEFT -> {
+                this.hudPositionX = 0;
+                this.hudPositionY = 0;
+            }
+            case POS_BOTTOM_LEFT -> {
+                this.hudPositionX = 0;
+                this.hudPositionY = 100;
+            }
+            case POS_BOTTOM_RIGHT -> {
+                this.hudPositionX = 100;
+                this.hudPositionY = 100;
+            }
+            case POS_TOP_RIGHT -> {
+                this.hudPositionX = 100;
+                this.hudPositionY = 0;
+            }
+            default -> {
+                this.hudPositionX = 100;
+                this.hudPositionY = 0;
+            }
+        }
     }
 
     /** Presentation scale as a multiplier, e.g. 125 -> 1.25. */

@@ -52,6 +52,9 @@ public final class DynamicMinimapSession {
     private int builtShape = -1;
     private int builtZoom = -1;
     private int builtPosition = -1;
+    private int builtHudPositionX = -1;
+    private int builtHudPositionY = -1;
+    private int builtInfoPanelPosition = -1;
     private int builtInterfaceScale = -1;
     private int builtTextureResolution = -1;
     private int builtRotationMode = -1;
@@ -209,9 +212,17 @@ public final class DynamicMinimapSession {
                 this.hud.setInterfaceScale(this.settings.interfaceScalePercent);
             }
 
-            if (this.settings.position != this.builtPosition) {
-                this.builtPosition = this.settings.position;
-                this.hud.setPosition(this.settings.position);
+            if (this.settings.hudPositionX != this.builtHudPositionX
+                    || this.settings.hudPositionY != this.builtHudPositionY
+                    || this.settings.infoPanelPosition != this.builtInfoPanelPosition) {
+                this.builtHudPositionX = this.settings.hudPositionX;
+                this.builtHudPositionY = this.settings.hudPositionY;
+                this.builtInfoPanelPosition = this.settings.infoPanelPosition;
+                this.hud.setLayoutPosition(
+                        this.settings.hudPositionX,
+                        this.settings.hudPositionY,
+                        this.settings.infoPanelPosition
+                );
             }
 
             long now = System.currentTimeMillis();
@@ -344,6 +355,9 @@ public final class DynamicMinimapSession {
             this.builtShape = this.settings.shape;
             this.builtZoom = this.settings.zoomBlocks;
             this.builtPosition = this.settings.position;
+            this.builtHudPositionX = this.settings.hudPositionX;
+            this.builtHudPositionY = this.settings.hudPositionY;
+            this.builtInfoPanelPosition = this.settings.infoPanelPosition;
             this.builtInterfaceScale = this.settings.interfaceScalePercent;
             this.builtTextureResolution = this.settings.textureResolution;
             this.builtRotationMode = -1;

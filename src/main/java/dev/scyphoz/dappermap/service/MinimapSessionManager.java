@@ -72,6 +72,9 @@ public class MinimapSessionManager {
             session.settings().limitMobHeight = settings.limitMobHeight;
             session.settings().mobVerticalRange = settings.mobVerticalRange;
             session.settings().position = settings.position;
+            session.settings().hudPositionX = settings.hudPositionX;
+            session.settings().hudPositionY = settings.hudPositionY;
+            session.settings().infoPanelPosition = settings.infoPanelPosition;
             session.settings().updateSpeed = settings.updateSpeed;
             session.settings().clock24Hour = settings.clock24Hour;
             session.settings().showClock = settings.showClock;
