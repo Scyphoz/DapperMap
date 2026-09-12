@@ -48,6 +48,16 @@ $C.@DecoratedContainer {
         LayoutMode: Top;
       }
     }
+
+    Group #DapperMapResetFooter {
+      Anchor: (Height: 62);
+      LayoutMode: CenterMiddle;
+      Padding: (Top: 10, Bottom: 8, Horizontal: 120);
+
+      Group #DapperMapResetButtonSlot {
+        Anchor: (Height: 40);
+      }
+    }
   }
 }
 

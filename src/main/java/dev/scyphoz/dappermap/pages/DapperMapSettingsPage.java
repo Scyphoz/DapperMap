@@ -34,6 +34,8 @@ public final class DapperMapSettingsPage
     private static final int VRANGE_STEP = 8;
 
     // Deliberately discrete so players can quickly return to known-good HUD scales.
+
+
     private static final int[] INTERFACE_SCALE_STEPS = {
             75, 85, 100, 110, 125, 140, 160
     };
@@ -74,6 +76,29 @@ public final class DapperMapSettingsPage
         builder.set("#DapperMapSettingsSummary.Text", summary(settings));
 
         this.renderList(builder, events, settings);
+        this.bindResetButton(builder, events);
+    }
+
+    private void bindResetButton(
+            UICommandBuilder builder,
+            UIEventBuilder events
+    ) {
+        builder.append(
+                "#DapperMapResetButtonSlot",
+                "Pages/BasicTextButton.ui"
+        );
+
+        builder.set(
+                "#DapperMapResetButtonSlot[0].TextSpans",
+                Message.raw("RESET TO DEFAULTS").color(GOLD)
+        );
+
+        events.addEventBinding(
+                CustomUIEventBindingType.Activating,
+                "#DapperMapResetButtonSlot[0]",
+                EventData.of("Action", "reset_defaults"),
+                false
+        );
     }
 
     private void renderList(
@@ -88,6 +113,8 @@ public final class DapperMapSettingsPage
 
             if (row.kind == Kind.TOGGLE) {
                 this.toggleRow(builder, events, index, row, settings);
+            } else if (row.kind == Kind.DROPDOWN) {
+                this.dropdownRow(builder, events, index, row, settings);
             } else {
                 this.stepperRow(builder, events, index, row, settings);
             }
@@ -134,6 +161,63 @@ public final class DapperMapSettingsPage
                 EventData.of("Action", "toggle_" + row.id),
                 false
         );
+    }
+
+    private void dropdownRow(
+            UICommandBuilder builder,
+            UIEventBuilder events,
+            int index,
+            Row row,
+            DynamicMinimapSetting settings
+    ) {
+        String selector = "#DapperMapSettingsList[" + index + "]";
+
+        builder.append(
+                "#DapperMapSettingsList",
+                dropdownTemplate(row.id)
+        );
+
+        builder.set(
+                selector + " #RowLabel.Text",
+                row.label
+        );
+
+        String dropdownSelector = selector + " #ValueDropdown";
+
+        builder.set(
+                dropdownSelector + ".Value",
+                dropdownValue(row.id, settings)
+        );
+
+        events.addEventBinding(
+                CustomUIEventBindingType.ValueChanged,
+                dropdownSelector,
+                EventData.of("Action", "dropdown_" + row.id)
+                        .append("@Value", dropdownSelector + ".Value"),
+                false
+        );
+    }
+
+    private static String dropdownTemplate(String id) {
+        return switch (id) {
+            case "zoom" ->
+                    "Pages/DapperMapDropdownZoomRow.ui";
+
+            case "size" ->
+                    "Pages/DapperMapDropdownSizeRow.ui";
+
+            case "interface_scale" ->
+                    "Pages/DapperMapDropdownScaleRow.ui";
+
+            case "speed" ->
+                    "Pages/DapperMapDropdownSpeedRow.ui";
+
+            case "position" ->
+                    "Pages/DapperMapDropdownPositionRow.ui";
+
+            default ->
+                    "Pages/DapperMapStepperRow.ui";
+        };
     }
 
     private void stepperRow(
@@ -209,10 +293,20 @@ public final class DapperMapSettingsPage
         DynamicMinimapSetting settings =
                 this.sessions.getSettings(this.playerRef.getUuid(), this.config);
 
-        if (action.startsWith("toggle_")) {
+        if ("reset_defaults".equals(action)) {
+            settings = DynamicMinimapSetting.fromConfig(this.config);
+
+        } else if (action.startsWith("toggle_")) {
             applyToggle(
                     settings,
                     action.substring("toggle_".length())
+            );
+
+        } else if (action.startsWith("dropdown_")) {
+            applyDropdown(
+                    settings,
+                    action.substring("dropdown_".length()),
+                    event.value
             );
 
         } else if (action.endsWith("_minus")) {
@@ -303,6 +397,42 @@ public final class DapperMapSettingsPage
                 settings.rotationMode =
                         settings.rotationMode == 0 ? 1 : 0;
                 break;
+        }
+    }
+
+    private static void applyDropdown(
+            DynamicMinimapSetting settings,
+            String id,
+            String value
+    ) {
+        if (value == null || value.isBlank()) {
+            return;
+        }
+
+        try {
+            switch (id) {
+                case "zoom" ->
+                        settings.zoomBlocks = Integer.parseInt(value);
+
+                case "size" ->
+                        settings.sizePixels = Integer.parseInt(value);
+
+                case "interface_scale" ->
+                        settings.interfaceScalePercent = Integer.parseInt(value);
+
+                case "speed" ->
+                        settings.updateSpeed = Integer.parseInt(value);
+
+                case "position" ->
+                        settings.position = Integer.parseInt(value);
+
+                default -> {
+                    return;
+                }
+            }
+
+            settings.normalize();
+        } catch (NumberFormatException ignored) {
         }
     }
 
@@ -469,6 +599,20 @@ public final class DapperMapSettingsPage
         };
     }
 
+    private static String dropdownValue(
+            String id,
+            DynamicMinimapSetting settings
+    ) {
+        return switch (id) {
+            case "zoom" -> Integer.toString(settings.zoomBlocks);
+            case "size" -> Integer.toString(settings.sizePixels);
+            case "interface_scale" -> Integer.toString(settings.interfaceScalePercent);
+            case "speed" -> Integer.toString(settings.updateSpeed);
+            case "position" -> Integer.toString(settings.position);
+            default -> "";
+        };
+    }
+
     private static int stepInterfaceScale(
             int current,
             int direction
@@ -541,22 +685,22 @@ public final class DapperMapSettingsPage
                 new Row(
                         "zoom",
                         "Zoom radius",
-                        Kind.STEPPER
+                        Kind.DROPDOWN
                 ),
                 new Row(
                         "size",
                         "Map size",
-                        Kind.STEPPER
+                        Kind.DROPDOWN
                 ),
                 new Row(
                         "interface_scale",
                         "Interface scale",
-                        Kind.STEPPER
+                        Kind.DROPDOWN
                 ),
                 new Row(
                         "speed",
                         "Update speed",
-                        Kind.STEPPER
+                        Kind.DROPDOWN
                 ),
                 new Row(
                         "shape",
@@ -566,7 +710,7 @@ public final class DapperMapSettingsPage
                 new Row(
                         "position",
                         "Screen corner",
-                        Kind.STEPPER
+                        Kind.DROPDOWN
                 ),
                 new Row(
                         "players",
@@ -626,6 +770,7 @@ public final class DapperMapSettingsPage
         public static final BuilderCodec<Ev> CODEC;
 
         private String action = "";
+        private String value = "";
 
         public Ev() {
         }
@@ -644,13 +789,26 @@ public final class DapperMapSettingsPage
                                     ev.action
                     )
                     .add()
+                    .append(
+                            new KeyedCodec<>(
+                                    "@Value",
+                                    Codec.STRING,
+                                    true
+                            ),
+                            (ev, value) ->
+                                    ev.value = value,
+                            ev ->
+                                    ev.value
+                    )
+                    .add()
                     .build();
         }
     }
 
     private enum Kind {
         TOGGLE,
-        STEPPER
+        STEPPER,
+        DROPDOWN
     }
 
     private static final class Row {
