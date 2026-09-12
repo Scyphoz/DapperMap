@@ -15,6 +15,7 @@ import java.awt.geom.Ellipse2D;
 import java.awt.geom.Path2D;
 import java.awt.image.BufferedImage;
 import java.awt.image.ImageObserver;
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.util.Arrays;
 import java.util.Map;
@@ -28,6 +29,7 @@ public final class DynamicMinimapRenderer {
      * stretched by Hytale to the selected HUD map size.
      */
     private static final int STATIC_ASSET_LOGICAL_SIZE = 220;
+    public static final int ROTATION_BUCKETS = 360;
     private static final Color BACKGROUND = new Color(10, 18, 24, 235);
     private static final Color BORDER = new Color(206, 214, 226, 225);
     private static final Color CARDINAL = new Color(255, 220, 80, 255);
@@ -205,9 +207,19 @@ public final class DynamicMinimapRenderer {
     }
 
     public static byte[] renderFrame(DynamicMinimapSetting settings) {
+        return renderFrame(settings, 0.0D);
+    }
+
+    /**
+     * Renders the frame with compass/cardinal markings rotated by mapAngle.
+     * The geometric bezel remains fixed (especially important for square maps),
+     * while the directional markings rotate with the terrain.
+     */
+    public static byte[] renderFrame(DynamicMinimapSetting settings, double mapAngle) {
+        int bucket = rotationBucket(mapAngle);
         String shape = settings.isCircle() ? "c" : "r";
         String key = shape + "@" + settings.textureResolution
-                + (settings.showBorder ? "b" : "");
+                + (settings.showBorder ? "b" : "") + "-rot" + bucket;
         byte[] cached = FRAME_CACHE.get(key);
         if (cached != null) {
             return cached;
@@ -233,7 +245,20 @@ public final class DynamicMinimapRenderer {
             }
         }
 
-        drawCardinals(graphics, logicalSize, settings.isCircle());
+        if (settings.isCircle()) {
+            AffineTransform beforeCompass = graphics.getTransform();
+            double center = (double)logicalSize / 2.0D;
+            graphics.rotate(bucketAngle(bucket), center, center);
+            drawCardinals(graphics, logicalSize, true);
+            drawNorthNeedle(graphics, logicalSize / 2, 18);
+            graphics.setTransform(beforeCompass);
+        } else {
+            drawSquareCardinalsRotated(
+                    graphics,
+                    logicalSize,
+                    bucketAngle(bucket)
+            );
+        }
         graphics.dispose();
 
         byte[] png = toPng(image);
@@ -306,6 +331,96 @@ public final class DynamicMinimapRenderer {
         return toPng(new BufferedImage(1, 1, 2));
     }
 
+    /**
+     * Map rotation that makes the player's current heading screen-up.
+     * It deliberately reuses the proven self-arrow yaw convention.
+     */
+    public static double mapRotationForYaw(double yaw) {
+        return Double.isNaN(yaw) ? 0.0D : -screenAngleForYaw(yaw);
+    }
+
+    public static int rotationBucketForYaw(double yaw) {
+        return rotationBucket(mapRotationForYaw(yaw));
+    }
+
+    public static int rotationBucket(double angle) {
+        if (Double.isNaN(angle)) {
+            return 0;
+        }
+
+        double turns = angle / (Math.PI * 2.0D);
+        int bucket = (int)Math.round(turns * ROTATION_BUCKETS);
+        return Math.floorMod(bucket, ROTATION_BUCKETS);
+    }
+
+    public static double bucketAngle(int bucket) {
+        int normalized = Math.floorMod(bucket, ROTATION_BUCKETS);
+        return (double)normalized * (Math.PI * 2.0D) / (double)ROTATION_BUCKETS;
+    }
+
+    /**
+     * Rotates a previously rendered north-up terrain PNG around its center.
+     * The terrain buffer is deliberately larger than the visible viewport, so
+     * the viewport remains covered while the square buffer rotates.
+     */
+    public static byte[] rotateTerrain(byte[] northUpPng, double mapAngle) {
+        if (northUpPng == null || northUpPng.length == 0) {
+            return null;
+        }
+
+        int bucket = rotationBucket(mapAngle);
+        if (bucket == 0) {
+            return northUpPng;
+        }
+
+        try {
+            BufferedImage source = ImageIO.read(new ByteArrayInputStream(northUpPng));
+            if (source == null) {
+                return null;
+            }
+
+            int width = source.getWidth();
+            int height = source.getHeight();
+            BufferedImage rotated = new BufferedImage(width, height, 2);
+            Graphics2D graphics = rotated.createGraphics();
+            graphics.setColor(BACKGROUND);
+            graphics.fillRect(0, 0, width, height);
+            graphics.setRenderingHint(
+                    RenderingHints.KEY_INTERPOLATION,
+                    RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR
+            );
+            graphics.rotate(
+                    bucketAngle(bucket),
+                    (double)width / 2.0D,
+                    (double)height / 2.0D
+            );
+            graphics.drawImage(source, 0, 0, (ImageObserver)null);
+            graphics.dispose();
+            return toPng(rotated);
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    /**
+     * Rotates a logical world/map delta using the exact same transform as the
+     * terrain bitmap.
+     */
+    public static double[] rotateMapDelta(double x, double z, double mapAngle) {
+        int bucket = rotationBucket(mapAngle);
+        if (bucket == 0) {
+            return new double[]{x, z};
+        }
+
+        double angle = bucketAngle(bucket);
+        double cos = Math.cos(angle);
+        double sin = Math.sin(angle);
+        return new double[]{
+                x * cos - z * sin,
+                x * sin + z * cos
+        };
+    }
+
     public static double screenAngleForYaw(double yaw) {
         if (Double.isNaN(yaw)) {
             return (double)0.0F;
@@ -344,7 +459,6 @@ public final class DynamicMinimapRenderer {
             drawRadialTick(graphics, center, center, (double)size / (double)2.0F - (double)8.0F, (double)size / (double)2.0F - (double)8.0F - (double)tick, angle, width, color);
         }
 
-        drawNorthNeedle(graphics, center, 18);
     }
 
     private static void drawNauticalSquareFrame(Graphics2D graphics, int size) {
@@ -414,6 +528,52 @@ public final class DynamicMinimapRenderer {
         graphics.setColor(GLASS_EDGE);
         graphics.drawLine(x + xDir * 5, y + yDir * 5, x + xDir * 15, y + yDir * 5);
         graphics.drawLine(x + xDir * 5, y + yDir * 5, x + xDir * 5, y + yDir * 15);
+    }
+
+    /**
+     * Rotates square-map cardinal directions while constraining each label to
+     * the square frame perimeter. Rotating the Graphics2D context directly
+     * makes the labels orbit on a circle, which is correct for round maps but
+     * visually wrong for square maps.
+     */
+    private static void drawSquareCardinalsRotated(
+            Graphics2D graphics,
+            int size,
+            double angle
+    ) {
+        graphics.setFont(CARDINAL_FONT);
+        double center = (double)size / 2.0D;
+        double radius = center - 15.0D;
+        double cos = Math.cos(angle);
+        double sin = Math.sin(angle);
+
+        drawSquareBorderCardinal(graphics, "N", 0.0D, -1.0D, cos, sin, center, radius);
+        drawSquareBorderCardinal(graphics, "E", 1.0D, 0.0D, cos, sin, center, radius);
+        drawSquareBorderCardinal(graphics, "S", 0.0D, 1.0D, cos, sin, center, radius);
+        drawSquareBorderCardinal(graphics, "W", -1.0D, 0.0D, cos, sin, center, radius);
+    }
+
+    private static void drawSquareBorderCardinal(
+            Graphics2D graphics,
+            String label,
+            double baseX,
+            double baseY,
+            double cos,
+            double sin,
+            double center,
+            double radius
+    ) {
+        double x = baseX * cos - baseY * sin;
+        double y = baseX * sin + baseY * cos;
+        double max = Math.max(Math.abs(x), Math.abs(y));
+        if (max < 1.0E-9D) {
+            return;
+        }
+
+        double scale = radius / max;
+        int px = (int)Math.round(center + x * scale);
+        int py = (int)Math.round(center + y * scale);
+        drawCardinal(graphics, label, px, py);
     }
 
     private static void drawCardinals(Graphics2D graphics, int size, boolean circle) {

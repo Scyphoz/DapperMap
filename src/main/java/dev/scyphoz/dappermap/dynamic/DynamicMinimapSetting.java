@@ -9,6 +9,8 @@ public final class DynamicMinimapSetting {
     public static final int POS_TOP_RIGHT = 1;
     public static final int POS_BOTTOM_LEFT = 2;
     public static final int POS_BOTTOM_RIGHT = 3;
+    public static final int ROTATION_NORTH_UP = 0;
+    public static final int ROTATION_PLAYER_UP = 1;
     public boolean enabled = true;
     public int rotationMode = 0;
     public int zoomBlocks = 96;
@@ -80,8 +82,9 @@ public final class DynamicMinimapSetting {
     }
 
     public void normalize() {
-        if (this.rotationMode != 0 && this.rotationMode != 1) {
-            this.rotationMode = 0;
+        if (this.rotationMode != ROTATION_NORTH_UP
+                && this.rotationMode != ROTATION_PLAYER_UP) {
+            this.rotationMode = ROTATION_NORTH_UP;
         }
 
         if (this.shape != 1 && this.shape != 0) {
@@ -143,17 +146,17 @@ public final class DynamicMinimapSetting {
         long var10000;
         switch (this.updateSpeed) {
             case 0:
-                var10000 = 100L;
+                var10000 = 50L;   // 20 Hz
                 break;
             case 1:
-                var10000 = 150L;
+                var10000 = 75L;   // ~13 Hz
                 break;
             case 2:
             default:
-                var10000 = 250L;
+                var10000 = 125L;  // 8 Hz
                 break;
             case 3:
-                var10000 = 500L;
+                var10000 = 250L;  // 4 Hz
         }
 
         return var10000;

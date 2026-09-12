@@ -165,6 +165,19 @@ public final class DynamicMinimapHud extends CustomUIHud {
         }
     }
 
+    /**
+     * Swaps only the compass/frame asset. Used by player-up rotation mode so the
+     * compass markings track the rotated terrain without rebuilding the HUD.
+     */
+    public void setFrame(String assetPath) {
+        if (this.built && assetPath != null && !assetPath.equals(this.framePath)) {
+            this.framePath = assetPath;
+            UICommandBuilder builder = new UICommandBuilder();
+            builder.set("#WayfinderMmRoot #WayfinderMmFrame.AssetPath", assetPath);
+            this.update(false, builder);
+        }
+    }
+
     /** Slot coordinates and sizes are logical minimap values, converted here for display. */
     public void setMarkers(Slot[] slots) {
         if (this.built) {

@@ -35,7 +35,7 @@ public final class DynamicMinimapSession {
     private static final double RECENTER_FRAC = 0.8;
     private static final long WARMUP_MS = 1000L;
     private static final long WARMUP_TOTAL_MS = 15000L;
-    private static final int SELF_BUCKETS = 72;
+    private static final int SELF_BUCKETS = DynamicMinimapRenderer.ROTATION_BUCKETS;
     private static final ExecutorService RENDER_POOL = Executors.newFixedThreadPool(Math.max(2, Runtime.getRuntime().availableProcessors() / 4), (runnable) -> {
         Thread thread = new Thread(runnable, "DapperMap-Render");
         thread.setDaemon(true);
@@ -54,21 +54,28 @@ public final class DynamicMinimapSession {
     private int builtPosition = -1;
     private int builtInterfaceScale = -1;
     private int builtTextureResolution = -1;
+    private int builtRotationMode = -1;
+    private int lastMapRotationBucket = -1;
+    private long lastRotationDeliveryMs = 0L;
+    private long terrainGeneration = 0L;
+    private byte[] northUpTerrainPng = null;
     private boolean firstTerrainForHud = false;
     private double bufferCenterX = Double.NaN;
     private double bufferCenterZ = Double.NaN;
     private final AtomicInteger frameIndex = new AtomicInteger();
     private final AtomicLong renderSequence = new AtomicLong();
+    private final AtomicLong rotationSequence = new AtomicLong();
     private long deliveredSequence = 0L;
     private long lastTickMs = 0L;
     private long lastSignature = 0L;
     private long lastSignatureMs = 0L;
     private long lastMarkerMs = 0L;
+    private List<DynamicMinimapMarker> cachedMarkers = new ArrayList<>();
     private long lastTerrainMs = 0L;
     private boolean bufferComplete = false;
     private long warmupUntilMs = 0L;
     private int lastSelfBucket = -1;
-    private final byte[][] selfArrowCache = new byte[72][];
+    private final byte[][] selfArrowCache = new byte[SELF_BUCKETS][];
     private String lastCoords = null;
     private final Map<Integer, String> iconCache = new HashMap();
     private String deathIconPath = null;
@@ -91,7 +98,7 @@ public final class DynamicMinimapSession {
     public void start() {
         if (!this.running) {
             this.running = true;
-            this.task = HytaleServer.SCHEDULED_EXECUTOR.scheduleAtFixedRate(this::tickSafe, 500L, 50L, TimeUnit.MILLISECONDS);
+            this.task = HytaleServer.SCHEDULED_EXECUTOR.scheduleAtFixedRate(this::tickSafe, 500L, 25L, TimeUnit.MILLISECONDS);
         }
 
     }
@@ -117,7 +124,10 @@ public final class DynamicMinimapSession {
     private void tickSafe() {
         try {
             long now = System.currentTimeMillis();
-            if (now - this.lastTickMs < this.settings.panIntervalMs()) {
+            long tickInterval = this.settings.rotationMode == 1
+                    ? Math.min(this.settings.panIntervalMs(), this.rotationIntervalMs())
+                    : this.settings.panIntervalMs();
+            if (now - this.lastTickMs < tickInterval) {
                 return;
             }
 
@@ -190,6 +200,8 @@ public final class DynamicMinimapSession {
                 this.lastSignatureMs = 0L;
                 this.lastTerrainMs = 0L;
                 this.lastMarkerMs = 0L;
+                this.northUpTerrainPng = null;
+                ++this.terrainGeneration;
             }
 
             if (this.settings.interfaceScalePercent != this.builtInterfaceScale) {
@@ -203,6 +215,31 @@ public final class DynamicMinimapSession {
             }
 
             long now = System.currentTimeMillis();
+
+            if (this.settings.rotationMode != this.builtRotationMode) {
+                this.builtRotationMode = this.settings.rotationMode;
+                this.lastMapRotationBucket = -1;
+                this.lastSelfBucket = -1;
+                this.lastMarkerMs = 0L;
+                this.cachedMarkers = new ArrayList<>();
+                this.rotationSequence.incrementAndGet();
+            }
+
+            int mapRotationBucket = this.settings.rotationMode == 1
+                    ? DynamicMinimapRenderer.rotationBucketForYaw(yaw)
+                    : 0;
+
+            if (mapRotationBucket != this.lastMapRotationBucket
+                    && now - this.lastRotationDeliveryMs >= this.rotationIntervalMs()) {
+                this.scheduleRotationOnly(
+                        world,
+                        yaw,
+                        mapRotationBucket
+                );
+
+                this.lastMarkerMs = 0L;
+            }
+
             this.detectDeath(store, ref, x, z);
             this.updateSelfArrow(yaw);
             double pixelsPerBlock = DynamicMinimapRenderer.pixelsPerBlock(this.settings);
@@ -220,7 +257,12 @@ public final class DynamicMinimapSession {
             }
 
             boolean noBuffer = Double.isNaN(this.bufferCenterX);
-            boolean needsRecenter = !noBuffer && (Math.abs(x - this.bufferCenterX) * pixelsPerBlock > panMargin * 0.8 || Math.abs(z - this.bufferCenterZ) * pixelsPerBlock > panMargin * 0.8);
+            double recenterFraction = this.settings.rotationMode == 1 ? 0.35D : 0.8D;
+            boolean needsRecenter = !noBuffer
+                    && (Math.abs(x - this.bufferCenterX) * pixelsPerBlock
+                    > panMargin * recenterFraction
+                    || Math.abs(z - this.bufferCenterZ) * pixelsPerBlock
+                    > panMargin * recenterFraction);
             boolean warmupRetry = !this.bufferComplete && now < this.warmupUntilMs && !noBuffer && now - this.lastTerrainMs >= 1000L;
             boolean needsTerrain = noBuffer || needsRecenter || signatureChanged || warmupRetry;
             if (needsTerrain && now - this.lastTerrainMs >= this.settings.terrainIntervalMs()) {
@@ -230,16 +272,27 @@ public final class DynamicMinimapSession {
                 }
 
                 this.lastTerrainMs = now;
-                this.scheduleTerrainRender(world, x, z);
+                this.scheduleTerrainRender(world, x, z, yaw);
             } else if (!noBuffer) {
-                int left = (int)Math.round((double)mapCenter - (double)bufferPixels / (double)2.0F - (x - this.bufferCenterX) * pixelsPerBlock);
-                int top = (int)Math.round((double)mapCenter - (double)bufferPixels / (double)2.0F - (z - this.bufferCenterZ) * pixelsPerBlock);
+                double dx = (x - this.bufferCenterX) * pixelsPerBlock;
+                double dz = (z - this.bufferCenterZ) * pixelsPerBlock;
+                double mapAngle = this.acceptedMapAngle(yaw);
+                double[] rotated =
+                        DynamicMinimapRenderer.rotateMapDelta(dx, dz, mapAngle);
+                int left = (int)Math.round(
+                        (double)mapCenter - (double)bufferPixels / 2.0D - rotated[0]
+                );
+                int top = (int)Math.round(
+                        (double)mapCenter - (double)bufferPixels / 2.0D - rotated[1]
+                );
                 this.hud.pan(left, top);
             }
 
-            if (!Double.isNaN(this.bufferCenterX) && now - this.lastMarkerMs > this.settings.markerIntervalMs()) {
+            if (!Double.isNaN(this.bufferCenterX)
+                    && now - this.lastMarkerMs > this.settings.markerIntervalMs()) {
                 this.lastMarkerMs = now;
-                this.updateMarkers(store, ref, position, pixelsPerBlock, bufferPixels);
+                this.scanMarkers(store, ref, position);
+                this.projectCachedMarkers(pixelsPerBlock, bufferPixels, yaw);
             }
 
             String coords = coordsText(x, y, z);
@@ -254,6 +307,21 @@ public final class DynamicMinimapSession {
         } catch (Throwable var34) {
         }
 
+    }
+
+    /**
+     * Heading-only updates are intentionally faster than terrain stitching.
+     * This keeps player-up rotation readable without increasing expensive world
+     * map stitching to the same frequency.
+     */
+    private long rotationIntervalMs() {
+        return switch (this.settings.updateSpeed) {
+            case 0 -> 25L;   // 40 Hz (scheduler ceiling)
+            case 1 -> 40L;   // 25 Hz
+            case 3 -> 100L;  // 10 Hz
+            case 2 -> 60L;   // ~17 Hz
+            default -> 60L;
+        };
     }
 
     private void ensureHud() {
@@ -278,6 +346,9 @@ public final class DynamicMinimapSession {
             this.builtPosition = this.settings.position;
             this.builtInterfaceScale = this.settings.interfaceScalePercent;
             this.builtTextureResolution = this.settings.textureResolution;
+            this.builtRotationMode = -1;
+            this.lastMapRotationBucket = -1;
+            this.northUpTerrainPng = null;
             this.hud.deliverStaticAssets();
             this.hud.show();
             this.bufferCenterX = Double.NaN;
@@ -290,17 +361,51 @@ public final class DynamicMinimapSession {
 
     }
 
+    private void updateRotatingFrame(int rotationBucket) {
+        if (this.hud == null || !this.hud.isShown()) {
+            return;
+        }
+
+        int bucket = this.settings.rotationMode == 1 ? rotationBucket : 0;
+        double angle = DynamicMinimapRenderer.bucketAngle(bucket);
+        byte[] frame = DynamicMinimapRenderer.renderFrame(this.settings, angle);
+        if (frame == null) {
+            return;
+        }
+
+        String path = "UI/DapperMap/frame-rot-" + this.slug + "-"
+                + bucket + ".png";
+        if (DynamicAssetPublisher.deliver(this.playerRef, path, frame)) {
+            this.hud.setFrame(path);
+        }
+    }
+
     private void updateSelfArrow(double yaw) {
         if (!Double.isNaN(yaw) && this.hud != null) {
-            double angle = DynamicMinimapRenderer.screenAngleForYaw(yaw);
-            int bucket = (int)Math.round(angle / (Math.PI * 2D) * (double)72.0F);
-            bucket = (bucket % 72 + 72) % 72;
+            int bucket;
+            double angle;
+
+            if (this.settings.rotationMode == 1) {
+                // Player-up mode: the world rotates, so the self marker stays up.
+                bucket = 0;
+                angle = 0.0D;
+            } else {
+                angle = DynamicMinimapRenderer.screenAngleForYaw(yaw);
+                bucket = (int)Math.round(
+                        angle / (Math.PI * 2D)
+                                * (double)DynamicMinimapRenderer.ROTATION_BUCKETS
+                );
+                bucket = Math.floorMod(bucket, DynamicMinimapRenderer.ROTATION_BUCKETS);
+                angle = (double)bucket * (Math.PI * 2D)
+                        / (double)DynamicMinimapRenderer.ROTATION_BUCKETS;
+            }
+
             if (bucket != this.lastSelfBucket) {
                 this.lastSelfBucket = bucket;
                 String path = "UI/DapperMap/self-" + this.slug + "-" + bucket + ".png";
                 byte[] png = this.selfArrowCache[bucket];
                 if (png == null) {
-                    png = DynamicMinimapRenderer.renderSelfArrow((double)bucket * (Math.PI * 2D) / (double)72.0F);
+                    png = DynamicMinimapRenderer.renderSelfArrow(angle);
                     this.selfArrowCache[bucket] = png;
                 }
 
@@ -310,47 +415,215 @@ public final class DynamicMinimapSession {
                 }
             }
         }
-
     }
 
-    private void scheduleTerrainRender(World world, double centerX, double centerZ) {
+    private void scheduleTerrainRender(
+            World world,
+            double centerX,
+            double centerZ,
+            double yaw
+    ) {
         long sequence = this.renderSequence.incrementAndGet();
         DynamicMinimapSetting renderSettings = this.settings.copy();
         DynamicMinimapHud renderHud = this.hud;
-        RENDER_POOL.execute(() -> {
-            if (this.running) {
-                DynamicMinimapRenderer.Terrain terrain = DynamicMinimapRenderer.renderTerrain(world.getWorldMapManager(), centerX, centerZ, renderSettings);
-                byte[] png = terrain.png;
-                if (png != null && png.length != 0) {
-                    world.execute(() -> {
-                        if (this.running && renderHud == this.hud && sequence > this.deliveredSequence) {
-                            this.deliveredSequence = sequence;
-                            int frame = this.frameIndex.incrementAndGet();
-                            String path = "UI/DapperMap/terrain-" + this.slug + "-" + (frame & 15) + ".png";
-                            boolean delivered = this.firstTerrainForHud ? DynamicAssetPublisher.deliverWithRebuild(this.playerRef, path, png) : DynamicAssetPublisher.deliver(this.playerRef, path, png);
-                            if (delivered) {
-                                this.firstTerrainForHud = false;
-                                this.bufferComplete = terrain.complete();
-                                this.bufferCenterX = centerX;
-                                this.bufferCenterZ = centerZ;
-                                this.lastSignature = DynamicMinimapRenderer.terrainSignature(world.getWorldMapManager(), centerX, centerZ, renderSettings);
-                                double pixelsPerBlock = DynamicMinimapRenderer.pixelsPerBlock(renderSettings);
-                                int bufferPixels = this.hud.bufferPixels();
-                                int mapCenter = renderSettings.sizePixels / 2;
-                                int[] pan = this.currentPan(world, centerX, centerZ, pixelsPerBlock, bufferPixels, mapCenter);
-                                this.hud.setTerrain(path, pan[0], pan[1]);
-                                this.lastMarkerMs = 0L;
-                            }
-                        }
+        int rotationBucket = renderSettings.rotationMode == 1
+                ? DynamicMinimapRenderer.rotationBucketForYaw(yaw)
+                : 0;
+        double mapAngle = DynamicMinimapRenderer.bucketAngle(rotationBucket);
 
-                    });
-                }
+        RENDER_POOL.execute(() -> {
+            if (!this.running) {
+                return;
             }
 
+            DynamicMinimapRenderer.Terrain terrain =
+                    DynamicMinimapRenderer.renderTerrain(
+                            world.getWorldMapManager(),
+                            centerX,
+                            centerZ,
+                            renderSettings
+                    );
+
+            byte[] northUpPng = terrain.png;
+            if (northUpPng == null || northUpPng.length == 0) {
+                return;
+            }
+
+            byte[] displayPng = renderSettings.rotationMode == 1
+                    ? DynamicMinimapRenderer.rotateTerrain(northUpPng, mapAngle)
+                    : northUpPng;
+
+            if (displayPng == null || displayPng.length == 0) {
+                return;
+            }
+
+            world.execute(() -> {
+                if (!this.running
+                        || renderHud != this.hud
+                        || sequence <= this.deliveredSequence) {
+                    return;
+                }
+
+                this.deliveredSequence = sequence;
+                this.northUpTerrainPng = northUpPng;
+                ++this.terrainGeneration;
+
+                int frame = this.frameIndex.incrementAndGet();
+                String path = "UI/DapperMap/terrain-" + this.slug + "-"
+                        + (frame & 15) + ".png";
+
+                boolean delivered = this.firstTerrainForHud
+                        ? DynamicAssetPublisher.deliverWithRebuild(
+                        this.playerRef,
+                        path,
+                        displayPng
+                )
+                        : DynamicAssetPublisher.deliver(
+                        this.playerRef,
+                        path,
+                        displayPng
+                );
+
+                if (!delivered) {
+                    return;
+                }
+
+                this.firstTerrainForHud = false;
+                this.bufferComplete = terrain.complete();
+                this.bufferCenterX = centerX;
+                this.bufferCenterZ = centerZ;
+                this.lastSignature = DynamicMinimapRenderer.terrainSignature(
+                        world.getWorldMapManager(),
+                        centerX,
+                        centerZ,
+                        renderSettings
+                );
+                this.updateRotatingFrame(rotationBucket);
+                this.lastMapRotationBucket = rotationBucket;
+                this.lastRotationDeliveryMs = System.currentTimeMillis();
+
+                double pixelsPerBlock =
+                        DynamicMinimapRenderer.pixelsPerBlock(renderSettings);
+                int bufferPixels = this.hud.bufferPixels();
+                int mapCenter = renderSettings.sizePixels / 2;
+                int[] pan = this.currentPan(
+                        world,
+                        centerX,
+                        centerZ,
+                        pixelsPerBlock,
+                        bufferPixels,
+                        mapCenter,
+                        mapAngle
+                );
+                this.hud.setTerrain(path, pan[0], pan[1]);
+
+                // Keep marker projection in the exact same accepted orientation
+                // as the terrain/frame that was just delivered.
+                this.projectCachedMarkers(
+                        pixelsPerBlock,
+                        bufferPixels,
+                        Double.NaN
+                );
+                this.lastMarkerMs = 0L;
+            });
         });
     }
 
-    private int[] currentPan(World world, double centerX, double centerZ, double pixelsPerBlock, int bufferPixels, int mapCenter) {
+    /**
+     * Reuses the most recently stitched north-up terrain and rotates only the
+     * bitmap when the player changes heading. This keeps follow-player rotation
+     * responsive without re-fetching/re-stitching world-map chunks each turn.
+     */
+    private void scheduleRotationOnly(
+            World world,
+            double yaw,
+            int rotationBucket
+    ) {
+        long rotationRequest = this.rotationSequence.incrementAndGet();
+        if (this.northUpTerrainPng == null
+                || Double.isNaN(this.bufferCenterX)
+                || this.hud == null
+                || !this.hud.isShown()) {
+            return;
+        }
+
+        byte[] basePng = this.northUpTerrainPng;
+        long generation = this.terrainGeneration;
+        DynamicMinimapHud renderHud = this.hud;
+        DynamicMinimapSetting renderSettings = this.settings.copy();
+        int expectedRotationMode = renderSettings.rotationMode;
+        double centerX = this.bufferCenterX;
+        double centerZ = this.bufferCenterZ;
+        double mapAngle = DynamicMinimapRenderer.bucketAngle(rotationBucket);
+
+        RENDER_POOL.execute(() -> {
+            byte[] displayPng =
+                    DynamicMinimapRenderer.rotateTerrain(basePng, mapAngle);
+            if (displayPng == null || displayPng.length == 0) {
+                return;
+            }
+
+            world.execute(() -> {
+                if (!this.running
+                        || renderHud != this.hud
+                        || generation != this.terrainGeneration
+                        || rotationRequest != this.rotationSequence.get()
+                        || this.settings.rotationMode != expectedRotationMode) {
+                    return;
+                }
+
+                int frame = this.frameIndex.incrementAndGet();
+                String path = "UI/DapperMap/terrain-" + this.slug + "-"
+                        + (frame & 15) + ".png";
+
+                if (!DynamicAssetPublisher.deliver(
+                        this.playerRef,
+                        path,
+                        displayPng
+                )) {
+                    return;
+                }
+
+                this.updateRotatingFrame(rotationBucket);
+                this.lastMapRotationBucket = rotationBucket;
+                this.lastRotationDeliveryMs = System.currentTimeMillis();
+
+                double pixelsPerBlock =
+                        DynamicMinimapRenderer.pixelsPerBlock(renderSettings);
+                int bufferPixels = this.hud.bufferPixels();
+                int mapCenter = renderSettings.sizePixels / 2;
+                int[] pan = this.currentPan(
+                        world,
+                        centerX,
+                        centerZ,
+                        pixelsPerBlock,
+                        bufferPixels,
+                        mapCenter,
+                        mapAngle
+                );
+                this.hud.setTerrain(path, pan[0], pan[1]);
+
+                // Rotation-only updates do not rescan entities. Re-project the
+                // cached world-space markers immediately against the accepted
+                // rotation bucket so terrain/frame/markers move as one.
+                this.projectCachedMarkers(
+                        pixelsPerBlock,
+                        bufferPixels,
+                        Double.NaN
+                );
+            });
+        });
+    }
+
+    private int[] currentPan(
+            World world,
+            double centerX,
+            double centerZ,
+            double pixelsPerBlock,
+            int bufferPixels,
+            int mapCenter,
+            double mapAngle
+    ) {
         double currentX = centerX;
         double currentZ = centerZ;
 
@@ -367,45 +640,152 @@ public final class DynamicMinimapSession {
         } catch (Throwable var17) {
         }
 
-        int left = (int)Math.round((double)mapCenter - (double)bufferPixels / (double)2.0F - (currentX - centerX) * pixelsPerBlock);
-        int top = (int)Math.round((double)mapCenter - (double)bufferPixels / (double)2.0F - (currentZ - centerZ) * pixelsPerBlock);
+        double dx = (currentX - centerX) * pixelsPerBlock;
+        double dz = (currentZ - centerZ) * pixelsPerBlock;
+        double[] rotated = DynamicMinimapRenderer.rotateMapDelta(dx, dz, mapAngle);
+
+        int left = (int)Math.round(
+                (double)mapCenter - (double)bufferPixels / 2.0D - rotated[0]
+        );
+        int top = (int)Math.round(
+                (double)mapCenter - (double)bufferPixels / 2.0D - rotated[1]
+        );
         return new int[]{left, top};
     }
 
-    private void updateMarkers(Store<EntityStore> store, Ref<EntityStore> playerRef, Vector3d playerPosition, double pixelsPerBlock, int bufferPixels) {
+    /**
+     * Performs the comparatively expensive entity-store scan. This remains on
+     * markerIntervalMs(); rotation-only frames reuse this cached world-space set.
+     */
+    private void scanMarkers(
+            Store<EntityStore> store,
+            Ref<EntityStore> playerRef,
+            Vector3d playerPosition
+    ) {
         List<DynamicMinimapMarker> markers;
         try {
-            markers = DynamicEntityScanner.scan(store, playerRef, playerPosition, (double)(this.settings.zoomBlocks + 16), this.settings);
-        } catch (Throwable var20) {
-            markers = new ArrayList();
+            markers = DynamicEntityScanner.scan(
+                    store,
+                    playerRef,
+                    playerPosition,
+                    (double)(this.settings.zoomBlocks + 16),
+                    this.settings
+            );
+        } catch (Throwable ignored) {
+            markers = new ArrayList<>();
         }
 
         if (this.settings.showDeathMarker && this.hasDeath) {
-            markers.add(DynamicMinimapMarker.death(this.deathX, this.deathZ, 12));
+            markers.add(
+                    DynamicMinimapMarker.death(
+                            this.deathX,
+                            this.deathZ,
+                            12
+                    )
+            );
         }
 
-        DynamicMinimapHud.Slot[] slots = new DynamicMinimapHud.Slot[48];
+        this.cachedMarkers = markers;
+    }
+
+    /**
+     * Projects the latest scanned markers into the orientation that is actually
+     * visible on screen. The accepted terrain bucket is authoritative in
+     * follow-player mode so markers never lead or lag the rendered map angle.
+     */
+    private void projectCachedMarkers(
+            double pixelsPerBlock,
+            int bufferPixels,
+            double yaw
+    ) {
+        if (this.hud == null || Double.isNaN(this.bufferCenterX)) {
+            return;
+        }
+
+        double mapAngle = this.acceptedMapAngle(yaw);
+        DynamicMinimapHud.Slot[] slots =
+                new DynamicMinimapHud.Slot[DynamicMinimapHud.MARKER_SLOTS];
         int slot = 0;
 
-        for(DynamicMinimapMarker marker : markers) {
+        for (DynamicMinimapMarker marker : this.cachedMarkers) {
             if (slot >= slots.length) {
                 break;
             }
 
-            double markerX = (marker.x - this.bufferCenterX) * pixelsPerBlock + (double)bufferPixels / (double)2.0F;
-            double markerZ = (marker.z - this.bufferCenterZ) * pixelsPerBlock + (double)bufferPixels / (double)2.0F;
-            if (!(markerX < (double)0.0F) && !(markerX > (double)bufferPixels) && !(markerZ < (double)0.0F) && !(markerZ > (double)bufferPixels)) {
-                String path = marker.style == Style.DEATH ? this.deathIcon() : this.colorIcon(marker.color.getRGB() & 16777215);
-                if (path != null) {
-                    int size = Math.max(8, marker.size);
-                    int left = (int)Math.round(markerX) - size / 2;
-                    int top = (int)Math.round(markerZ) - size / 2;
-                    slots[slot++] = new DynamicMinimapHud.Slot(path, left, top, size);
-                }
+            double dx =
+                    (marker.x - this.bufferCenterX) * pixelsPerBlock;
+            double dz =
+                    (marker.z - this.bufferCenterZ) * pixelsPerBlock;
+
+            double[] rotated =
+                    DynamicMinimapRenderer.rotateMapDelta(
+                            dx,
+                            dz,
+                            mapAngle
+                    );
+
+            double markerX =
+                    rotated[0] + (double)bufferPixels / 2.0D;
+            double markerZ =
+                    rotated[1] + (double)bufferPixels / 2.0D;
+
+            if (markerX < 0.0D
+                    || markerX > (double)bufferPixels
+                    || markerZ < 0.0D
+                    || markerZ > (double)bufferPixels) {
+                continue;
             }
+
+            String path = marker.style == Style.DEATH
+                    ? this.deathIcon()
+                    : this.colorIcon(
+                    marker.color.getRGB() & 0xFFFFFF
+            );
+
+            if (path == null) {
+                continue;
+            }
+
+            int size = Math.max(8, marker.size);
+            int left = (int)Math.round(markerX) - size / 2;
+            int top = (int)Math.round(markerZ) - size / 2;
+
+            slots[slot++] =
+                    new DynamicMinimapHud.Slot(
+                            path,
+                            left,
+                            top,
+                            size
+                    );
         }
 
         this.hud.setMarkers(slots);
+    }
+
+    /**
+     * Angle of the terrain/frame currently visible to the player.
+     *
+     * During an asynchronous heading change, keep pan and markers on the last
+     * accepted bucket until the new rotated terrain has actually been delivered.
+     */
+    private double acceptedMapAngle(double yaw) {
+        if (this.settings.rotationMode != 1) {
+            return 0.0D;
+        }
+
+        if (this.lastMapRotationBucket >= 0) {
+            return DynamicMinimapRenderer.bucketAngle(
+                    this.lastMapRotationBucket
+            );
+        }
+
+        if (Double.isNaN(yaw)) {
+            return 0.0D;
+        }
+
+        return DynamicMinimapRenderer.bucketAngle(
+                DynamicMinimapRenderer.rotationBucketForYaw(yaw)
+        );
     }
 
     private String colorIcon(int rgb) {
