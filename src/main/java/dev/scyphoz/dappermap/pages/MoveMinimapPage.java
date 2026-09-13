@@ -476,14 +476,14 @@ public final class MoveMinimapPage
                 : "Square";
 
         String panel = switch (this.previewPanelPosition) {
-            case DynamicMinimapSetting.INFO_ABOVE -> "panel above";
-            case DynamicMinimapSetting.INFO_LEFT -> "panel left";
-            case DynamicMinimapSetting.INFO_RIGHT -> "panel right";
-            case DynamicMinimapSetting.INFO_BELOW -> "panel below";
-            default -> "panel below";
+            case DynamicMinimapSetting.INFO_ABOVE -> "Info Panel Above";
+            case DynamicMinimapSetting.INFO_LEFT -> "Info Panel Left";
+            case DynamicMinimapSetting.INFO_RIGHT -> "Info Panel Right";
+            case DynamicMinimapSetting.INFO_BELOW -> "Info Panel Below";
+            default -> "Info Panel Below";
         };
 
-        return shape + " minimap • " + panel;
+        return shape + " Minimap • " + panel;
     }
 
     private void openSettings(
