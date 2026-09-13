@@ -25,8 +25,8 @@ import java.awt.Color;
  * Visual minimap-position chooser.
  *
  * The preview surface is divided into an invisible 9x9 click matrix. Clicking
- * anywhere in the preview selects the nearest placement region, while the normal
- * settings-page sliders remain available for 1% fine tuning afterward.
+ * anywhere in the preview selects the nearest placement region, and the sliders below it allow 1% fine tuning.
+ * Both controls edit a pending position; only Save writes it to player settings.
  */
 public final class MoveMinimapPage
         extends InteractiveCustomUIPage<MoveMinimapPage.Ev> {
@@ -97,8 +97,33 @@ public final class MoveMinimapPage
                 previewDescription()
         );
 
+        bindPositionSliders(builder, events);
         bindPlacementGrid(builder, events);
         bindButtons(builder, events);
+    }
+
+    private void bindPositionSliders(UICommandBuilder builder, UIEventBuilder events) {
+        String[] labels = {"Horizontal Position", "Vertical Position"};
+        String[] actions = {"slider_x", "slider_y"};
+        for (int index = 0; index < labels.length; index++) {
+            String row = "#MoveFineTuneList[" + index + "]";
+            builder.append("#MoveFineTuneList", "Pages/DapperMapSliderRow.ui");
+            builder.set(row + " #RowLabel.Text", labels[index]);
+            events.addEventBinding(CustomUIEventBindingType.ValueChanged, row + " #ValueSlider",
+                    EventData.of("Action", actions[index])
+                            .append("@SliderValue", row + " #ValueSlider.Value"), false);
+        }
+        updateSliderControls(builder, true);
+    }
+
+    private void updateSliderControls(UICommandBuilder builder, boolean syncValues) {
+        int[] values = {this.pendingX, this.pendingY};
+        for (int index = 0; index < values.length; index++) {
+            String row = "#MoveFineTuneList[" + index + "]";
+            builder.set(row + " #ValueLabel.Text", values[index] + "%");
+            // Do not overwrite the dragged thumb with a delayed server update.
+            if (syncValues) builder.set(row + " #ValueSlider.Value", values[index]);
+        }
     }
 
     private void bindPlacementGrid(
@@ -197,6 +222,13 @@ public final class MoveMinimapPage
             return;
         }
 
+        if ("slider_x".equals(action) || "slider_y".equals(action)) {
+            if ("slider_x".equals(action)) this.pendingX = clamp(event.sliderValue);
+            else this.pendingY = clamp(event.sliderValue);
+            refreshPreview(false);
+            return;
+        }
+
         if (action.startsWith("place_")) {
             String[] parts = action.split("_");
             if (parts.length == 3) {
@@ -205,7 +237,7 @@ public final class MoveMinimapPage
                             clamp(Integer.parseInt(parts[1]));
                     this.pendingY =
                             clamp(Integer.parseInt(parts[2]));
-                    refreshPreview();
+                    refreshPreview(true);
                 } catch (NumberFormatException ignored) {
                 }
             }
@@ -238,7 +270,7 @@ public final class MoveMinimapPage
         }
     }
 
-    private void refreshPreview() {
+    private void refreshPreview(boolean syncSliders) {
         UICommandBuilder builder = new UICommandBuilder();
         UIEventBuilder events = new UIEventBuilder();
 
@@ -250,6 +282,8 @@ public final class MoveMinimapPage
                 "#MovePreviewDescription.Text",
                 previewDescription()
         );
+
+        updateSliderControls(builder, syncSliders);
 
         int selectedX = nearestStop(this.pendingX);
         int selectedY = nearestStop(this.pendingY);
@@ -507,6 +541,7 @@ public final class MoveMinimapPage
         public static final BuilderCodec<Ev> CODEC;
 
         private String action = "";
+        private int sliderValue = 0;
 
         public Ev() {
         }
@@ -523,6 +558,12 @@ public final class MoveMinimapPage
                                     ev.action = value,
                             ev ->
                                     ev.action
+                    )
+                    .add()
+                    .append(
+                            new KeyedCodec<>("@SliderValue", Codec.INTEGER, true),
+                            (ev, value) -> ev.sliderValue = value,
+                            ev -> ev.sliderValue
                     )
                     .add()
                     .build();

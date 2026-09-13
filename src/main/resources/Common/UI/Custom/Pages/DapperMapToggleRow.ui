@@ -16,12 +16,12 @@ Group {
 
     Label #RowLabel {
       Anchor: (Height: 23);
-      Style: (FontSize: 15, RenderBold: true, TextColor: #f4f7fb, VerticalAlignment: Center);
+      Style: (FontSize: 15, RenderBold: true, TextColor: #f4f7fb, HorizontalAlignment: Start, VerticalAlignment: Center);
     }
 
-    Label #RowValue {
+    Label #RowDescription {
       Anchor: (Height: 19);
-      Style: (FontSize: 12, TextColor: #9ddcff, VerticalAlignment: Center);
+      Style: (FontSize: 11, TextColor: #9ddcff, HorizontalAlignment: Start, VerticalAlignment: Center);
     }
   }
 

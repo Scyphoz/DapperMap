@@ -20,6 +20,11 @@ import dev.scyphoz.dappermap.dynamic.DynamicMinimapSetting;
 import dev.scyphoz.dappermap.service.MinimapSessionManager;
 
 import java.awt.Color;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.TreeSet;
+import com.hypixel.hytale.server.core.ui.DropdownEntryInfo;
+import com.hypixel.hytale.server.core.ui.LocalizableString;
 
 public final class DapperMapSettingsPage
         extends InteractiveCustomUIPage<DapperMapSettingsPage.Ev> {
@@ -28,18 +33,6 @@ public final class DapperMapSettingsPage
     private static final Color BLUE = new Color(10345727);
     private static final Color GREEN = new Color(5757323);
     private static final Color GRAY = new Color(8491684);
-    private static final Color WHITE;
-
-    private static final int ZOOM_STEP = 16;
-    private static final int SIZE_STEP = 20;
-    private static final int VRANGE_STEP = 8;
-
-    // Deliberately discrete so players can quickly return to known-good HUD scales.
-
-
-    private static final int[] INTERFACE_SCALE_STEPS = {
-            75, 85, 100, 110, 125, 140, 160
-    };
 
     private static final Row[] ROWS;
 
@@ -74,7 +67,6 @@ public final class DapperMapSettingsPage
 
         builder.append("Pages/DapperMapSettings.ui");
         builder.set("#PageTitle.Text", "DapperMap");
-        builder.set("#DapperMapSettingsSummary.Text", summary(settings));
 
         this.renderList(builder, events, settings);
         this.bindFooterButtons(builder, events);
@@ -84,23 +76,6 @@ public final class DapperMapSettingsPage
             UICommandBuilder builder,
             UIEventBuilder events
     ) {
-        builder.append(
-                "#DapperMapMoveButtonSlot",
-                "Pages/BasicTextButton.ui"
-        );
-
-        builder.set(
-                "#DapperMapMoveButtonSlot[0].TextSpans",
-                Message.raw("MOVE MINIMAP").color(BLUE)
-        );
-
-        events.addEventBinding(
-                CustomUIEventBindingType.Activating,
-                "#DapperMapMoveButtonSlot[0]",
-                EventData.of("Action", "move_minimap"),
-                false
-        );
-
         builder.append(
                 "#DapperMapResetButtonSlot",
                 "Pages/BasicTextButton.ui"
@@ -129,16 +104,35 @@ public final class DapperMapSettingsPage
         for (int index = 0; index < ROWS.length; ++index) {
             Row row = ROWS[index];
 
-            if (row.kind == Kind.TOGGLE) {
+            if (row.kind == Kind.HEADER) {
+                builder.append("#DapperMapSettingsList", "Pages/DapperMapSectionRow.ui");
+                builder.set("#DapperMapSettingsList[" + index + "] #SectionLabel.Text", row.label);
+            } else if (row.kind == Kind.TOGGLE) {
                 this.toggleRow(builder, events, index, row, settings);
             } else if (row.kind == Kind.DROPDOWN) {
                 this.dropdownRow(builder, events, index, row, settings);
-            } else if (row.kind == Kind.SLIDER) {
-                this.sliderRow(builder, events, index, row, settings);
-            } else {
-                this.stepperRow(builder, events, index, row, settings);
+            } else if (row.kind == Kind.ACTION) {
+                this.moveRow(builder, events, index, settings);
             }
         }
+    }
+
+    private void moveRow(UICommandBuilder builder, UIEventBuilder events,
+                         int index, DynamicMinimapSetting settings) {
+        String selector = "#DapperMapSettingsList[" + index + "]";
+        if (!settings.enabled) {
+            builder.append("#DapperMapSettingsList", "Pages/DapperMapDisabledDropdownRow.ui");
+            builder.set(selector + " #RowLabel.Text", "Screen Position");
+            builder.set(selector + " #RowDescription.Text", description("move_minimap"));
+            builder.set(selector + " #ValueLabel.Text", "Move Minimap");
+            return;
+        }
+        builder.append("#DapperMapSettingsList", "Pages/DapperMapMoveRow.ui");
+        builder.set(selector + " #RowDescription.Text", description("move_minimap"));
+        builder.append(selector + " #BtnSlot", "Pages/BasicTextButton.ui");
+        builder.set(selector + " #BtnSlot[0].TextSpans", Message.raw("MOVE MINIMAP").color(BLUE));
+        events.addEventBinding(CustomUIEventBindingType.Activating, selector + " #BtnSlot[0]",
+                EventData.of("Action", "move_minimap"), false);
     }
 
     private void toggleRow(
@@ -161,8 +155,8 @@ public final class DapperMapSettingsPage
         );
 
         builder.set(
-                selector + " #RowValue.TextSpans",
-                toggleValue(row.id, settings)
+                selector + " #RowDescription.Text",
+                description(row.id)
         );
 
         builder.append(
@@ -192,9 +186,18 @@ public final class DapperMapSettingsPage
     ) {
         String selector = "#DapperMapSettingsList[" + index + "]";
 
+        if (isDropdownDisabled(row.id, settings)) {
+            // Render a non-interactive value while its controlling filter is off.
+            builder.append("#DapperMapSettingsList", "Pages/DapperMapDisabledDropdownRow.ui");
+            builder.set(selector + " #RowLabel.Text", row.label);
+            builder.set(selector + " #RowDescription.Text", description(row.id));
+            builder.set(selector + " #ValueLabel.Text", disabledValue(row.id, settings));
+            return;
+        }
+
         builder.append(
                 "#DapperMapSettingsList",
-                dropdownTemplate(row.id)
+                "Pages/DapperMapDropdownRow.ui"
         );
 
         builder.set(
@@ -202,7 +205,11 @@ public final class DapperMapSettingsPage
                 row.label
         );
 
+        builder.set(selector + " #RowDescription.Text", description(row.id));
+
         String dropdownSelector = selector + " #ValueDropdown";
+
+        builder.set(dropdownSelector + ".Entries", dropdownEntries(row.id, settings));
 
         builder.set(
                 dropdownSelector + ".Value",
@@ -214,116 +221,6 @@ public final class DapperMapSettingsPage
                 dropdownSelector,
                 EventData.of("Action", "dropdown_" + row.id)
                         .append("@Value", dropdownSelector + ".Value"),
-                false
-        );
-    }
-
-    private static String dropdownTemplate(String id) {
-        return switch (id) {
-            case "zoom" ->
-                    "Pages/DapperMapDropdownZoomRow.ui";
-
-            case "size" ->
-                    "Pages/DapperMapDropdownSizeRow.ui";
-
-            case "interface_scale" ->
-                    "Pages/DapperMapDropdownScaleRow.ui";
-
-            case "speed" ->
-                    "Pages/DapperMapDropdownSpeedRow.ui";
-
-            case "panel_position" ->
-                    "Pages/DapperMapDropdownPanelRow.ui";
-
-            default ->
-                    "Pages/DapperMapStepperRow.ui";
-        };
-    }
-
-    private void sliderRow(
-            UICommandBuilder builder,
-            UIEventBuilder events,
-            int index,
-            Row row,
-            DynamicMinimapSetting settings
-    ) {
-        String selector = "#DapperMapSettingsList[" + index + "]";
-
-        builder.append(
-                "#DapperMapSettingsList",
-                "Pages/DapperMapSliderRow.ui"
-        );
-
-        builder.set(selector + " #RowLabel.Text", row.label);
-        builder.set(selector + " #ValueLabel.Text", sliderValueText(row.id, settings));
-
-        String sliderSelector = selector + " #ValueSlider";
-        builder.set(sliderSelector + ".Value", sliderValue(row.id, settings));
-
-        events.addEventBinding(
-                CustomUIEventBindingType.ValueChanged,
-                sliderSelector,
-                EventData.of("Action", "slider_" + row.id)
-                        .append("@SliderValue", sliderSelector + ".Value"),
-                false
-        );
-    }
-
-    private void stepperRow(
-            UICommandBuilder builder,
-            UIEventBuilder events,
-            int index,
-            Row row,
-            DynamicMinimapSetting settings
-    ) {
-        String selector = "#DapperMapSettingsList[" + index + "]";
-
-        builder.append(
-                "#DapperMapSettingsList",
-                "Pages/DapperMapStepperRow.ui"
-        );
-
-        builder.set(
-                selector + " #RowLabel.Text",
-                row.label
-        );
-
-        builder.set(
-                selector + " #ValueLabel.Text",
-                stepperValue(row.id, settings)
-        );
-
-        builder.append(
-                selector + " #MinusSlot",
-                "Pages/BasicTextButton.ui"
-        );
-
-        builder.set(
-                selector + " #MinusSlot[0].TextSpans",
-                Message.raw("-").color(WHITE)
-        );
-
-        events.addEventBinding(
-                CustomUIEventBindingType.Activating,
-                selector + " #MinusSlot[0]",
-                EventData.of("Action", row.id + "_minus"),
-                false
-        );
-
-        builder.append(
-                selector + " #PlusSlot",
-                "Pages/BasicTextButton.ui"
-        );
-
-        builder.set(
-                selector + " #PlusSlot[0].TextSpans",
-                Message.raw("+").color(WHITE)
-        );
-
-        events.addEventBinding(
-                CustomUIEventBindingType.Activating,
-                selector + " #PlusSlot[0]",
-                EventData.of("Action", row.id + "_plus"),
                 false
         );
     }
@@ -340,6 +237,7 @@ public final class DapperMapSettingsPage
         }
 
         if ("move_minimap".equals(action)) {
+            if (!this.sessions.getSettings(this.playerRef.getUuid(), this.config).enabled) return;
             Player player =
                     (Player) store.getComponent(
                             ref,
@@ -380,33 +278,6 @@ public final class DapperMapSettingsPage
                     event.value
             );
 
-        } else if (action.startsWith("slider_")) {
-            applySlider(
-                    settings,
-                    action.substring("slider_".length()),
-                    event.sliderValue
-            );
-
-        } else if (action.endsWith("_minus")) {
-            applyStep(
-                    settings,
-                    action.substring(
-                            0,
-                            action.length() - "_minus".length()
-                    ),
-                    -1
-            );
-
-        } else if (action.endsWith("_plus")) {
-            applyStep(
-                    settings,
-                    action.substring(
-                            0,
-                            action.length() - "_plus".length()
-                    ),
-                    1
-            );
-
         } else {
             return;
         }
@@ -416,339 +287,164 @@ public final class DapperMapSettingsPage
         UICommandBuilder builder = new UICommandBuilder();
         UIEventBuilder events = new UIEventBuilder();
 
-        builder.set(
-                "#DapperMapSettingsSummary.Text",
-                summary(settings)
-        );
-
-        if (action.startsWith("slider_")) {
-            String id = action.substring("slider_".length());
-            int rowIndex = rowIndex(id);
-            if (rowIndex >= 0) {
-                builder.set(
-                        "#DapperMapSettingsList[" + rowIndex + "] #ValueLabel.Text",
-                        sliderValueText(id, settings)
-                );
-            }
-        } else {
-            this.renderList(builder, events, settings);
-        }
+        this.renderList(builder, events, settings);
 
         this.sendUpdate(builder, events, false);
     }
 
-    private static void applyToggle(
-            DynamicMinimapSetting settings,
-            String id
-    ) {
-        switch (id) {
-            case "enabled":
-                settings.enabled = !settings.enabled;
-                break;
-
-            case "shape":
-                settings.shape = settings.isCircle() ? 0 : 1;
-                break;
-
-            case "players":
-                settings.showOtherPlayers = !settings.showOtherPlayers;
-                break;
-
-            case "entities":
-                settings.showEntities = !settings.showEntities;
-                break;
-
-            case "death":
-                settings.showDeathMarker = !settings.showDeathMarker;
-                break;
-
-            case "height":
-                settings.limitMobHeight = !settings.limitMobHeight;
-                break;
-
-            case "clock":
-                settings.showClock = !settings.showClock;
-                break;
-
-            case "clock_format":
-                settings.showClock = true;
-                settings.clock24Hour = !settings.clock24Hour;
-                break;
-
-            case "compass":
-                settings.showCompass = !settings.showCompass;
-                break;
-
-            case "biome":
-                settings.showBiome = !settings.showBiome;
-                break;
-
-            case "rotation":
-                settings.rotationMode =
-                        settings.rotationMode == 0 ? 1 : 0;
-                break;
-        }
+    private static void applyToggle(DynamicMinimapSetting settings, String id) {
+        if ("enabled".equals(id)) settings.enabled = !settings.enabled;
     }
 
-    private static void applyDropdown(
-            DynamicMinimapSetting settings,
-            String id,
-            String value
-    ) {
-        if (value == null || value.isBlank()) {
-            return;
-        }
-
-        try {
-            switch (id) {
-                case "zoom" ->
-                        settings.zoomBlocks = Integer.parseInt(value);
-
-                case "size" ->
-                        settings.sizePixels = Integer.parseInt(value);
-
-                case "interface_scale" ->
-                        settings.interfaceScalePercent = Integer.parseInt(value);
-
-                case "speed" ->
-                        settings.updateSpeed = Integer.parseInt(value);
-
-                case "panel_position" ->
-                        settings.infoPanelPosition = Integer.parseInt(value);
-
-                default -> {
-                    return;
-                }
-            }
-
-            settings.normalize();
-        } catch (NumberFormatException ignored) {
-        }
-    }
-
-    private static void applySlider(
-            DynamicMinimapSetting settings,
-            String id,
-            int value
-    ) {
-        switch (id) {
-            case "hud_x" ->
-                    settings.hudPositionX = value;
-
-            case "hud_y" ->
-                    settings.hudPositionY = value;
-
-            default -> {
-                return;
-            }
-        }
-
-        settings.normalize();
-    }
-
-    private static void applyStep(
-            DynamicMinimapSetting settings,
-            String id,
-            int direction
-    ) {
-        switch (id) {
-            case "zoom" ->
-                    settings.zoomBlocks += direction * ZOOM_STEP;
-
-            case "size" ->
-                    settings.sizePixels += direction * SIZE_STEP;
-
-            case "interface_scale" ->
-                    settings.interfaceScalePercent =
-                            stepInterfaceScale(
-                                    settings.interfaceScalePercent,
-                                    direction
-                            );
-
-            case "speed" ->
-                    settings.updateSpeed += direction;
-
-            case "position" ->
-                    settings.position =
-                            Math.floorMod(
-                                    settings.position + direction,
-                                    4
-                            );
-
-            case "vrange" ->
-                    settings.mobVerticalRange +=
-                            direction * VRANGE_STEP;
-        }
-    }
-
-    private static Message toggleButton(
-            String id,
-            DynamicMinimapSetting settings
-    ) {
-        switch (id) {
-            case "shape":
-                return Message.raw(
-                        settings.isCircle()
-                                ? "CIRCLE"
-                                : "SQUARE"
-                ).color(BLUE);
-
-            case "clock_format":
-                return Message.raw(
-                        settings.clock24Hour
-                                ? "24H"
-                                : "12H"
-                ).color(BLUE);
-
-            case "rotation":
-                return Message.raw(
-                        settings.rotationMode == 0
-                                ? "NORTH"
-                                : "FOLLOW"
-                ).color(BLUE);
-
-            default:
-                boolean enabled =
-                        toggleState(id, settings);
-
-                return Message.raw(
-                        enabled
-                                ? "ON"
-                                : "OFF"
-                ).color(
-                        enabled
-                                ? GREEN
-                                : GRAY
-                );
-        }
-    }
-
-    private static Message toggleValue(
-            String id,
-            DynamicMinimapSetting settings
-    ) {
-        switch (id) {
-            case "shape":
-                return Message.raw(
-                        settings.isCircle()
-                                ? "Round lens"
-                                : "Square lens"
-                ).color(BLUE);
-
-            case "clock_format":
-                return Message.raw(
-                        settings.clock24Hour
-                                ? "24-hour"
-                                : "12-hour"
-                ).color(BLUE);
-
-            case "rotation":
-                return Message.raw(
-                        settings.rotationMode == 0
-                                ? "North-up"
-                                : "Follow player"
-                ).color(BLUE);
-
-            default:
-                boolean enabled =
-                        toggleState(id, settings);
-
-                return Message.raw(
-                        enabled
-                                ? "Enabled"
-                                : "Disabled"
-                ).color(
-                        enabled
-                                ? GREEN
-                                : GRAY
-                );
-        }
-    }
-
-    private static boolean toggleState(
-            String id,
-            DynamicMinimapSetting settings
-    ) {
+    private static String description(String id) {
         return switch (id) {
-            case "enabled" -> settings.enabled;
-            case "players" -> settings.showOtherPlayers;
-            case "entities" -> settings.showEntities;
-            case "death" -> settings.showDeathMarker;
-            case "height" -> settings.limitMobHeight;
-            case "clock" -> settings.showClock;
-            case "compass" -> settings.showCompass;
-            case "biome" -> settings.showBiome;
-            default -> false;
-        };
-    }
-
-    private static String stepperValue(
-            String id,
-            DynamicMinimapSetting settings
-    ) {
-        return switch (id) {
-            case "zoom" ->
-                    settings.zoomBlocks + " blocks";
-
-            case "size" ->
-                    settings.sizePixels + " px";
-
-            case "interface_scale" ->
-                    settings.interfaceScalePercent + "%";
-
-            case "speed" ->
-                    displaySpeed(settings.updateSpeed);
-
-            case "position" ->
-                    displayPosition(settings.position);
-
-            case "vrange" ->
-                    "+/- " + settings.mobVerticalRange;
-
+            case "enabled" -> "Show or hide your minimap.";
+            case "zoom" -> "Choose how far around you the map shows.";
+            case "size" -> "Change the size of the map on your screen.";
+            case "interface_scale" -> "Resize the map and its information together.";
+            case "shape" -> "Choose a round or square map.";
+            case "rotation" -> "Keep north fixed or turn the map as you turn.";
+            case "speed" -> "Choose how often the minimap refreshes.";
+            case "move_minimap" -> "Choose where the minimap sits on your screen.";
+            case "panel_position" -> "Choose which side shows the map information.";
+            case "players" -> "Show nearby players on your minimap.";
+            case "entities" -> "Show nearby creatures on your minimap.";
+            case "death" -> "Mark the location of your last death.";
+            case "height" -> "Hide creatures far above or below you.";
+            case "vrange" -> "Set how far above and below to show creatures.";
+            case "clock" -> "Show the current time in your Hytale world.";
+            case "clock_format" -> "Choose a 12-hour or 24-hour clock.";
+            case "compass" -> "Show the direction you are facing.";
+            case "biome" -> "Show the name of the biome you are in.";
             default -> "";
         };
     }
 
-    private static String dropdownValue(
-            String id,
-            DynamicMinimapSetting settings
-    ) {
+    private static String disabledValue(String id, DynamicMinimapSetting settings) {
+        return switch (id) {
+            case "zoom" -> settings.zoomBlocks + " blocks";
+            case "size" -> settings.sizePixels + " px";
+            case "interface_scale" -> settings.interfaceScalePercent + "%";
+            case "speed" -> displaySpeed(settings.updateSpeed);
+            case "panel_position" -> displayPanelPosition(settings.infoPanelPosition);
+            case "shape" -> settings.isCircle() ? "Circle" : "Square";
+            case "rotation" -> settings.rotationMode == 0 ? "Locked North" : "Follow player";
+            case "vrange" -> settings.mobVerticalRange + " blocks above/below";
+            case "clock_format" -> settings.clock24Hour ? "24-hour" : "12-hour";
+            default -> "true".equals(dropdownValue(id, settings)) ? "Enabled" : "Disabled";
+        };
+    }
+
+    private static boolean isDropdownDisabled(String id, DynamicMinimapSetting settings) {
+        return !settings.enabled || ("vrange".equals(id) && !settings.limitMobHeight)
+                || ("clock_format".equals(id) && !settings.showClock);
+    }
+
+    private static void applyDropdown(DynamicMinimapSetting settings, String id, String value) {
+        if (isDropdownDisabled(id, settings)) return;
+        if (value == null || value.isBlank()) return;
+        // Accept only an offered value, including an existing custom numeric value.
+        if (dropdownEntries(id, settings).stream().noneMatch(entry -> entry.value().equals(value))) return;
+        switch (id) {
+            case "zoom" -> settings.zoomBlocks = Integer.parseInt(value);
+            case "size" -> settings.sizePixels = Integer.parseInt(value);
+            case "interface_scale" -> settings.interfaceScalePercent = Integer.parseInt(value);
+            case "speed" -> settings.updateSpeed = Integer.parseInt(value);
+            case "panel_position" -> settings.infoPanelPosition = Integer.parseInt(value);
+            case "shape" -> settings.shape = Integer.parseInt(value);
+            case "rotation" -> settings.rotationMode = Integer.parseInt(value);
+            case "vrange" -> settings.mobVerticalRange = Integer.parseInt(value);
+            case "players" -> settings.showOtherPlayers = Boolean.parseBoolean(value);
+            case "entities" -> settings.showEntities = Boolean.parseBoolean(value);
+            case "death" -> settings.showDeathMarker = Boolean.parseBoolean(value);
+            case "height" -> settings.limitMobHeight = Boolean.parseBoolean(value);
+            case "clock" -> settings.showClock = Boolean.parseBoolean(value);
+            case "clock_format" -> settings.clock24Hour = Boolean.parseBoolean(value);
+            case "compass" -> settings.showCompass = Boolean.parseBoolean(value);
+            case "biome" -> settings.showBiome = Boolean.parseBoolean(value);
+        }
+        settings.normalize();
+    }
+
+    private static List<DropdownEntryInfo> dropdownEntries(String id, DynamicMinimapSetting settings) {
+        List<DropdownEntryInfo> entries = new ArrayList<>();
+        switch (id) {
+            case "zoom" -> addNumericEntries(entries, settings.zoomBlocks, 16, 256, 16, " blocks");
+            case "size" -> addNumericEntries(entries, settings.sizePixels, 120, 360, 20, " px");
+            case "vrange" -> {
+                addNumericEntries(entries, settings.mobVerticalRange, 8, 256, 8, " blocks above/below");
+            }
+            case "interface_scale" -> {
+                TreeSet<Integer> values = new TreeSet<>(List.of(75, 85, 100, 110, 125, 140, 160));
+                values.add(settings.interfaceScalePercent);
+                for (int value : values) entries.add(entry(value + "%", Integer.toString(value)));
+            }
+            case "speed" -> {
+                for (int value = 0; value <= 3; value++) entries.add(entry(displaySpeed(value), Integer.toString(value)));
+            }
+            case "panel_position" -> {
+                for (int value = 0; value <= 3; value++) entries.add(entry(displayPanelPosition(value), Integer.toString(value)));
+            }
+            case "shape" -> {
+                entries.add(entry("Circle", "1"));
+                entries.add(entry("Square", "0"));
+            }
+            case "rotation" -> {
+                entries.add(entry("Locked North", "0"));
+                entries.add(entry("Follow player", "1"));
+            }
+            case "clock_format" -> {
+                entries.add(entry("24-hour", "true"));
+                entries.add(entry("12-hour", "false"));
+            }
+            case "players", "entities", "death", "height", "clock", "compass", "biome" -> {
+                entries.add(entry("Enabled", "true"));
+                entries.add(entry("Disabled", "false"));
+            }
+            default -> { }
+        }
+        return entries;
+    }
+
+    private static DropdownEntryInfo entry(String label, String value) {
+        return new DropdownEntryInfo(LocalizableString.fromString(label), value);
+    }
+
+    private static void addNumericEntries(List<DropdownEntryInfo> entries, int current,
+                                          int min, int max, int step, String suffix) {
+        TreeSet<Integer> values = new TreeSet<>();
+        for (int value = min; value <= max; value += step) values.add(value);
+        values.add(current);
+        if (" blocks above/below".equals(suffix)) values.add(4);
+        for (int value : values) entries.add(entry(value + suffix, Integer.toString(value)));
+    }
+
+    private static Message toggleButton(String id, DynamicMinimapSetting settings) {
+        return Message.raw(settings.enabled ? "ENABLED" : "DISABLED").color(settings.enabled ? GREEN : GRAY);
+    }
+
+
+
+    private static String dropdownValue(String id, DynamicMinimapSetting settings) {
         return switch (id) {
             case "zoom" -> Integer.toString(settings.zoomBlocks);
             case "size" -> Integer.toString(settings.sizePixels);
             case "interface_scale" -> Integer.toString(settings.interfaceScalePercent);
             case "speed" -> Integer.toString(settings.updateSpeed);
             case "panel_position" -> Integer.toString(settings.infoPanelPosition);
-            default -> "";
+            case "shape" -> Integer.toString(settings.shape);
+            case "rotation" -> Integer.toString(settings.rotationMode);
+            case "vrange" -> Integer.toString(settings.mobVerticalRange);
+            case "players" -> Boolean.toString(settings.showOtherPlayers);
+            case "entities" -> Boolean.toString(settings.showEntities);
+            case "death" -> Boolean.toString(settings.showDeathMarker);
+            case "height" -> Boolean.toString(settings.limitMobHeight);
+            case "clock" -> Boolean.toString(settings.showClock);
+            case "clock_format" -> Boolean.toString(settings.clock24Hour);
+            case "compass" -> Boolean.toString(settings.showCompass);
+            case "biome" -> Boolean.toString(settings.showBiome);
+            default -> throw new IllegalArgumentException("Unknown dropdown: " + id);
         };
-    }
-
-    private static int sliderValue(
-            String id,
-            DynamicMinimapSetting settings
-    ) {
-        return switch (id) {
-            case "hud_x" -> settings.hudPositionX;
-            case "hud_y" -> settings.hudPositionY;
-            default -> 0;
-        };
-    }
-
-    private static String sliderValueText(
-            String id,
-            DynamicMinimapSetting settings
-    ) {
-        return sliderValue(id, settings) + "%";
-    }
-
-    private static int rowIndex(String id) {
-        for (int i = 0; i < ROWS.length; ++i) {
-            if (ROWS[i].id.equals(id)) {
-                return i;
-            }
-        }
-
-        return -1;
     }
 
     private static String displayPanelPosition(int panelPosition) {
@@ -761,33 +457,6 @@ public final class DapperMapSettingsPage
         };
     }
 
-    private static int stepInterfaceScale(
-            int current,
-            int direction
-    ) {
-        if (direction == 0) {
-            return current;
-        }
-
-        if (direction > 0) {
-            for (int scale : INTERFACE_SCALE_STEPS) {
-                if (scale > current) {
-                    return scale;
-                }
-            }
-
-            return INTERFACE_SCALE_STEPS[INTERFACE_SCALE_STEPS.length - 1];
-        }
-
-        for (int index = INTERFACE_SCALE_STEPS.length - 1; index >= 0; --index) {
-            if (INTERFACE_SCALE_STEPS[index] < current) {
-                return INTERFACE_SCALE_STEPS[index];
-            }
-        }
-
-        return INTERFACE_SCALE_STEPS[0];
-    }
-
     private static String displaySpeed(int speed) {
         return switch (speed) {
             case 0 -> "Very fast";
@@ -798,133 +467,30 @@ public final class DapperMapSettingsPage
         };
     }
 
-    private static String displayPosition(int position) {
-        return switch (position) {
-            case 0 -> "Top left";
-            case 2 -> "Bottom left";
-            case 3 -> "Bottom right";
-            case 1 -> "Top right";
-            default -> "Top right";
-        };
-    }
-
-    private static String summary(
-            DynamicMinimapSetting settings
-    ) {
-        return "Position "
-                + settings.hudPositionX
-                + "% / "
-                + settings.hudPositionY
-                + "%  |  Info "
-                + displayPanelPosition(settings.infoPanelPosition).toLowerCase()
-                + "  |  "
-                + settings.zoomBlocks
-                + " block radius  |  "
-                + displaySpeed(settings.updateSpeed)
-                + " updates  |  UI "
-                + settings.interfaceScalePercent
-                + "%";
-    }
-
     static {
-        WHITE = Color.WHITE;
-
         ROWS = new Row[]{
-                new Row(
-                        "enabled",
-                        "Minimap",
-                        Kind.TOGGLE
-                ),
-                new Row(
-                        "zoom",
-                        "Zoom radius",
-                        Kind.DROPDOWN
-                ),
-                new Row(
-                        "size",
-                        "Map size",
-                        Kind.DROPDOWN
-                ),
-                new Row(
-                        "interface_scale",
-                        "Interface scale",
-                        Kind.DROPDOWN
-                ),
-                new Row(
-                        "speed",
-                        "Update speed",
-                        Kind.DROPDOWN
-                ),
-                new Row(
-                        "shape",
-                        "Map shape",
-                        Kind.TOGGLE
-                ),
-                new Row(
-                        "hud_x",
-                        "Horizontal position",
-                        Kind.SLIDER
-                ),
-                new Row(
-                        "hud_y",
-                        "Vertical position",
-                        Kind.SLIDER
-                ),
-                new Row(
-                        "panel_position",
-                        "Information panel",
-                        Kind.DROPDOWN
-                ),
-                new Row(
-                        "players",
-                        "Player markers",
-                        Kind.TOGGLE
-                ),
-                new Row(
-                        "entities",
-                        "Creature markers",
-                        Kind.TOGGLE
-                ),
-                new Row(
-                        "death",
-                        "Death marker",
-                        Kind.TOGGLE
-                ),
-                new Row(
-                        "height",
-                        "Height filter",
-                        Kind.TOGGLE
-                ),
-                new Row(
-                        "vrange",
-                        "Creature height range",
-                        Kind.STEPPER
-                ),
-                new Row(
-                        "clock",
-                        "In-game clock",
-                        Kind.TOGGLE
-                ),
-                new Row(
-                        "clock_format",
-                        "Clock format",
-                        Kind.TOGGLE
-                ),
-                new Row(
-                        "compass",
-                        "Compass readout",
-                        Kind.TOGGLE
-                ),
-                new Row(
-                        "biome",
-                        "Biome readout",
-                        Kind.TOGGLE
-                ),
-                new Row(
-                        "rotation",
-                        "Map rotation",
-                        Kind.TOGGLE
-                )
+                new Row("enabled", "Minimap", Kind.TOGGLE),
+                new Row("section_0", "MAP APPEARANCE", Kind.HEADER),
+                new Row("zoom", "Zoom Radius", Kind.DROPDOWN),
+                new Row("size", "Map Size", Kind.DROPDOWN),
+                new Row("interface_scale", "Interface Scale", Kind.DROPDOWN),
+                new Row("shape", "Map Shape", Kind.DROPDOWN),
+                new Row("rotation", "Map Rotation", Kind.DROPDOWN),
+                new Row("speed", "Update Speed", Kind.DROPDOWN),
+                new Row("section_1", "POSITION", Kind.HEADER),
+                new Row("move_minimap", "Move Minimap", Kind.ACTION),
+                new Row("panel_position", "Information Panel", Kind.DROPDOWN),
+                new Row("section_2", "MARKERS", Kind.HEADER),
+                new Row("players", "Player Markers", Kind.DROPDOWN),
+                new Row("entities", "Creature Markers", Kind.DROPDOWN),
+                new Row("death", "Death Marker", Kind.DROPDOWN),
+                new Row("height", "Marker Height Detection", Kind.DROPDOWN),
+                new Row("vrange", "Marker Height Range", Kind.DROPDOWN),
+                new Row("section_3", "INFORMATION", Kind.HEADER),
+                new Row("clock", "Hytale World Clock", Kind.DROPDOWN),
+                new Row("clock_format", "Clock Format", Kind.DROPDOWN),
+                new Row("compass", "Compass Readout", Kind.DROPDOWN),
+                new Row("biome", "Biome Readout", Kind.DROPDOWN)
         };
     }
 
@@ -934,7 +500,6 @@ public final class DapperMapSettingsPage
 
         private String action = "";
         private String value = "";
-        private int sliderValue = 0;
 
         public Ev() {
         }
@@ -965,27 +530,15 @@ public final class DapperMapSettingsPage
                                     ev.value
                     )
                     .add()
-                    .append(
-                            new KeyedCodec<>(
-                                    "@SliderValue",
-                                    Codec.INTEGER,
-                                    true
-                            ),
-                            (ev, value) ->
-                                    ev.sliderValue = value,
-                            ev ->
-                                    ev.sliderValue
-                    )
-                    .add()
                     .build();
         }
     }
 
     private enum Kind {
         TOGGLE,
-        STEPPER,
+        HEADER,
         DROPDOWN,
-        SLIDER
+        ACTION
     }
 
     private static final class Row {

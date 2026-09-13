@@ -21,20 +21,14 @@ $C.@DecoratedContainer {
     Padding: (Horizontal: 14);
 
     Group #DapperMapHeader {
-      Anchor: (Height: 76);
+      Anchor: (Height: 60);
       Background: #0b1822(0.96);
-      LayoutMode: Top;
       Padding: (Horizontal: 16, Vertical: 10);
 
-      Label #DapperMapKicker {
-        Anchor: (Height: 20);
-        Text: "MINIMAP CONTROLS";
-        Style: (FontSize: 13, RenderBold: true, TextColor: #ffd66b, HorizontalAlignment: Center, VerticalAlignment: Center);
-      }
-
-      Label #DapperMapSettingsSummary {
-        Anchor: (Height: 32);
-        Style: (FontSize: 15, RenderBold: true, TextColor: #d9eefc, HorizontalAlignment: Center, VerticalAlignment: Center);
+      Label #DapperMapTagline {
+        Anchor: (Height: 40);
+        Text: "A lightweight and sophisticated Minimap mod";
+        Style: (FontSize: 15, TextColor: #d9eefc, HorizontalAlignment: Center, VerticalAlignment: Center);
       }
     }
 
@@ -51,21 +45,12 @@ $C.@DecoratedContainer {
 
     Group #DapperMapResetFooter {
       Anchor: (Height: 62);
-      LayoutMode: Left;
-      Padding: (Top: 10, Bottom: 8, Horizontal: 80);
-
-      Group #DapperMapMoveButtonSlot {
-        FlexWeight: 1;
-        Anchor: (Height: 40);
-      }
-
-      Group {
-        Anchor: (Width: 14);
-      }
+      LayoutMode: CenterMiddle;
+      Padding: (Top: 10, Bottom: 8);
 
       Group #DapperMapResetButtonSlot {
-        FlexWeight: 1;
-        Anchor: (Height: 40);
+        Anchor: (Width: 260, Height: 40);
+        LayoutMode: CenterMiddle;
       }
     }
   }
