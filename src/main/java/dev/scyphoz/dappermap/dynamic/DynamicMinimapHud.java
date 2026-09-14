@@ -19,8 +19,6 @@ public final class DynamicMinimapHud extends CustomUIHud {
     // only when markup/Anchor values are produced.
     private static final int HUD_MARGIN = 10;
     private static final int READOUT_GAP = 4;
-    private static final int READOUT_HEIGHT = 88;
-    private static final int SIDE_READOUT_WIDTH = 140;
     private static final int READOUT_PADDING_H = 8;
     private static final int READOUT_PADDING_V = 5;
     private static final int BRAND_HEIGHT = 12;
@@ -232,6 +230,27 @@ public final class DynamicMinimapHud extends CustomUIHud {
             this.rebuildPositionLayout();
             java.util.Arrays.fill(this.slotPath, null);
             java.util.Arrays.fill(this.slotVisible, false);
+        }
+    }
+
+    /**
+     * Updates which optional information components are present in the readout.
+     * The readout subtree is rebuilt only when visibility actually changes, so
+     * disabled rows disappear and the remaining rows reclaim their space.
+     */
+    public void setInfoVisibility(boolean showCompass, boolean showClock, boolean showBiome) {
+        if (this.settings.showCompass == showCompass
+                && this.settings.showClock == showClock
+                && this.settings.showBiome == showBiome) {
+            return;
+        }
+
+        this.settings.showCompass = showCompass;
+        this.settings.showClock = showClock;
+        this.settings.showBiome = showBiome;
+
+        if (this.built) {
+            this.rebuildPositionLayout();
         }
     }
 
@@ -577,7 +596,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
         int readoutLeft = this.readoutOriginX();
         int readoutTop = this.readoutOriginY();
         int readoutWidth = this.readoutWidth();
-        int readoutHeight = this.displaySize(READOUT_HEIGHT);
+        int readoutHeight = this.displaySize(this.readoutHeight());
 
         StringBuilder out = new StringBuilder(2300);
         out.append("Group #WayfinderMmReadout { Anchor: (Left: ").append(readoutLeft)
@@ -597,31 +616,80 @@ public final class DynamicMinimapHud extends CustomUIHud {
                 .append(this.displaySize(COORDS_HEIGHT)).append("); Background: ").append(this.settings.colours.hex(COORDS_BACKGROUND)).append("(0.98); LayoutMode: CenterMiddle; ")
                 .append("Label #WayfinderMmCoords { Style: LabelStyle(FontSize: ")
                 .append(this.displaySize(COORDS_FONT_SIZE))
-                .append(", RenderBold: true, TextColor: ").append(this.settings.colours.hex(COORDS_TEXT)).append(", HorizontalAlignment: Center, VerticalAlignment: Center); } } ")
+                .append(", RenderBold: true, TextColor: ").append(this.settings.colours.hex(COORDS_TEXT)).append(", HorizontalAlignment: Center, VerticalAlignment: Center); } } ");
 
-                .append("Group #WayfinderMmMetaBand { Anchor: (Height: ")
-                .append(this.displaySize(META_HEIGHT)).append("); LayoutMode: Left; Padding: (Top: ")
-                .append(this.displaySize(META_TOP_PADDING)).append("); ")
-                .append("Group #WayfinderMmCompassBox { FlexWeight: 1; Background: ").append(this.settings.colours.hex(COMPASS_BACKGROUND)).append("(0.9); LayoutMode: CenterMiddle; Padding: (Right: ")
-                .append(this.displaySize(META_INNER_PADDING)).append("); ")
-                .append("Label #WayfinderMmCompass { Style: LabelStyle(FontSize: ")
-                .append(this.displaySize(META_FONT_SIZE))
-                .append(", RenderBold: true, TextColor: ").append(this.settings.colours.hex(COMPASS_TEXT)).append(", HorizontalAlignment: Center, VerticalAlignment: Center); } } ")
-                .append("Group #WayfinderMmClockBox { FlexWeight: 1; Background: ").append(this.settings.colours.hex(CLOCK_BACKGROUND)).append("(0.9); LayoutMode: CenterMiddle; Padding: (Left: ")
-                .append(this.displaySize(META_INNER_PADDING)).append("); ")
-                .append("Label #WayfinderMmClock { Style: LabelStyle(FontSize: ")
-                .append(this.displaySize(META_FONT_SIZE))
-                .append(", RenderBold: true, TextColor: ").append(this.settings.colours.hex(CLOCK_TEXT)).append(", HorizontalAlignment: Center, VerticalAlignment: Center); } } ")
-                .append("} ")
+        if (this.settings.showCompass || this.settings.showClock) {
+            out.append("Group #WayfinderMmMetaBand { Anchor: (Height: ")
+                    .append(this.displaySize(META_HEIGHT)).append("); LayoutMode: Left; Padding: (Top: ")
+                    .append(this.displaySize(META_TOP_PADDING)).append("); ");
 
-                .append("Group #WayfinderMmBiomeBand { Anchor: (Height: ")
-                .append(this.displaySize(BIOME_HEIGHT)).append("); Background: ").append(this.settings.colours.hex(BIOME_BACKGROUND)).append("(0.92); LayoutMode: CenterMiddle; ")
-                .append("Label #WayfinderMmBiome { Style: LabelStyle(FontSize: ")
-                .append(this.displaySize(BIOME_FONT_SIZE))
-                .append(", RenderBold: true, TextColor: ").append(this.settings.colours.hex(BIOME_TEXT)).append(", HorizontalAlignment: Center, VerticalAlignment: Center); } } ")
-                .append("} ");
+            if (this.settings.showCompass) {
+                out.append("Group #WayfinderMmCompassBox { FlexWeight: 1; Background: ")
+                        .append(this.settings.colours.hex(COMPASS_BACKGROUND))
+                        .append("(0.9); LayoutMode: CenterMiddle; ");
 
+                if (this.settings.showClock) {
+                    out.append("Padding: (Right: ")
+                            .append(this.displaySize(META_INNER_PADDING))
+                            .append("); ");
+                }
+
+                out.append("Label #WayfinderMmCompass { Style: LabelStyle(FontSize: ")
+                        .append(this.displaySize(META_FONT_SIZE))
+                        .append(", RenderBold: true, TextColor: ")
+                        .append(this.settings.colours.hex(COMPASS_TEXT))
+                        .append(", HorizontalAlignment: Center, VerticalAlignment: Center); } } ");
+            }
+
+            if (this.settings.showClock) {
+                out.append("Group #WayfinderMmClockBox { FlexWeight: 1; Background: ")
+                        .append(this.settings.colours.hex(CLOCK_BACKGROUND))
+                        .append("(0.9); LayoutMode: CenterMiddle; ");
+
+                if (this.settings.showCompass) {
+                    out.append("Padding: (Left: ")
+                            .append(this.displaySize(META_INNER_PADDING))
+                            .append("); ");
+                }
+
+                out.append("Label #WayfinderMmClock { Style: LabelStyle(FontSize: ")
+                        .append(this.displaySize(META_FONT_SIZE))
+                        .append(", RenderBold: true, TextColor: ")
+                        .append(this.settings.colours.hex(CLOCK_TEXT))
+                        .append(", HorizontalAlignment: Center, VerticalAlignment: Center); } } ");
+            }
+
+            out.append("} ");
+        }
+
+        if (this.settings.showBiome) {
+            out.append("Group #WayfinderMmBiomeBand { Anchor: (Height: ")
+                    .append(this.displaySize(BIOME_HEIGHT)).append("); Background: ")
+                    .append(this.settings.colours.hex(BIOME_BACKGROUND))
+                    .append("(0.92); LayoutMode: CenterMiddle; ")
+                    .append("Label #WayfinderMmBiome { Style: LabelStyle(FontSize: ")
+                    .append(this.displaySize(BIOME_FONT_SIZE))
+                    .append(", RenderBold: true, TextColor: ")
+                    .append(this.settings.colours.hex(BIOME_TEXT))
+                    .append(", HorizontalAlignment: Center, VerticalAlignment: Center); } } ");
+        }
+
+        out.append("} ");
         return out.toString();
+    }
+
+    private int readoutHeight() {
+        int height = (READOUT_PADDING_V * 2) + BRAND_HEIGHT + COORDS_HEIGHT;
+
+        if (this.settings.showCompass || this.settings.showClock) {
+            height += META_HEIGHT;
+        }
+
+        if (this.settings.showBiome) {
+            height += BIOME_HEIGHT;
+        }
+
+        return height;
     }
 
     private void rebuildPositionLayout() {
@@ -640,7 +708,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
         if (this.infoPanelPosition == DynamicMinimapSetting.INFO_LEFT
                 || this.infoPanelPosition == DynamicMinimapSetting.INFO_RIGHT) {
             return this.displaySize(
-                    this.logicalUiSize + READOUT_GAP + SIDE_READOUT_WIDTH
+                    this.logicalUiSize + READOUT_GAP + this.logicalUiSize
             );
         }
 
@@ -654,13 +722,13 @@ public final class DynamicMinimapHud extends CustomUIHud {
         }
 
         return this.displaySize(
-                this.logicalUiSize + READOUT_GAP + READOUT_HEIGHT
+                this.logicalUiSize + READOUT_GAP + this.readoutHeight()
         );
     }
 
     private int mapOriginX() {
         if (this.infoPanelPosition == DynamicMinimapSetting.INFO_LEFT) {
-            return this.displaySize(SIDE_READOUT_WIDTH + READOUT_GAP);
+            return this.displaySize(this.logicalUiSize + READOUT_GAP);
         }
 
         return 0;
@@ -668,7 +736,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
 
     private int mapOriginY() {
         if (this.infoPanelPosition == DynamicMinimapSetting.INFO_ABOVE) {
-            return this.displaySize(READOUT_HEIGHT + READOUT_GAP);
+            return this.displaySize(this.readoutHeight() + READOUT_GAP);
         }
 
         return 0;
@@ -691,7 +759,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
                 || this.infoPanelPosition == DynamicMinimapSetting.INFO_RIGHT) {
             int logicalTop = Math.max(
                     0,
-                    (this.logicalUiSize - READOUT_HEIGHT) / 2
+                    (this.logicalUiSize - this.readoutHeight()) / 2
             );
             return this.displayCoordinate(logicalTop);
         }
@@ -700,19 +768,23 @@ public final class DynamicMinimapHud extends CustomUIHud {
     }
 
     private int readoutWidth() {
-        if (this.infoPanelPosition == DynamicMinimapSetting.INFO_LEFT
-                || this.infoPanelPosition == DynamicMinimapSetting.INFO_RIGHT) {
-            return this.displaySize(SIDE_READOUT_WIDTH);
-        }
-
         return this.displaySize(this.logicalUiSize);
     }
 
     private void writeStatus(UICommandBuilder builder) {
         builder.set("#WayfinderMmRoot #WayfinderMmReadout #WayfinderMmCoords.TextSpans", Message.raw(this.coordsText));
-        builder.set("#WayfinderMmRoot #WayfinderMmReadout #WayfinderMmCompass.TextSpans", Message.raw(this.compassText));
-        builder.set("#WayfinderMmRoot #WayfinderMmReadout #WayfinderMmClock.TextSpans", Message.raw(this.clockText));
-        builder.set("#WayfinderMmRoot #WayfinderMmReadout #WayfinderMmBiome.TextSpans", Message.raw(this.biomeText));
+
+        if (this.settings.showCompass) {
+            builder.set("#WayfinderMmRoot #WayfinderMmReadout #WayfinderMmCompass.TextSpans", Message.raw(this.compassText));
+        }
+
+        if (this.settings.showClock) {
+            builder.set("#WayfinderMmRoot #WayfinderMmReadout #WayfinderMmClock.TextSpans", Message.raw(this.clockText));
+        }
+
+        if (this.settings.showBiome) {
+            builder.set("#WayfinderMmRoot #WayfinderMmReadout #WayfinderMmBiome.TextSpans", Message.raw(this.biomeText));
+        }
     }
 
 

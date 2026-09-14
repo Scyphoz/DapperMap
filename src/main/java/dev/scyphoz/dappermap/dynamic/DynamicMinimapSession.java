@@ -58,6 +58,9 @@ public final class DynamicMinimapSession {
     private int builtInterfaceScale = -1;
     private int builtTextureResolution = -1;
     private int builtRotationMode = -1;
+    private boolean builtShowCompass;
+    private boolean builtShowClock;
+    private boolean builtShowBiome;
     private int lastMapRotationBucket = -1;
     private long lastRotationDeliveryMs = 0L;
     private long terrainGeneration = 0L;
@@ -223,6 +226,19 @@ public final class DynamicMinimapSession {
                         this.settings.hudPositionX,
                         this.settings.hudPositionY,
                         this.settings.infoPanelPosition
+                );
+            }
+
+            if (this.settings.showCompass != this.builtShowCompass
+                    || this.settings.showClock != this.builtShowClock
+                    || this.settings.showBiome != this.builtShowBiome) {
+                this.builtShowCompass = this.settings.showCompass;
+                this.builtShowClock = this.settings.showClock;
+                this.builtShowBiome = this.settings.showBiome;
+                this.hud.setInfoVisibility(
+                        this.settings.showCompass,
+                        this.settings.showClock,
+                        this.settings.showBiome
                 );
             }
 
