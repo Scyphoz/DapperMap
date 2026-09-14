@@ -9,28 +9,48 @@ public final class DynamicMinimapMarker {
     public final Color color;
     public final int size;
     public final Style style;
+    public final String assetPath;
+    public final boolean clampToEdge;
 
-    private DynamicMinimapMarker(double x, double z, Color color, int size, Style style) {
+    private DynamicMinimapMarker(
+            double x,
+            double z,
+            Color color,
+            int size,
+            Style style,
+            String assetPath,
+            boolean clampToEdge
+    ) {
         this.x = x;
         this.z = z;
         this.color = color;
         this.size = size;
         this.style = style;
+        this.assetPath = assetPath;
+        this.clampToEdge = clampToEdge;
     }
 
     public static DynamicMinimapMarker dot(double x, double z, Color color, int size) {
-        return new DynamicMinimapMarker(x, z, color, size, DynamicMinimapMarker.Style.DOT);
+        return new DynamicMinimapMarker(x, z, color, size, Style.DOT, null, false);
     }
 
     public static DynamicMinimapMarker death(double x, double z, int size) {
-        return new DynamicMinimapMarker(x, z, DEATH_COLOR, size, DynamicMinimapMarker.Style.DEATH);
+        return new DynamicMinimapMarker(x, z, DEATH_COLOR, size, Style.DEATH, null, false);
     }
 
-    public static enum Style {
-        DOT,
-        DEATH;
+    public static DynamicMinimapMarker betterMap(
+            double x,
+            double z,
+            String assetPath,
+            Color color,
+            int size
+    ) {
+        return new DynamicMinimapMarker(x, z, color, size, Style.BETTERMAP, assetPath, true);
+    }
 
-        private Style() {
-        }
+    public enum Style {
+        DOT,
+        DEATH,
+        BETTERMAP
     }
 }

@@ -16,8 +16,10 @@ import com.hypixel.hytale.server.core.universe.Universe;
 import com.hypixel.hytale.server.core.universe.world.World;
 import com.hypixel.hytale.server.core.universe.world.storage.EntityStore;
 import dev.scyphoz.dappermap.dynamic.DynamicMinimapMarker.Style;
+import dev.scyphoz.dappermap.integration.BetterMapIntegration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -78,6 +80,8 @@ public final class DynamicMinimapSession {
     private long lastMarkerMs = 0L;
     private MinimapColours renderedColours;
     private List<DynamicMinimapMarker> cachedMarkers = new ArrayList<>();
+    private List<DynamicMinimapMarker> cachedBetterMapMarkers = new ArrayList<>();
+    private long lastBetterMapScanMs = 0L;
     private long lastTerrainMs = 0L;
     private boolean bufferComplete = false;
     private long warmupUntilMs = 0L;
@@ -366,8 +370,15 @@ public final class DynamicMinimapSession {
     private void ensureHud() {
         if (this.hud != null
                 && this.hud.isShown()
-                && this.settings.shape == this.builtShape
                 && this.settings.textureResolution == this.builtTextureResolution) {
+            if (this.settings.shape != this.builtShape) {
+                this.builtShape = this.settings.shape;
+                this.hud.setShape(this.settings.shape);
+                // Shape affects edge-clamping of markers, so force a fresh marker
+                // projection immediately while keeping the HUD root mounted.
+                this.lastMarkerMs = 0L;
+            }
+
             if (this.settings.zoomBlocks != this.builtZoom) {
                 this.builtZoom = this.settings.zoomBlocks;
                 this.bufferCenterX = Double.NaN;
@@ -728,6 +739,25 @@ public final class DynamicMinimapSession {
             );
         }
 
+        if (this.settings.betterMapEnabled && BetterMapIntegration.isAvailable()) {
+            long now = System.currentTimeMillis();
+            if (now - this.lastBetterMapScanMs >= 750L) {
+                this.lastBetterMapScanMs = now;
+                Player player = store.getComponent(playerRef, Player.getComponentType());
+                List<DynamicMinimapMarker> betterMap = new ArrayList<>(BetterMapIntegration.getMarkers(player));
+                betterMap.sort(Comparator.comparingDouble(marker -> {
+                    double dx = marker.x - playerPosition.x();
+                    double dz = marker.z - playerPosition.z();
+                    return dx * dx + dz * dz;
+                }));
+                this.cachedBetterMapMarkers = betterMap;
+            }
+            markers.addAll(this.cachedBetterMapMarkers);
+        } else {
+            this.cachedBetterMapMarkers = new ArrayList<>();
+            this.lastBetterMapScanMs = 0L;
+        }
+
         this.cachedMarkers = markers;
     }
 
@@ -749,6 +779,8 @@ public final class DynamicMinimapSession {
         DynamicMinimapHud.Slot[] slots =
                 new DynamicMinimapHud.Slot[DynamicMinimapHud.MARKER_SLOTS];
         int slot = 0;
+        int panLeft = this.hud.panLeft();
+        int panTop = this.hud.panTop();
 
         for (DynamicMinimapMarker marker : this.cachedMarkers) {
             if (slot >= slots.length) {
@@ -772,24 +804,40 @@ public final class DynamicMinimapSession {
             double markerZ =
                     rotated[1] + (double)bufferPixels / 2.0D;
 
-            if (markerX < 0.0D
+            int size = Math.max(8, marker.size);
+
+            if (marker.clampToEdge) {
+                double[] clamped = this.clampMarkerToVisibleMap(
+                        markerX + panLeft,
+                        markerZ + panTop,
+                        size
+                );
+                markerX = clamped[0] - panLeft;
+                markerZ = clamped[1] - panTop;
+            } else if (markerX < 0.0D
                     || markerX > (double)bufferPixels
                     || markerZ < 0.0D
                     || markerZ > (double)bufferPixels) {
                 continue;
             }
 
-            String path = marker.style == Style.DEATH
-                    ? this.deathIcon()
-                    : this.colorIcon(
-                    marker.color.getRGB() & 0xFFFFFF
-            );
+            String path = switch (marker.style) {
+                case DEATH -> this.deathIcon();
+                case BETTERMAP -> BetterMapIntegration.resolveIconAsset(
+                        this.playerRef,
+                        marker.assetPath,
+                        marker.color,
+                        this.slug
+                );
+                case DOT -> marker.color == null
+                        ? null
+                        : this.colorIcon(marker.color.getRGB() & 0xFFFFFF);
+            };
 
-            if (path == null) {
+            if (path == null || path.isBlank()) {
                 continue;
             }
 
-            int size = Math.max(8, marker.size);
             int left = (int)Math.round(markerX) - size / 2;
             int top = (int)Math.round(markerZ) - size / 2;
 
@@ -803,6 +851,51 @@ public final class DynamicMinimapSession {
         }
 
         this.hud.setMarkers(slots);
+    }
+
+    /**
+     * Clamp an edge-tracked marker in visible minimap coordinates. Markers that
+     * are already inside remain untouched and therefore behave exactly like
+     * ordinary position markers once the player gets close enough.
+     */
+    private double[] clampMarkerToVisibleMap(double x, double z, int markerSize) {
+        double mapSize = this.settings.sizePixels;
+        double center = mapSize / 2.0D;
+        double inset = Math.max(3.0D, markerSize / 2.0D + 2.0D);
+        double dx = x - center;
+        double dz = z - center;
+
+        if (this.settings.isCircle()) {
+            double radius = Math.max(1.0D, center - inset);
+            double distance = Math.hypot(dx, dz);
+            if (distance <= radius || distance < 0.0001D) {
+                return new double[]{x, z};
+            }
+
+            double scale = radius / distance;
+            return new double[]{
+                    center + dx * scale,
+                    center + dz * scale
+            };
+        }
+
+        double halfExtent = Math.max(1.0D, center - inset);
+        if (Math.abs(dx) <= halfExtent && Math.abs(dz) <= halfExtent) {
+            return new double[]{x, z};
+        }
+
+        double scaleX = Math.abs(dx) < 0.0001D
+                ? Double.POSITIVE_INFINITY
+                : halfExtent / Math.abs(dx);
+        double scaleZ = Math.abs(dz) < 0.0001D
+                ? Double.POSITIVE_INFINITY
+                : halfExtent / Math.abs(dz);
+        double scale = Math.min(scaleX, scaleZ);
+
+        return new double[]{
+                center + dx * scale,
+                center + dz * scale
+        };
     }
 
     /**

@@ -81,6 +81,7 @@ public class MinimapSessionManager {
             session.settings().showClock = settings.showClock;
             session.settings().showCompass = settings.showCompass;
             session.settings().showBiome = settings.showBiome;
+            session.settings().betterMapEnabled = settings.betterMapEnabled;
         }
 
         this.save(playerUuid);

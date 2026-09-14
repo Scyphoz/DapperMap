@@ -57,7 +57,8 @@ public final class DynamicMinimapSettingsStore {
                                 + "  \"clock24Hour\": %s,\n"
                                 + "  \"showClock\": %s,\n"
                                 + "  \"showCompass\": %s,\n"
-                                + "  \"showBiome\": %s%s\n"
+                                + "  \"showBiome\": %s,\n"
+                                + "  \"betterMapEnabled\": %s%s\n"
                                 + "}\n").formatted(
                                 settings.enabled,
                                 settings.rotationMode,
@@ -81,6 +82,7 @@ public final class DynamicMinimapSettingsStore {
                                 settings.showClock,
                                 settings.showCompass,
                                 settings.showBiome,
+                                settings.betterMapEnabled,
                                 colourFields(settings.colours)
                         )
                 );
@@ -125,6 +127,7 @@ public final class DynamicMinimapSettingsStore {
                     Boolean showClock = extractBool(json, "showClock");
                     Boolean showCompass = extractBool(json, "showCompass");
                     Boolean showBiome = extractBool(json, "showBiome");
+                    Boolean betterMapEnabled = extractBool(json, "betterMapEnabled");
                     if (enabled != null) {
                         settings.enabled = enabled;
                     }
@@ -221,6 +224,10 @@ public final class DynamicMinimapSettingsStore {
 
                     if (showBiome != null) {
                         settings.showBiome = showBiome;
+                    }
+
+                    if (betterMapEnabled != null) {
+                        settings.betterMapEnabled = betterMapEnabled;
                     }
                 } catch (IOException var23) {
                 }

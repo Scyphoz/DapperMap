@@ -114,9 +114,38 @@ public final class DynamicMinimapHud extends CustomUIHud {
             DynamicAssetPublisher.deliver(this.ownerRef, this.selfPath, self);
         }
 
+        // MaskTexturePath is resolved from Hytale's common UI asset set, unlike
+        // ordinary AssetImage paths.  Publishing a previously unseen mask therefore
+        // requires RequestCommonAssetsRebuild.  Doing that while an InteractiveCustomUIPage
+        // (such as DapperMap's settings page) is open can cause the client to rebuild that
+        // page mid-update, producing malformed/discoloured controls.
+        //
+        // Pre-publish the *other* shape first without rebuilding, then publish the active
+        // shape with the single common-assets rebuild.  That rebuild registers both masks.
+        // Future circle <-> square changes can then reuse an already registered mask and
+        // DynamicAssetPublisher's per-player hash cache prevents another rebuild.
+        DynamicMinimapSetting alternateMaskSettings = this.settings.copy();
+        alternateMaskSettings.shape = this.settings.isCircle()
+                ? DynamicMinimapSetting.SHAPE_SQUARE
+                : DynamicMinimapSetting.SHAPE_CIRCLE;
+        alternateMaskSettings.normalize();
+
+        byte[] alternateMask = DynamicMinimapRenderer.renderShapeMask(alternateMaskSettings);
+        if (alternateMask != null) {
+            DynamicAssetPublisher.deliver(
+                    this.ownerRef,
+                    "UI/Custom/" + maskFileFor(alternateMaskSettings),
+                    alternateMask
+            );
+        }
+
         byte[] mask = DynamicMinimapRenderer.renderShapeMask(this.settings);
         if (mask != null) {
-            DynamicAssetPublisher.deliverWithRebuild(this.ownerRef, "UI/Custom/" + this.maskFile, mask);
+            DynamicAssetPublisher.deliverWithRebuild(
+                    this.ownerRef,
+                    "UI/Custom/" + this.maskFile,
+                    mask
+            );
         }
     }
 
@@ -150,6 +179,14 @@ public final class DynamicMinimapHud extends CustomUIHud {
     }
 
     /** left/top stay logical; conversion happens only when the Anchor is emitted. */
+    public int panLeft() {
+        return this.panLeft;
+    }
+
+    public int panTop() {
+        return this.panTop;
+    }
+
     public void pan(int left, int top) {
         if (this.built && this.terrainShown && (left != this.panLeft || top != this.panTop)) {
             this.panLeft = left;
@@ -181,6 +218,45 @@ public final class DynamicMinimapHud extends CustomUIHud {
             builder.set("#WayfinderMmRoot #WayfinderMmFrame.AssetPath", assetPath);
             this.update(false, builder);
         }
+    }
+
+    /**
+     * Switches between the circular and square minimap presentation in-place.
+     *
+     * Do not tear down/recreate the CustomUIHud here: doing so while an
+     * InteractiveCustomUIPage is open can corrupt that page's client-side UI tree.
+     * Both mask variants are pre-published by deliverStaticAssets(), so changing
+     * shape only needs to point the existing clip at the other mask and replace
+     * the frame image.
+     */
+    public void setShape(int shape) {
+        int normalized = shape == DynamicMinimapSetting.SHAPE_CIRCLE
+                ? DynamicMinimapSetting.SHAPE_CIRCLE
+                : DynamicMinimapSetting.SHAPE_SQUARE;
+
+        if (this.settings.shape == normalized) {
+            return;
+        }
+
+        this.settings.shape = normalized;
+        this.settings.normalize();
+        this.updateStaticAssetPaths();
+
+        // The frame is a normal dynamic AssetImage, so it can be delivered and
+        // swapped without rebuilding the common UI asset registry.
+        byte[] frame = DynamicMinimapRenderer.renderFrame(this.settings);
+        if (frame != null) {
+            DynamicAssetPublisher.deliver(this.ownerRef, this.framePath, frame);
+        }
+
+        if (!this.built) {
+            return;
+        }
+
+        UICommandBuilder builder = new UICommandBuilder();
+        builder.set("#WayfinderMmRoot #WayfinderMmClip.MaskTexturePath", this.maskFile);
+        builder.set("#WayfinderMmRoot #WayfinderMmFrame.AssetPath", this.framePath);
+        this.update(false, builder);
     }
 
     /** Slot coordinates and sizes are logical minimap values, converted here for display. */
@@ -578,11 +654,20 @@ public final class DynamicMinimapHud extends CustomUIHud {
      */
     private void updateStaticAssetPaths() {
         String shape = this.settings.isCircle() ? "circle" : "square";
-        String shapeId = shape + "-r" + this.settings.textureResolution
+        String frameId = shape + "-r" + this.settings.textureResolution
                 + "-nautical" + (this.settings.showBorder ? "-b" : "");
 
-        this.maskFile = "DapperMap-" + this.slug + "-" + shapeId + "-mask.png";
-        this.framePath = "UI/DapperMap/frame-" + this.slug + "-" + shapeId + "-" + this.settings.colours.frameKey() + ".png";
+        // The clip mask depends only on shape + texture resolution.  In particular it
+        // does NOT depend on showBorder, so keeping the border flag in the mask filename
+        // caused needless new common assets (and common-assets rebuilds).
+        this.maskFile = maskFileFor(this.settings);
+        this.framePath = "UI/DapperMap/frame-" + this.slug + "-" + frameId + "-" + this.settings.colours.frameKey() + ".png";
+    }
+
+    private String maskFileFor(DynamicMinimapSetting maskSettings) {
+        String shape = maskSettings.isCircle() ? "circle" : "square";
+        return "DapperMap-" + this.slug + "-" + shape
+                + "-r" + maskSettings.textureResolution + "-mask.png";
     }
 
     /**

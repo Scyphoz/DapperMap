@@ -1,7 +1,7 @@
 {
     "Group": "Scyphoz",
     "Name": "DapperMap",
-    "Version": "0.2.0",
+    "Version": "1.1.0",
     "Description": "A lightweight and sophisticated minimap mod for Hytale",
     "Authors": [
         {
@@ -15,7 +15,7 @@
         "Hytale:AssetModule": "*"
     },
     "OptionalDependencies": {
-        
+        "dev.ninesliced:BetterMap": "*"
     },
     "DisabledByDefault": false,
     "Main": "dev.scyphoz.dappermap.DapperMap",

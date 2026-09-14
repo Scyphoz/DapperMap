@@ -17,6 +17,7 @@ import com.hypixel.hytale.server.core.universe.PlayerRef;
 import com.hypixel.hytale.server.core.universe.world.storage.EntityStore;
 import dev.scyphoz.dappermap.config.MinimapConfig;
 import dev.scyphoz.dappermap.dynamic.DynamicMinimapSetting;
+import dev.scyphoz.dappermap.integration.BetterMapIntegration;
 import dev.scyphoz.dappermap.service.MinimapSessionManager;
 
 import java.awt.Color;
@@ -326,11 +327,17 @@ public final class DapperMapSettingsPage
             case "clock_format" -> "Choose a 12-hour or 24-hour clock.";
             case "compass" -> "Show the direction you are facing.";
             case "biome" -> "Show the name of the biome you are in.";
+            case "bettermap" -> BetterMapIntegration.isAvailable()
+                    ? "Show BetterMap waypoints on the minimap and around its edge."
+                    : "BetterMap is not installed or could not be detected.";
             default -> "";
         };
     }
 
     private static String disabledValue(String id, DynamicMinimapSetting settings) {
+        if ("bettermap".equals(id) && !BetterMapIntegration.isAvailable()) {
+            return "Not detected";
+        }
         return switch (id) {
             case "zoom" -> settings.zoomBlocks + " blocks";
             case "size" -> settings.sizePixels + " px";
@@ -347,6 +354,7 @@ public final class DapperMapSettingsPage
 
     private static boolean isDropdownDisabled(String id, DynamicMinimapSetting settings) {
         return !settings.enabled
+                || ("bettermap".equals(id) && !BetterMapIntegration.isAvailable())
                 || (("height".equals(id) || "vrange".equals(id)) && !settings.showEntities)
                 || ("vrange".equals(id) && !settings.limitMobHeight)
                 || ("clock_format".equals(id) && !settings.showClock);
@@ -374,6 +382,7 @@ public final class DapperMapSettingsPage
             case "clock_format" -> settings.clock24Hour = Boolean.parseBoolean(value);
             case "compass" -> settings.showCompass = Boolean.parseBoolean(value);
             case "biome" -> settings.showBiome = Boolean.parseBoolean(value);
+            case "bettermap" -> settings.betterMapEnabled = Boolean.parseBoolean(value);
         }
         settings.normalize();
     }
@@ -409,7 +418,7 @@ public final class DapperMapSettingsPage
                 entries.add(entry("24-hour", "true"));
                 entries.add(entry("12-hour", "false"));
             }
-            case "players", "entities", "death", "height", "clock", "compass", "biome" -> {
+            case "players", "entities", "death", "height", "clock", "compass", "biome", "bettermap" -> {
                 entries.add(entry("Enabled", "true"));
                 entries.add(entry("Disabled", "false"));
             }
@@ -455,6 +464,7 @@ public final class DapperMapSettingsPage
             case "clock_format" -> Boolean.toString(settings.clock24Hour);
             case "compass" -> Boolean.toString(settings.showCompass);
             case "biome" -> Boolean.toString(settings.showBiome);
+            case "bettermap" -> Boolean.toString(settings.betterMapEnabled);
             default -> throw new IllegalArgumentException("Unknown dropdown: " + id);
         };
     }
@@ -503,7 +513,9 @@ public final class DapperMapSettingsPage
                 new Row("clock", "Hytale World Clock", Kind.DROPDOWN),
                 new Row("clock_format", "Clock Format", Kind.DROPDOWN),
                 new Row("compass", "Compass Readout", Kind.DROPDOWN),
-                new Row("biome", "Biome Readout", Kind.DROPDOWN)
+                new Row("biome", "Biome Readout", Kind.DROPDOWN),
+                new Row("section_4", "INTEGRATIONS", Kind.HEADER),
+                new Row("bettermap", "BetterMap", Kind.DROPDOWN)
         };
     }
 

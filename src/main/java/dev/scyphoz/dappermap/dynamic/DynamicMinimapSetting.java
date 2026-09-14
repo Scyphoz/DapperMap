@@ -59,6 +59,8 @@ public final class DynamicMinimapSetting {
     public boolean showClock = true;
     public boolean showCompass = true;
     public boolean showBiome = true;
+    /** Show BetterMap waypoints on the minimap when BetterMap is installed. */
+    public boolean betterMapEnabled = true;
     public static final int UPDATE_VERY_FAST = 0;
     public static final int UPDATE_FAST = 1;
     public static final int UPDATE_NORMAL = 2;
@@ -104,6 +106,7 @@ public final class DynamicMinimapSetting {
         copy.showClock = this.showClock;
         copy.showCompass = this.showCompass;
         copy.showBiome = this.showBiome;
+        copy.betterMapEnabled = this.betterMapEnabled;
         return copy;
     }
 
