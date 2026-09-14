@@ -8,12 +8,8 @@ import java.util.Locale;
 public final class MinimapColours {
     public enum Key {
         EDGE("edge", "Frame", "Outside Edge", "The outer rim and large frame ticks.", 0xe0ae52),
-        EDGE_DETAIL("edge-detail", "Frame", "Inner Edge", "The darker inner rim of the frame.", 0x7e5d2f),
-        EDGE_HIGHLIGHT("edge-highlight", "Frame", "Edge Highlight", "The fine highlight inside the frame.", 0x97d7eb),
         TICKS("ticks", "Frame", "Small Frame Ticks", "The small marks around the frame.", 0xced6e2),
         CARDINALS("cardinals", "Frame", "Compass Letters", "The N, E, S and W letters and north pointer.", 0xffdc50),
-        FRAME_SHADOW("frame-shadow", "Frame", "Frame Shadow", "The shadow around the frame.", 0x03080c),
-        MAP_BACKGROUND("map-background", "Frame", "Map Background", "The background beneath the map image.", 0x0a1218),
         PANEL("panel", "Panel", "Panel Background", "The background around the information rows.", 0x071016),
         COORDS_BACKGROUND("coords-background", "Panel", "Coordinates Background", "The background behind your coordinates.", 0x102232),
         COMPASS_BACKGROUND("compass-background", "Panel", "Direction Background", "The background behind your facing direction.", 0x132733),
@@ -30,8 +26,7 @@ public final class MinimapColours {
         HOSTILE_ACTIVE("hostile-active", "Markers", "Attacking Creatures", "Hostile creatures targeting you.", 0xdc2828),
         HOSTILE("hostile", "Markers", "Hostile Creatures", "Hostile creatures not targeting you.", 0xff8c00),
         NEUTRAL("neutral", "Markers", "Neutral Creatures", "Neutral or retreating creatures.", 0xe6c828),
-        FRIENDLY("friendly", "Markers", "Friendly Creatures", "Creatures friendly towards you.", 0x3cd25a),
-        MARKER_OUTLINE("marker-outline", "Markers", "Marker Outline", "The outline around arrows, dots and crosses.", 0x000000);
+        FRIENDLY("friendly", "Markers", "Friendly Creatures", "Creatures friendly towards you.", 0x3cd25a);
         public final String id, group, label, description;
         public final int defaultRgb;
         Key(String id, String group, String label, String description, int defaultRgb) {
@@ -60,11 +55,11 @@ public final class MinimapColours {
     public MinimapColours reset(Key key) { return with(key, key.defaultRgb); }
     public String frameKey() {
         StringBuilder out = new StringBuilder();
-        for (Key key : new Key[]{Key.EDGE, Key.EDGE_DETAIL, Key.EDGE_HIGHLIGHT, Key.TICKS, Key.CARDINALS, Key.FRAME_SHADOW})
+        for (Key key : new Key[]{Key.EDGE, Key.TICKS, Key.CARDINALS})
             out.append(hex(key).substring(1));
         return out.toString();
     }
-    public String arrowKey() { return hex(Key.SELF).substring(1) + hex(Key.MARKER_OUTLINE).substring(1); }
+    public String arrowKey() { return hex(Key.SELF).substring(1); }
     /** Accept #RRGGBB, RRGGBB, or three decimal channels separated by spaces/commas. */
     public static int parse(String input) {
         if (input == null) throw new IllegalArgumentException("Missing colour");

@@ -61,26 +61,16 @@ $C.@DecoratedContainer {
         LayoutMode: CenterMiddle;
 
         Group #PreviewShadow {
-          Anchor: (Width: 278, Height: 278);
+          Anchor: (Width: 264, Height: 264);
           Background: #03080c;
-          Padding: (Full: 7);
+          Padding: (Full: 3);
 
           Group #PreviewOuterEdge {
             Anchor: (Full: 0);
             Background: #e0ae52;
-            Padding: (Full: 6);
+            Padding: (Full: 3);
 
-            Group #PreviewInnerEdge {
-              Anchor: (Full: 0);
-              Background: #7e5d2f;
-              Padding: (Full: 5);
-
-              Group #PreviewHighlight {
-                Anchor: (Full: 0);
-                Background: #97d7eb;
-                Padding: (Full: 3);
-
-                Group #PreviewMap {
+            Group #PreviewMap {
                   Anchor: (Full: 0);
                   Background: #0a1218;
 
@@ -121,8 +111,6 @@ $C.@DecoratedContainer {
 
                   Group #PreviewFriendlyOutline { Anchor: (Left: 91, Top: 142, Width: 16, Height: 16); Background: #000000; Padding: (Full: 3); }
                   Group #PreviewFriendly { Anchor: (Left: 94, Top: 145, Width: 10, Height: 10); Background: #3cd25a; }
-                }
-              }
             }
           }
         }
@@ -220,6 +208,10 @@ $C.@DecoratedContainer {
     Label #ColourChanges {
       Anchor: (Height: 24);
       Style: (FontSize: 12, TextColor: #9ddcff, HorizontalAlignment: Center, VerticalAlignment: Center);
+    }
+
+    Group {
+      FlexWeight: 1;
     }
 
     Group {

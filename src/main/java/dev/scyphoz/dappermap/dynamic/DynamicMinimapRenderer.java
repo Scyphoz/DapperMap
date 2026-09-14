@@ -24,6 +24,11 @@ import java.util.concurrent.ConcurrentHashMap;
 import javax.imageio.ImageIO;
 
 public final class DynamicMinimapRenderer {
+    // Fixed visual colours that are intentionally not part of the player palette.
+    private static final Color FIXED_MAP_BACKGROUND = new Color(0x0A1218);
+    private static final Color FIXED_FRAME_SHADOW = new Color(0x03080C);
+    private static final Color FIXED_MARKER_OUTLINE = new Color(0x000000);
+
     private static final int CHUNK_SIZE = 32;
     /**
      * Static frame artwork is authored in this logical coordinate space and
@@ -83,7 +88,7 @@ public final class DynamicMinimapRenderer {
         double originZ = bufferOriginWorld(centerZ, settings);
         BufferedImage terrain = new BufferedImage(textureBuffer, textureBuffer, 2);
         Graphics2D graphics = terrain.createGraphics();
-        graphics.setColor(settings.colours.awt(MAP_BACKGROUND, 235));
+        graphics.setColor(withAlpha(FIXED_MAP_BACKGROUND, 235));
         graphics.fillRect(0, 0, textureBuffer, textureBuffer);
         int present = 0;
         int total = 0;
@@ -272,7 +277,7 @@ public final class DynamicMinimapRenderer {
         graphics.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
         int center = 16;
         int radius = 12;
-        graphics.setColor(colours.awt(MARKER_OUTLINE, 200));
+        graphics.setColor(withAlpha(FIXED_MARKER_OUTLINE, 200));
         graphics.fillOval(center - radius - 2, center - radius - 2, (radius + 2) * 2, (radius + 2) * 2);
         graphics.setColor(new Color(-16777216 | rgb, true));
         graphics.fillOval(center - radius, center - radius, radius * 2, radius * 2);
@@ -288,7 +293,7 @@ public final class DynamicMinimapRenderer {
         graphics.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
         int inset = 6;
         graphics.setStroke(new BasicStroke(6.0F, 1, 1));
-        graphics.setColor(colours.awt(MARKER_OUTLINE, 220));
+        graphics.setColor(withAlpha(FIXED_MARKER_OUTLINE, 220));
         graphics.drawLine(inset, inset, 32 - inset, 32 - inset);
         graphics.drawLine(inset, 32 - inset, 32 - inset, inset);
         graphics.setStroke(new BasicStroke(3.0F, 1, 1));
@@ -320,7 +325,7 @@ public final class DynamicMinimapRenderer {
 
         graphics.setColor(colours.awt(MinimapColours.Key.SELF, 255));
         graphics.fill(arrow);
-        graphics.setColor(colours.awt(MARKER_OUTLINE, 220));
+        graphics.setColor(withAlpha(FIXED_MARKER_OUTLINE, 220));
         graphics.setStroke(new BasicStroke(1.5F));
         graphics.draw(arrow);
         graphics.setTransform(previous);
@@ -388,7 +393,7 @@ public final class DynamicMinimapRenderer {
             int height = source.getHeight();
             BufferedImage rotated = new BufferedImage(width, height, 2);
             Graphics2D graphics = rotated.createGraphics();
-            graphics.setColor(colours.awt(MAP_BACKGROUND, 235));
+            graphics.setColor(withAlpha(FIXED_MAP_BACKGROUND, 235));
             graphics.fillRect(0, 0, width, height);
             graphics.setRenderingHint(
                     RenderingHints.KEY_INTERPOLATION,
@@ -439,20 +444,12 @@ public final class DynamicMinimapRenderer {
     private static void drawNauticalCircleFrame(Graphics2D graphics, int size, MinimapColours colours) {
         int center = size / 2;
         int outer = size - 5;
-        int middle = size - 17;
-        int inner = size - 29;
         graphics.setStroke(new BasicStroke(5.0F));
-        graphics.setColor(colours.awt(FRAME_SHADOW, 190));
+        graphics.setColor(withAlpha(FIXED_FRAME_SHADOW, 190));
         graphics.draw(new Ellipse2D.Double((double)2.0F, (double)2.0F, (double)outer, (double)outer));
         graphics.setStroke(new BasicStroke(2.4F));
         graphics.setColor(colours.awt(EDGE, 235));
         graphics.draw(new Ellipse2D.Double((double)3.0F, (double)3.0F, (double)(size - 7), (double)(size - 7)));
-        graphics.setStroke(new BasicStroke(1.2F));
-        graphics.setColor(colours.awt(EDGE_DETAIL, 220));
-        graphics.draw(new Ellipse2D.Double((double)10.0F, (double)10.0F, (double)middle, (double)middle));
-        graphics.setColor(colours.awt(EDGE_HIGHLIGHT, 105));
-        graphics.draw(new Ellipse2D.Double((double)16.0F, (double)16.0F, (double)inner, (double)inner));
-
         for(int i = 0; i < 64; ++i) {
             boolean cardinal = i % 16 == 0;
             boolean ordinal = i % 8 == 0;
@@ -468,16 +465,11 @@ public final class DynamicMinimapRenderer {
 
     private static void drawNauticalSquareFrame(Graphics2D graphics, int size, MinimapColours colours) {
         graphics.setStroke(new BasicStroke(4.0F));
-        graphics.setColor(colours.awt(FRAME_SHADOW, 190));
+        graphics.setColor(withAlpha(FIXED_FRAME_SHADOW, 190));
         graphics.drawRect(2, 2, size - 5, size - 5);
         graphics.setStroke(new BasicStroke(2.0F));
         graphics.setColor(colours.awt(EDGE, 235));
         graphics.drawRect(4, 4, size - 9, size - 9);
-        graphics.setStroke(new BasicStroke(1.0F));
-        graphics.setColor(colours.awt(EDGE_DETAIL, 220));
-        graphics.drawRect(11, 11, size - 23, size - 23);
-        graphics.setColor(colours.awt(EDGE_HIGHLIGHT, 105));
-        graphics.drawRect(17, 17, size - 35, size - 35);
         int start = 24;
         int end = size - 24;
 
@@ -516,7 +508,7 @@ public final class DynamicMinimapRenderer {
         needle.lineTo((double)center, (double)(top + 11));
         needle.lineTo((double)(center - 6), (double)(top + 16));
         needle.closePath();
-        graphics.setColor(colours.awt(FRAME_SHADOW, 190));
+        graphics.setColor(withAlpha(FIXED_FRAME_SHADOW, 190));
         graphics.translate(1, 1);
         graphics.fill(needle);
         graphics.translate(-1, -1);
@@ -529,10 +521,6 @@ public final class DynamicMinimapRenderer {
         graphics.setColor(colours.awt(EDGE, 235));
         graphics.drawLine(x, y, x + xDir * 20, y);
         graphics.drawLine(x, y, x, y + yDir * 20);
-        graphics.setStroke(new BasicStroke(1.0F, 1, 1));
-        graphics.setColor(colours.awt(EDGE_HIGHLIGHT, 105));
-        graphics.drawLine(x + xDir * 5, y + yDir * 5, x + xDir * 15, y + yDir * 5);
-        graphics.drawLine(x + xDir * 5, y + yDir * 5, x + xDir * 5, y + yDir * 15);
     }
 
     /**
@@ -705,4 +693,8 @@ public final class DynamicMinimapRenderer {
             return this.total > 0 && this.present >= this.total;
         }
     }
+    private static Color withAlpha(Color colour, int alpha) {
+        return new Color(colour.getRed(), colour.getGreen(), colour.getBlue(), alpha);
+    }
+
 }

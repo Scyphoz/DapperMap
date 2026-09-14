@@ -228,15 +228,6 @@ public final class DynamicMinimapSession {
 
             long now = System.currentTimeMillis();
             if (!this.settings.colours.equals(this.renderedColours)) {
-                if (this.renderedColours != null && this.renderedColours.rgb(MinimapColours.Key.MAP_BACKGROUND)
-                        != this.settings.colours.rgb(MinimapColours.Key.MAP_BACKGROUND)) {
-                    this.bufferCenterX = Double.NaN;
-                    this.bufferCenterZ = Double.NaN;
-                    this.northUpTerrainPng = null;
-                    this.lastTerrainMs = 0L;
-                    ++this.terrainGeneration;
-                    this.rotationSequence.incrementAndGet();
-                }
                 this.renderedColours = this.settings.colours;
                 java.util.Arrays.fill(this.selfArrowCache, null);
                 this.iconCache.clear();
@@ -496,7 +487,6 @@ public final class DynamicMinimapSession {
             world.execute(() -> {
                 if (!this.running
                         || renderHud != this.hud
-                        || renderSettings.colours.rgb(MinimapColours.Key.MAP_BACKGROUND) != this.settings.colours.rgb(MinimapColours.Key.MAP_BACKGROUND)
                         || sequence <= this.deliveredSequence) {
                     return;
                 }
@@ -835,7 +825,7 @@ public final class DynamicMinimapSession {
                 return null;
             } else {
                 String var10000 = this.slug;
-                path = "UI/DapperMap/mk-" + var10000 + "-" + String.format("%06X", rgb) + "-" + this.settings.colours.hex(MinimapColours.Key.MARKER_OUTLINE).substring(1) + ".png";
+                path = "UI/DapperMap/mk-" + var10000 + "-" + String.format("%06X", rgb) + ".png";
                 DynamicAssetPublisher.deliver(this.playerRef, path, png);
                 this.iconCache.put(rgb, path);
                 return path;
@@ -851,7 +841,7 @@ public final class DynamicMinimapSession {
             if (png == null) {
                 return null;
             } else {
-                this.deathIconPath = "UI/DapperMap/death-" + this.slug + "-" + this.settings.colours.hex(MinimapColours.Key.DEATH).substring(1) + this.settings.colours.hex(MinimapColours.Key.MARKER_OUTLINE).substring(1) + ".png";
+                this.deathIconPath = "UI/DapperMap/death-" + this.slug + "-" + this.settings.colours.hex(MinimapColours.Key.DEATH).substring(1) + ".png";
                 DynamicAssetPublisher.deliver(this.playerRef, this.deathIconPath, png);
                 return this.deathIconPath;
             }

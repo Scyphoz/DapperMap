@@ -499,7 +499,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
                 .append(", Width: ").append(displayUiSize)
                 .append(", Height: ").append(displayUiSize).append("); ")
                 .append("MaskTexturePath: \"").append(this.maskFile).append("\"; ")
-                .append("Background: ").append(this.settings.colours.hex(MAP_BACKGROUND)).append("(0.92); ");
+                .append("Background: ").append("#0A1218").append("(0.92); ");
 
         out.append("AssetImage #WayfinderMmTerrain { ")
                 .append("Anchor: (Left: ").append(this.displayCoordinate(this.panLeft))

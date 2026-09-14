@@ -63,6 +63,7 @@ public final class DapperMapColoursPage extends InteractiveCustomUIPage<DapperMa
     public void build(Ref<EntityStore> ref, UICommandBuilder ui, UIEventBuilder events, Store<EntityStore> store) {
         ui.append("Pages/DapperMapColours.ui");
         ui.set("#ColourTarget.Entries", Arrays.stream(Key.values())
+                .filter(DapperMapColoursPage::isEditorVisible)
                 .map(key -> new DropdownEntryInfo(
                         LocalizableString.fromString(key.group + " / " + key.label),
                         key.id
@@ -87,16 +88,31 @@ public final class DapperMapColoursPage extends InteractiveCustomUIPage<DapperMa
 
         button(ui, events, "#ColourResetSlot", "RESET THIS COLOUR", "reset_one");
         button(ui, events, "#ColourResetAllSlot", "RESET ALL COLOURS", "reset_all");
-        button(ui, events, "#ColourSaveSlot", "SAVE COLOURS", "save");
-        button(ui, events, "#ColourCancelSlot", "CANCEL", "cancel");
+        button(ui, events, "#ColourSaveSlot", "SAVE COLOURS", "save", new java.awt.Color(0xFFD66B));
+        button(ui, events, "#ColourCancelSlot", "CANCEL", "cancel", new java.awt.Color(0xFFD66B));
 
         refresh(ui, true);
         startPulse();
     }
 
     private static void button(UICommandBuilder ui, UIEventBuilder events, String slot, String text, String action) {
+        button(ui, events, slot, text, action, null);
+    }
+
+    private static void button(
+            UICommandBuilder ui,
+            UIEventBuilder events,
+            String slot,
+            String text,
+            String action,
+            java.awt.Color textColour
+    ) {
         ui.append(slot, "Pages/BasicTextButton.ui");
-        ui.set(slot + "[0].TextSpans", Message.raw(text));
+        Message label = Message.raw(text);
+        if (textColour != null) {
+            label = label.color(textColour);
+        }
+        ui.set(slot + "[0].TextSpans", label);
         events.addEventBinding(
                 CustomUIEventBindingType.Activating,
                 slot + "[0]",
@@ -126,11 +142,9 @@ public final class DapperMapColoursPage extends InteractiveCustomUIPage<DapperMa
 
     private void updatePreviewColours(UICommandBuilder ui) {
         // Frame / map.
-        ui.set("#PreviewShadow.Background", draft.hex(Key.FRAME_SHADOW));
+        ui.set("#PreviewShadow.Background", "#03080C");
         ui.set("#PreviewOuterEdge.Background", draft.hex(Key.EDGE));
-        ui.set("#PreviewInnerEdge.Background", draft.hex(Key.EDGE_DETAIL));
-        ui.set("#PreviewHighlight.Background", draft.hex(Key.EDGE_HIGHLIGHT));
-        ui.set("#PreviewMap.Background", draft.hex(Key.MAP_BACKGROUND));
+        ui.set("#PreviewMap.Background", "#0A1218");
 
         for (String selector : new String[]{
                 "#PreviewTickTop", "#PreviewTickRight", "#PreviewTickBottom", "#PreviewTickLeft"
@@ -157,13 +171,13 @@ public final class DapperMapColoursPage extends InteractiveCustomUIPage<DapperMa
         ui.set("#PreviewBiomeText.TextSpans", Message.raw("Emerald Grove").color(new java.awt.Color(draft.rgb(Key.BIOME_TEXT))));
 
         // Marker examples. The common outline is represented by the marker backing plates.
-        ui.set("#PreviewSelfOutline.Background", draft.hex(Key.MARKER_OUTLINE));
-        ui.set("#PreviewPlayerOutline.Background", draft.hex(Key.MARKER_OUTLINE));
-        ui.set("#PreviewDeathOutline.TextSpans", Message.raw("✕").color(new java.awt.Color(draft.rgb(Key.MARKER_OUTLINE))));
-        ui.set("#PreviewHostileActiveOutline.Background", draft.hex(Key.MARKER_OUTLINE));
-        ui.set("#PreviewHostileOutline.Background", draft.hex(Key.MARKER_OUTLINE));
-        ui.set("#PreviewNeutralOutline.Background", draft.hex(Key.MARKER_OUTLINE));
-        ui.set("#PreviewFriendlyOutline.Background", draft.hex(Key.MARKER_OUTLINE));
+        ui.set("#PreviewSelfOutline.Background", "#000000");
+        ui.set("#PreviewPlayerOutline.Background", "#000000");
+        ui.set("#PreviewDeathOutline.TextSpans", Message.raw("✕").color(new java.awt.Color(0x000000)));
+        ui.set("#PreviewHostileActiveOutline.Background", "#000000");
+        ui.set("#PreviewHostileOutline.Background", "#000000");
+        ui.set("#PreviewNeutralOutline.Background", "#000000");
+        ui.set("#PreviewFriendlyOutline.Background", "#000000");
 
         ui.set("#PreviewSelf.TextSpans", Message.raw("▲").color(new java.awt.Color(draft.rgb(Key.SELF))));
         ui.set("#PreviewPlayer.Background", draft.hex(Key.PLAYERS));
@@ -237,8 +251,6 @@ public final class DapperMapColoursPage extends InteractiveCustomUIPage<DapperMa
         String colour = hex(rgb);
         switch (key) {
             case EDGE -> ui.set("#PreviewOuterEdge.Background", colour);
-            case EDGE_DETAIL -> ui.set("#PreviewInnerEdge.Background", colour);
-            case EDGE_HIGHLIGHT -> ui.set("#PreviewHighlight.Background", colour);
             case TICKS -> {
                 ui.set("#PreviewTickTop.Background", colour);
                 ui.set("#PreviewTickRight.Background", colour);
@@ -251,8 +263,6 @@ public final class DapperMapColoursPage extends InteractiveCustomUIPage<DapperMa
                 ui.set("#PreviewSouth.TextSpans", coloured("S", rgb));
                 ui.set("#PreviewWest.TextSpans", coloured("W", rgb));
             }
-            case FRAME_SHADOW -> ui.set("#PreviewShadow.Background", colour);
-            case MAP_BACKGROUND -> ui.set("#PreviewMap.Background", colour);
             case PANEL -> ui.set("#PreviewPanel.Background", colour);
             case COORDS_BACKGROUND -> ui.set("#PreviewCoords.Background", colour);
             case COMPASS_BACKGROUND -> ui.set("#PreviewCompass.Background", colour);
@@ -270,16 +280,10 @@ public final class DapperMapColoursPage extends InteractiveCustomUIPage<DapperMa
             case HOSTILE -> ui.set("#PreviewHostile.Background", colour);
             case NEUTRAL -> ui.set("#PreviewNeutral.Background", colour);
             case FRIENDLY -> ui.set("#PreviewFriendly.Background", colour);
-            case MARKER_OUTLINE -> {
-                ui.set("#PreviewSelfOutline.Background", colour);
-                ui.set("#PreviewPlayerOutline.Background", colour);
-                ui.set("#PreviewDeathOutline.TextSpans", coloured("✕", rgb));
-                ui.set("#PreviewHostileActiveOutline.Background", colour);
-                ui.set("#PreviewHostileOutline.Background", colour);
-                ui.set("#PreviewNeutralOutline.Background", colour);
-                ui.set("#PreviewFriendlyOutline.Background", colour);
-            }
         }
+    }
+    private static boolean isEditorVisible(Key key) {
+        return true;
     }
 
     @Override
@@ -314,15 +318,19 @@ public final class DapperMapColoursPage extends InteractiveCustomUIPage<DapperMa
 
         if ("target".equals(action)) {
             Key key = Key.find(event.target);
-            if (key == null) return;
+            if (key == null || !isEditorVisible(key)) return;
             selected = key;
             pulseBright = true;
         } else if ("reset_one".equals(action)) {
             draft = draft.reset(selected);
             edited.add(selected);
         } else if ("reset_all".equals(action)) {
-            draft = new MinimapColours();
-            edited.addAll(EnumSet.allOf(Key.class));
+            for (Key key : Key.values()) {
+                if (isEditorVisible(key)) {
+                    draft = draft.reset(key);
+                    edited.add(key);
+                }
+            }
         } else if ("colour".equals(action)) {
             if (event.colour == null) return;
 
