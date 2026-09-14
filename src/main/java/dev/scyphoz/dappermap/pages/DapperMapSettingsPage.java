@@ -336,7 +336,9 @@ public final class DapperMapSettingsPage
     }
 
     private static boolean isDropdownDisabled(String id, DynamicMinimapSetting settings) {
-        return !settings.enabled || ("vrange".equals(id) && !settings.limitMobHeight)
+        return !settings.enabled
+                || (("height".equals(id) || "vrange".equals(id)) && !settings.showEntities)
+                || ("vrange".equals(id) && !settings.limitMobHeight)
                 || ("clock_format".equals(id) && !settings.showClock);
     }
 

@@ -105,10 +105,15 @@ public final class MoveMinimapPage
     private void bindPositionSliders(UICommandBuilder builder, UIEventBuilder events) {
         String[] labels = {"Horizontal Position", "Vertical Position"};
         String[] actions = {"slider_x", "slider_y"};
+        String[] descriptions = {
+                "Move the minimap left or right on your screen.",
+                "Move the minimap up or down on your screen."
+        };
         for (int index = 0; index < labels.length; index++) {
             String row = "#MoveFineTuneList[" + index + "]";
             builder.append("#MoveFineTuneList", "Pages/DapperMapSliderRow.ui");
             builder.set(row + " #RowLabel.Text", labels[index]);
+            builder.set(row + " #RowDescription.Text", descriptions[index]);
             events.addEventBinding(CustomUIEventBindingType.ValueChanged, row + " #ValueSlider",
                     EventData.of("Action", actions[index])
                             .append("@SliderValue", row + " #ValueSlider.Value"), false);
@@ -476,14 +481,14 @@ public final class MoveMinimapPage
                 : "Square";
 
         String panel = switch (this.previewPanelPosition) {
-            case DynamicMinimapSetting.INFO_ABOVE -> "Info Panel Above";
-            case DynamicMinimapSetting.INFO_LEFT -> "Info Panel Left";
-            case DynamicMinimapSetting.INFO_RIGHT -> "Info Panel Right";
-            case DynamicMinimapSetting.INFO_BELOW -> "Info Panel Below";
-            default -> "Info Panel Below";
+            case DynamicMinimapSetting.INFO_ABOVE -> "panel above";
+            case DynamicMinimapSetting.INFO_LEFT -> "panel left";
+            case DynamicMinimapSetting.INFO_RIGHT -> "panel right";
+            case DynamicMinimapSetting.INFO_BELOW -> "panel below";
+            default -> "panel below";
         };
 
-        return shape + " Minimap • " + panel;
+        return shape + " minimap • " + panel;
     }
 
     private void openSettings(
