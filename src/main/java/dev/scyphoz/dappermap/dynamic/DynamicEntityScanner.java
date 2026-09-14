@@ -12,16 +12,12 @@ import com.hypixel.hytale.server.npc.role.Role;
 import com.hypixel.hytale.server.npc.role.support.MarkedEntitySupport;
 import com.hypixel.hytale.server.npc.role.support.WorldSupport;
 import java.awt.Color;
+import static dev.scyphoz.dappermap.dynamic.MinimapColours.Key.*;
 import java.util.ArrayList;
 import java.util.List;
 import org.joml.Vector3d;
 
 public final class DynamicEntityScanner {
-    private static final Color PLAYER_OTHER = new Color(80, 140, 255, 255);
-    private static final Color HOSTILE_ACTIVE = new Color(220, 40, 40, 255);
-    private static final Color HOSTILE_DEFAULT = new Color(255, 140, 0, 255);
-    private static final Color NEUTRAL_CALM = new Color(230, 200, 40, 255);
-    private static final Color FRIENDLY = new Color(60, 210, 90, 255);
 
     private DynamicEntityScanner() {
     }
@@ -47,7 +43,7 @@ public final class DynamicEntityScanner {
                                     NPCEntity npc = (NPCEntity)chunk.getComponent(i, NPCEntity.getComponentType());
                                     if (npc != null) {
                                         Ref<EntityStore> npcRef = chunk.getReferenceTo(i);
-                                        Color color = colorFor(npcRef, npc, playerRef, commandBuffer);
+                                        Color color = colorFor(npcRef, npc, playerRef, commandBuffer, settings.colours);
                                         if (color != null) {
                                             markers.add(DynamicMinimapMarker.dot(position.x(), position.z(), color, 7));
                                         }
@@ -75,7 +71,7 @@ public final class DynamicEntityScanner {
                                 double dz = position.z() - playerZ;
                                 double distanceSq = dx * dx + dz * dz;
                                 if (distanceSq >= 0.01 && distanceSq <= radiusSq) {
-                                    markers.add(DynamicMinimapMarker.dot(position.x(), position.z(), PLAYER_OTHER, 11));
+                                    markers.add(DynamicMinimapMarker.dot(position.x(), position.z(), settings.colours.awt(PLAYERS, 255), 11));
                                 }
                             }
                         } catch (Exception var18) {
@@ -90,7 +86,7 @@ public final class DynamicEntityScanner {
         return markers;
     }
 
-    private static Color colorFor(Ref<EntityStore> npcRef, NPCEntity npc, Ref<EntityStore> playerRef, CommandBuffer<EntityStore> commandBuffer) {
+    private static Color colorFor(Ref<EntityStore> npcRef, NPCEntity npc, Ref<EntityStore> playerRef, CommandBuffer<EntityStore> commandBuffer, MinimapColours colours) {
         try {
             if (playerRef != null && playerRef.isValid()) {
                 WorldSupport worldSupport = WorldSupport.get(npcRef, commandBuffer);
@@ -106,20 +102,20 @@ public final class DynamicEntityScanner {
                     Ref<EntityStore> lockedTarget = getLockedTarget(npcRef, commandBuffer);
                     boolean targetingPlayer = sameEntity(lockedTarget, playerRef);
                     if (targetingPlayer && isBackingAway(npc)) {
-                        return NEUTRAL_CALM;
+                        return colours.awt(NEUTRAL, 255);
                     } else if (dynamicAttitude == Attitude.HOSTILE && targetingPlayer) {
-                        return HOSTILE_ACTIVE;
+                        return colours.awt(MinimapColours.Key.HOSTILE_ACTIVE, 255);
                     } else {
-                        return dynamicAttitude == Attitude.HOSTILE ? HOSTILE_DEFAULT : NEUTRAL_CALM;
+                        return dynamicAttitude == Attitude.HOSTILE ? colours.awt(HOSTILE, 255) : colours.awt(NEUTRAL, 255);
                     }
                 } else {
-                    return FRIENDLY;
+                    return colours.awt(MinimapColours.Key.FRIENDLY, 255);
                 }
             } else {
-                return NEUTRAL_CALM;
+                return colours.awt(NEUTRAL, 255);
             }
         } catch (Exception var9) {
-            return NEUTRAL_CALM;
+            return colours.awt(NEUTRAL, 255);
         }
     }
 

@@ -57,7 +57,7 @@ public final class DynamicMinimapSettingsStore {
                                 + "  \"clock24Hour\": %s,\n"
                                 + "  \"showClock\": %s,\n"
                                 + "  \"showCompass\": %s,\n"
-                                + "  \"showBiome\": %s\n"
+                                + "  \"showBiome\": %s%s\n"
                                 + "}\n").formatted(
                                 settings.enabled,
                                 settings.rotationMode,
@@ -80,7 +80,8 @@ public final class DynamicMinimapSettingsStore {
                                 settings.clock24Hour,
                                 settings.showClock,
                                 settings.showCompass,
-                                settings.showBiome
+                                settings.showBiome,
+                                colourFields(settings.colours)
                         )
                 );
             } catch (IOException ignored) {
@@ -98,6 +99,10 @@ public final class DynamicMinimapSettingsStore {
             if (Files.exists(file, new LinkOption[0])) {
                 try {
                     String json = Files.readString(file);
+                    for (MinimapColours.Key key : MinimapColours.Key.values()) {
+                        Integer rgb = extractColour(json, "colour_" + key.id);
+                        if (rgb != null) settings.colours = settings.colours.with(key, rgb);
+                    }
                     Boolean enabled = extractBool(json, "enabled");
                     Integer rotationMode = extractInt(json, "rotationMode");
                     Integer zoomBlocks = extractInt(json, "zoomBlocks");
@@ -224,6 +229,20 @@ public final class DynamicMinimapSettingsStore {
             settings.normalize();
             return settings;
         }
+    }
+
+    private static String colourFields(MinimapColours colours) {
+        StringBuilder out = new StringBuilder();
+        for (MinimapColours.Key key : MinimapColours.Key.values())
+            out.append(",\n  \"colour_").append(key.id).append("\": ").append(colours.rgb(key));
+        return out.toString();
+    }
+
+    private static Integer extractColour(String json, String key) {
+        try {
+            Integer value = extractInt(json, key);
+            return value != null && value >= 0 && value <= 0xffffff ? value : null;
+        } catch (NumberFormatException ignored) { return null; }
     }
 
     private static Boolean extractBool(String json, String key) {

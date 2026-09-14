@@ -6,6 +6,7 @@ import com.hypixel.hytale.server.core.universe.world.chunk.palette.BitFieldArr;
 import com.hypixel.hytale.server.core.universe.world.worldmap.WorldMapManager;
 import java.awt.BasicStroke;
 import java.awt.Color;
+import static dev.scyphoz.dappermap.dynamic.MinimapColours.Key.*;
 import java.awt.Font;
 import java.awt.FontMetrics;
 import java.awt.Graphics2D;
@@ -30,14 +31,6 @@ public final class DynamicMinimapRenderer {
      */
     private static final int STATIC_ASSET_LOGICAL_SIZE = 220;
     public static final int ROTATION_BUCKETS = 360;
-    private static final Color BACKGROUND = new Color(10, 18, 24, 235);
-    private static final Color BORDER = new Color(206, 214, 226, 225);
-    private static final Color CARDINAL = new Color(255, 220, 80, 255);
-    private static final Color BRASS = new Color(224, 174, 82, 235);
-    private static final Color AGED_BRASS = new Color(126, 93, 47, 220);
-    private static final Color INK_SHADOW = new Color(3, 8, 12, 190);
-    private static final Color GLASS_EDGE = new Color(151, 215, 235, 105);
-    private static final Color SELF = new Color(40, 255, 100);
     private static final Font CARDINAL_FONT = new Font("SansSerif", 1, 15);
     private static final Font SMALL_CARDINAL_FONT = new Font("SansSerif", 1, 10);
     private static final Map<String, byte[]> MASK_CACHE = new ConcurrentHashMap();
@@ -90,7 +83,7 @@ public final class DynamicMinimapRenderer {
         double originZ = bufferOriginWorld(centerZ, settings);
         BufferedImage terrain = new BufferedImage(textureBuffer, textureBuffer, 2);
         Graphics2D graphics = terrain.createGraphics();
-        graphics.setColor(BACKGROUND);
+        graphics.setColor(settings.colours.awt(MAP_BACKGROUND, 235));
         graphics.fillRect(0, 0, textureBuffer, textureBuffer);
         int present = 0;
         int total = 0;
@@ -216,10 +209,11 @@ public final class DynamicMinimapRenderer {
      * while the directional markings rotate with the terrain.
      */
     public static byte[] renderFrame(DynamicMinimapSetting settings, double mapAngle) {
+        MinimapColours colours = settings.colours;
         int bucket = rotationBucket(mapAngle);
         String shape = settings.isCircle() ? "c" : "r";
         String key = shape + "@" + settings.textureResolution
-                + (settings.showBorder ? "b" : "") + "-rot" + bucket;
+                + (settings.showBorder ? "b" : "") + "-rot" + bucket + "-" + colours.frameKey();
         byte[] cached = FRAME_CACHE.get(key);
         if (cached != null) {
             return cached;
@@ -239,9 +233,9 @@ public final class DynamicMinimapRenderer {
 
         if (settings.showBorder) {
             if (settings.isCircle()) {
-                drawNauticalCircleFrame(graphics, logicalSize);
+                drawNauticalCircleFrame(graphics, logicalSize, colours);
             } else {
-                drawNauticalSquareFrame(graphics, logicalSize);
+                drawNauticalSquareFrame(graphics, logicalSize, colours);
             }
         }
 
@@ -249,33 +243,36 @@ public final class DynamicMinimapRenderer {
             AffineTransform beforeCompass = graphics.getTransform();
             double center = (double)logicalSize / 2.0D;
             graphics.rotate(bucketAngle(bucket), center, center);
-            drawCardinals(graphics, logicalSize, true);
-            drawNorthNeedle(graphics, logicalSize / 2, 18);
+            drawCardinals(graphics, logicalSize, true, colours);
+            drawNorthNeedle(graphics, logicalSize / 2, 18, colours);
             graphics.setTransform(beforeCompass);
         } else {
             drawSquareCardinalsRotated(
                     graphics,
                     logicalSize,
                     bucketAngle(bucket)
-            );
+                    , colours);
         }
         graphics.dispose();
 
         byte[] png = toPng(image);
         if (png != null) {
+            if (FRAME_CACHE.size() >= 256) FRAME_CACHE.clear();
             FRAME_CACHE.put(key, png);
         }
 
         return png;
     }
 
-    public static byte[] renderDot(int rgb) {
+    public static byte[] renderDot(int rgb) { return renderDot(rgb, new MinimapColours()); }
+
+    public static byte[] renderDot(int rgb, MinimapColours colours) {
         BufferedImage image = new BufferedImage(32, 32, 2);
         Graphics2D graphics = image.createGraphics();
         graphics.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
         int center = 16;
         int radius = 12;
-        graphics.setColor(new Color(0, 0, 0, 200));
+        graphics.setColor(colours.awt(MARKER_OUTLINE, 200));
         graphics.fillOval(center - radius - 2, center - radius - 2, (radius + 2) * 2, (radius + 2) * 2);
         graphics.setColor(new Color(-16777216 | rgb, true));
         graphics.fillOval(center - radius, center - radius, radius * 2, radius * 2);
@@ -283,24 +280,28 @@ public final class DynamicMinimapRenderer {
         return toPng(image);
     }
 
-    public static byte[] renderDeath() {
+    public static byte[] renderDeath() { return renderDeath(new MinimapColours()); }
+
+    public static byte[] renderDeath(MinimapColours colours) {
         BufferedImage image = new BufferedImage(32, 32, 2);
         Graphics2D graphics = image.createGraphics();
         graphics.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
         int inset = 6;
         graphics.setStroke(new BasicStroke(6.0F, 1, 1));
-        graphics.setColor(new Color(0, 0, 0, 220));
+        graphics.setColor(colours.awt(MARKER_OUTLINE, 220));
         graphics.drawLine(inset, inset, 32 - inset, 32 - inset);
         graphics.drawLine(inset, 32 - inset, 32 - inset, inset);
         graphics.setStroke(new BasicStroke(3.0F, 1, 1));
-        graphics.setColor(DynamicMinimapMarker.DEATH_COLOR);
+        graphics.setColor(colours.awt(DEATH, 235));
         graphics.drawLine(inset, inset, 32 - inset, 32 - inset);
         graphics.drawLine(inset, 32 - inset, 32 - inset, inset);
         graphics.dispose();
         return toPng(image);
     }
 
-    public static byte[] renderSelfArrow(double angle) {
+    public static byte[] renderSelfArrow(double angle) { return renderSelfArrow(angle, new MinimapColours()); }
+
+    public static byte[] renderSelfArrow(double angle, MinimapColours colours) {
         BufferedImage image = new BufferedImage(40, 40, 2);
         Graphics2D graphics = image.createGraphics();
         graphics.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
@@ -317,9 +318,9 @@ public final class DynamicMinimapRenderer {
             graphics.rotate(angle);
         }
 
-        graphics.setColor(SELF);
+        graphics.setColor(colours.awt(MinimapColours.Key.SELF, 255));
         graphics.fill(arrow);
-        graphics.setColor(new Color(0, 0, 0, 220));
+        graphics.setColor(colours.awt(MARKER_OUTLINE, 220));
         graphics.setStroke(new BasicStroke(1.5F));
         graphics.draw(arrow);
         graphics.setTransform(previous);
@@ -364,6 +365,10 @@ public final class DynamicMinimapRenderer {
      * the viewport remains covered while the square buffer rotates.
      */
     public static byte[] rotateTerrain(byte[] northUpPng, double mapAngle) {
+        return rotateTerrain(northUpPng, mapAngle, new MinimapColours());
+    }
+
+    public static byte[] rotateTerrain(byte[] northUpPng, double mapAngle, MinimapColours colours) {
         if (northUpPng == null || northUpPng.length == 0) {
             return null;
         }
@@ -383,7 +388,7 @@ public final class DynamicMinimapRenderer {
             int height = source.getHeight();
             BufferedImage rotated = new BufferedImage(width, height, 2);
             Graphics2D graphics = rotated.createGraphics();
-            graphics.setColor(BACKGROUND);
+            graphics.setColor(colours.awt(MAP_BACKGROUND, 235));
             graphics.fillRect(0, 0, width, height);
             graphics.setRenderingHint(
                     RenderingHints.KEY_INTERPOLATION,
@@ -431,21 +436,21 @@ public final class DynamicMinimapRenderer {
         }
     }
 
-    private static void drawNauticalCircleFrame(Graphics2D graphics, int size) {
+    private static void drawNauticalCircleFrame(Graphics2D graphics, int size, MinimapColours colours) {
         int center = size / 2;
         int outer = size - 5;
         int middle = size - 17;
         int inner = size - 29;
         graphics.setStroke(new BasicStroke(5.0F));
-        graphics.setColor(INK_SHADOW);
+        graphics.setColor(colours.awt(FRAME_SHADOW, 190));
         graphics.draw(new Ellipse2D.Double((double)2.0F, (double)2.0F, (double)outer, (double)outer));
         graphics.setStroke(new BasicStroke(2.4F));
-        graphics.setColor(BRASS);
+        graphics.setColor(colours.awt(EDGE, 235));
         graphics.draw(new Ellipse2D.Double((double)3.0F, (double)3.0F, (double)(size - 7), (double)(size - 7)));
         graphics.setStroke(new BasicStroke(1.2F));
-        graphics.setColor(AGED_BRASS);
+        graphics.setColor(colours.awt(EDGE_DETAIL, 220));
         graphics.draw(new Ellipse2D.Double((double)10.0F, (double)10.0F, (double)middle, (double)middle));
-        graphics.setColor(GLASS_EDGE);
+        graphics.setColor(colours.awt(EDGE_HIGHLIGHT, 105));
         graphics.draw(new Ellipse2D.Double((double)16.0F, (double)16.0F, (double)inner, (double)inner));
 
         for(int i = 0; i < 64; ++i) {
@@ -455,23 +460,23 @@ public final class DynamicMinimapRenderer {
             double angle = (-Math.PI / 2D) + (double)i * Math.PI * (double)2.0F / (double)64.0F;
             int tick = cardinal ? 15 : (ordinal ? 12 : (longTick ? 9 : 5));
             float width = cardinal ? 2.2F : (ordinal ? 1.7F : 1.0F);
-            Color color = !cardinal && !ordinal ? BORDER : BRASS;
+            Color color = !cardinal && !ordinal ? colours.awt(TICKS, 225) : colours.awt(EDGE, 235);
             drawRadialTick(graphics, center, center, (double)size / (double)2.0F - (double)8.0F, (double)size / (double)2.0F - (double)8.0F - (double)tick, angle, width, color);
         }
 
     }
 
-    private static void drawNauticalSquareFrame(Graphics2D graphics, int size) {
+    private static void drawNauticalSquareFrame(Graphics2D graphics, int size, MinimapColours colours) {
         graphics.setStroke(new BasicStroke(4.0F));
-        graphics.setColor(INK_SHADOW);
+        graphics.setColor(colours.awt(FRAME_SHADOW, 190));
         graphics.drawRect(2, 2, size - 5, size - 5);
         graphics.setStroke(new BasicStroke(2.0F));
-        graphics.setColor(BRASS);
+        graphics.setColor(colours.awt(EDGE, 235));
         graphics.drawRect(4, 4, size - 9, size - 9);
         graphics.setStroke(new BasicStroke(1.0F));
-        graphics.setColor(AGED_BRASS);
+        graphics.setColor(colours.awt(EDGE_DETAIL, 220));
         graphics.drawRect(11, 11, size - 23, size - 23);
-        graphics.setColor(GLASS_EDGE);
+        graphics.setColor(colours.awt(EDGE_HIGHLIGHT, 105));
         graphics.drawRect(17, 17, size - 35, size - 35);
         int start = 24;
         int end = size - 24;
@@ -481,17 +486,17 @@ public final class DynamicMinimapRenderer {
             boolean major = i % 4 == 0;
             int tick = major ? 13 : 7;
             graphics.setStroke(new BasicStroke(major ? 1.8F : 1.0F));
-            graphics.setColor(major ? BRASS : BORDER);
+            graphics.setColor(major ? colours.awt(EDGE, 235) : colours.awt(TICKS, 225));
             graphics.drawLine(pos, 8, pos, 8 + tick);
             graphics.drawLine(pos, size - 9, pos, size - 9 - tick);
             graphics.drawLine(8, pos, 8 + tick, pos);
             graphics.drawLine(size - 9, pos, size - 9 - tick, pos);
         }
 
-        drawCornerBracket(graphics, 8, 8, 1, 1);
-        drawCornerBracket(graphics, size - 9, 8, -1, 1);
-        drawCornerBracket(graphics, 8, size - 9, 1, -1);
-        drawCornerBracket(graphics, size - 9, size - 9, -1, -1);
+        drawCornerBracket(graphics, 8, 8, 1, 1, colours);
+        drawCornerBracket(graphics, size - 9, 8, -1, 1, colours);
+        drawCornerBracket(graphics, 8, size - 9, 1, -1, colours);
+        drawCornerBracket(graphics, size - 9, size - 9, -1, -1, colours);
     }
 
     private static void drawRadialTick(Graphics2D graphics, int centerX, int centerY, double outerRadius, double innerRadius, double angle, float width, Color color) {
@@ -504,28 +509,28 @@ public final class DynamicMinimapRenderer {
         graphics.drawLine(x1, y1, x2, y2);
     }
 
-    private static void drawNorthNeedle(Graphics2D graphics, int center, int top) {
+    private static void drawNorthNeedle(Graphics2D graphics, int center, int top, MinimapColours colours) {
         Path2D.Double needle = new Path2D.Double();
         needle.moveTo((double)center, (double)top);
         needle.lineTo((double)(center + 6), (double)(top + 16));
         needle.lineTo((double)center, (double)(top + 11));
         needle.lineTo((double)(center - 6), (double)(top + 16));
         needle.closePath();
-        graphics.setColor(INK_SHADOW);
+        graphics.setColor(colours.awt(FRAME_SHADOW, 190));
         graphics.translate(1, 1);
         graphics.fill(needle);
         graphics.translate(-1, -1);
-        graphics.setColor(CARDINAL);
+        graphics.setColor(colours.awt(CARDINALS, 255));
         graphics.fill(needle);
     }
 
-    private static void drawCornerBracket(Graphics2D graphics, int x, int y, int xDir, int yDir) {
+    private static void drawCornerBracket(Graphics2D graphics, int x, int y, int xDir, int yDir, MinimapColours colours) {
         graphics.setStroke(new BasicStroke(2.0F, 1, 1));
-        graphics.setColor(BRASS);
+        graphics.setColor(colours.awt(EDGE, 235));
         graphics.drawLine(x, y, x + xDir * 20, y);
         graphics.drawLine(x, y, x, y + yDir * 20);
         graphics.setStroke(new BasicStroke(1.0F, 1, 1));
-        graphics.setColor(GLASS_EDGE);
+        graphics.setColor(colours.awt(EDGE_HIGHLIGHT, 105));
         graphics.drawLine(x + xDir * 5, y + yDir * 5, x + xDir * 15, y + yDir * 5);
         graphics.drawLine(x + xDir * 5, y + yDir * 5, x + xDir * 5, y + yDir * 15);
     }
@@ -540,17 +545,17 @@ public final class DynamicMinimapRenderer {
             Graphics2D graphics,
             int size,
             double angle
-    ) {
+            , MinimapColours colours) {
         graphics.setFont(CARDINAL_FONT);
         double center = (double)size / 2.0D;
         double radius = center - 15.0D;
         double cos = Math.cos(angle);
         double sin = Math.sin(angle);
 
-        drawSquareBorderCardinal(graphics, "N", 0.0D, -1.0D, cos, sin, center, radius);
-        drawSquareBorderCardinal(graphics, "E", 1.0D, 0.0D, cos, sin, center, radius);
-        drawSquareBorderCardinal(graphics, "S", 0.0D, 1.0D, cos, sin, center, radius);
-        drawSquareBorderCardinal(graphics, "W", -1.0D, 0.0D, cos, sin, center, radius);
+        drawSquareBorderCardinal(graphics, "N", 0.0D, -1.0D, cos, sin, center, radius, colours);
+        drawSquareBorderCardinal(graphics, "E", 1.0D, 0.0D, cos, sin, center, radius, colours);
+        drawSquareBorderCardinal(graphics, "S", 0.0D, 1.0D, cos, sin, center, radius, colours);
+        drawSquareBorderCardinal(graphics, "W", -1.0D, 0.0D, cos, sin, center, radius, colours);
     }
 
     private static void drawSquareBorderCardinal(
@@ -562,7 +567,7 @@ public final class DynamicMinimapRenderer {
             double sin,
             double center,
             double radius
-    ) {
+            , MinimapColours colours) {
         double x = baseX * cos - baseY * sin;
         double y = baseX * sin + baseY * cos;
         double max = Math.max(Math.abs(x), Math.abs(y));
@@ -573,34 +578,34 @@ public final class DynamicMinimapRenderer {
         double scale = radius / max;
         int px = (int)Math.round(center + x * scale);
         int py = (int)Math.round(center + y * scale);
-        drawCardinal(graphics, label, px, py);
+        drawCardinal(graphics, label, px, py, colours);
     }
 
-    private static void drawCardinals(Graphics2D graphics, int size, boolean circle) {
+    private static void drawCardinals(Graphics2D graphics, int size, boolean circle, MinimapColours colours) {
         graphics.setFont(CARDINAL_FONT);
         int margin = circle ? 17 : 15;
-        drawCardinal(graphics, "N", size / 2, margin);
-        drawCardinal(graphics, "S", size / 2, size - margin);
-        drawCardinal(graphics, "E", size - margin, size / 2);
-        drawCardinal(graphics, "W", margin, size / 2);
+        drawCardinal(graphics, "N", size / 2, margin, colours);
+        drawCardinal(graphics, "S", size / 2, size - margin, colours);
+        drawCardinal(graphics, "E", size - margin, size / 2, colours);
+        drawCardinal(graphics, "W", margin, size / 2, colours);
         if (circle && size >= 180) {
             graphics.setFont(SMALL_CARDINAL_FONT);
             int inset = Math.max(30, size / 7);
-            drawCardinal(graphics, "NE", size - inset, inset);
-            drawCardinal(graphics, "SE", size - inset, size - inset);
-            drawCardinal(graphics, "SW", inset, size - inset);
-            drawCardinal(graphics, "NW", inset, inset);
+            drawCardinal(graphics, "NE", size - inset, inset, colours);
+            drawCardinal(graphics, "SE", size - inset, size - inset, colours);
+            drawCardinal(graphics, "SW", inset, size - inset, colours);
+            drawCardinal(graphics, "NW", inset, inset, colours);
         }
 
     }
 
-    private static void drawCardinal(Graphics2D graphics, String label, int centerX, int centerY) {
+    private static void drawCardinal(Graphics2D graphics, String label, int centerX, int centerY, MinimapColours colours) {
         FontMetrics metrics = graphics.getFontMetrics();
         int left = centerX - metrics.stringWidth(label) / 2;
         int baseline = centerY + metrics.getAscent() / 2 - 1;
         graphics.setColor(new Color(0, 0, 0, 170));
         graphics.drawString(label, left + 1, baseline + 1);
-        graphics.setColor(CARDINAL);
+        graphics.setColor(colours.awt(CARDINALS, 255));
         graphics.drawString(label, left, baseline);
     }
 

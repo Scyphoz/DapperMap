@@ -73,6 +73,7 @@ public final class DynamicMinimapSession {
     private long lastSignature = 0L;
     private long lastSignatureMs = 0L;
     private long lastMarkerMs = 0L;
+    private MinimapColours renderedColours;
     private List<DynamicMinimapMarker> cachedMarkers = new ArrayList<>();
     private long lastTerrainMs = 0L;
     private boolean bufferComplete = false;
@@ -226,6 +227,26 @@ public final class DynamicMinimapSession {
             }
 
             long now = System.currentTimeMillis();
+            if (!this.settings.colours.equals(this.renderedColours)) {
+                if (this.renderedColours != null && this.renderedColours.rgb(MinimapColours.Key.MAP_BACKGROUND)
+                        != this.settings.colours.rgb(MinimapColours.Key.MAP_BACKGROUND)) {
+                    this.bufferCenterX = Double.NaN;
+                    this.bufferCenterZ = Double.NaN;
+                    this.northUpTerrainPng = null;
+                    this.lastTerrainMs = 0L;
+                    ++this.terrainGeneration;
+                    this.rotationSequence.incrementAndGet();
+                }
+                this.renderedColours = this.settings.colours;
+                java.util.Arrays.fill(this.selfArrowCache, null);
+                this.iconCache.clear();
+                this.deathIconPath = null;
+                this.lastSelfBucket = -1;
+                this.lastMarkerMs = 0L;
+                this.updateRotatingFrame(Math.max(0, this.lastMapRotationBucket));
+                this.hud.setColours(this.renderedColours);
+            }
+
 
             if (this.settings.rotationMode != this.builtRotationMode) {
                 this.builtRotationMode = this.settings.rotationMode;
@@ -365,6 +386,7 @@ public final class DynamicMinimapSession {
             this.northUpTerrainPng = null;
             this.hud.deliverStaticAssets();
             this.hud.show();
+            this.renderedColours = this.settings.colours;
             this.bufferCenterX = Double.NaN;
             this.bufferCenterZ = Double.NaN;
             this.lastTerrainMs = 0L;
@@ -388,7 +410,7 @@ public final class DynamicMinimapSession {
         }
 
         String path = "UI/DapperMap/frame-rot-" + this.slug + "-"
-                + bucket + ".png";
+                + bucket + "-" + this.settings.colours.frameKey() + ".png";
         if (DynamicAssetPublisher.deliver(this.playerRef, path, frame)) {
             this.hud.setFrame(path);
         }
@@ -416,10 +438,10 @@ public final class DynamicMinimapSession {
 
             if (bucket != this.lastSelfBucket) {
                 this.lastSelfBucket = bucket;
-                String path = "UI/DapperMap/self-" + this.slug + "-" + bucket + ".png";
+                String path = "UI/DapperMap/self-" + this.slug + "-" + this.settings.colours.arrowKey() + "-" + bucket + ".png";
                 byte[] png = this.selfArrowCache[bucket];
                 if (png == null) {
-                    png = DynamicMinimapRenderer.renderSelfArrow(angle);
+                    png = DynamicMinimapRenderer.renderSelfArrow(angle, this.settings.colours);
                     this.selfArrowCache[bucket] = png;
                 }
 
@@ -464,7 +486,7 @@ public final class DynamicMinimapSession {
             }
 
             byte[] displayPng = renderSettings.rotationMode == 1
-                    ? DynamicMinimapRenderer.rotateTerrain(northUpPng, mapAngle)
+                    ? DynamicMinimapRenderer.rotateTerrain(northUpPng, mapAngle, renderSettings.colours)
                     : northUpPng;
 
             if (displayPng == null || displayPng.length == 0) {
@@ -474,6 +496,7 @@ public final class DynamicMinimapSession {
             world.execute(() -> {
                 if (!this.running
                         || renderHud != this.hud
+                        || renderSettings.colours.rgb(MinimapColours.Key.MAP_BACKGROUND) != this.settings.colours.rgb(MinimapColours.Key.MAP_BACKGROUND)
                         || sequence <= this.deliveredSequence) {
                     return;
                 }
@@ -572,7 +595,7 @@ public final class DynamicMinimapSession {
 
         RENDER_POOL.execute(() -> {
             byte[] displayPng =
-                    DynamicMinimapRenderer.rotateTerrain(basePng, mapAngle);
+                    DynamicMinimapRenderer.rotateTerrain(basePng, mapAngle, renderSettings.colours);
             if (displayPng == null || displayPng.length == 0) {
                 return;
             }
@@ -807,12 +830,12 @@ public final class DynamicMinimapSession {
         if (path != null) {
             return path;
         } else {
-            byte[] png = DynamicMinimapRenderer.renderDot(rgb);
+            byte[] png = DynamicMinimapRenderer.renderDot(rgb, this.settings.colours);
             if (png == null) {
                 return null;
             } else {
                 String var10000 = this.slug;
-                path = "UI/DapperMap/mk-" + var10000 + "-" + String.format("%06X", rgb) + ".png";
+                path = "UI/DapperMap/mk-" + var10000 + "-" + String.format("%06X", rgb) + "-" + this.settings.colours.hex(MinimapColours.Key.MARKER_OUTLINE).substring(1) + ".png";
                 DynamicAssetPublisher.deliver(this.playerRef, path, png);
                 this.iconCache.put(rgb, path);
                 return path;
@@ -824,11 +847,11 @@ public final class DynamicMinimapSession {
         if (this.deathIconPath != null) {
             return this.deathIconPath;
         } else {
-            byte[] png = DynamicMinimapRenderer.renderDeath();
+            byte[] png = DynamicMinimapRenderer.renderDeath(this.settings.colours);
             if (png == null) {
                 return null;
             } else {
-                this.deathIconPath = "UI/DapperMap/death-" + this.slug + ".png";
+                this.deathIconPath = "UI/DapperMap/death-" + this.slug + "-" + this.settings.colours.hex(MinimapColours.Key.DEATH).substring(1) + this.settings.colours.hex(MinimapColours.Key.MARKER_OUTLINE).substring(1) + ".png";
                 DynamicAssetPublisher.deliver(this.playerRef, this.deathIconPath, png);
                 return this.deathIconPath;
             }

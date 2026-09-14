@@ -112,27 +112,28 @@ public final class DapperMapSettingsPage
             } else if (row.kind == Kind.DROPDOWN) {
                 this.dropdownRow(builder, events, index, row, settings);
             } else if (row.kind == Kind.ACTION) {
-                this.moveRow(builder, events, index, settings);
+                this.actionRow(builder, events, index, row, settings);
             }
         }
     }
 
-    private void moveRow(UICommandBuilder builder, UIEventBuilder events,
-                         int index, DynamicMinimapSetting settings) {
+    private void actionRow(UICommandBuilder builder, UIEventBuilder events,
+                           int index, Row row, DynamicMinimapSetting settings) {
         String selector = "#DapperMapSettingsList[" + index + "]";
         if (!settings.enabled) {
             builder.append("#DapperMapSettingsList", "Pages/DapperMapDisabledDropdownRow.ui");
-            builder.set(selector + " #RowLabel.Text", "Screen Position");
-            builder.set(selector + " #RowDescription.Text", description("move_minimap"));
-            builder.set(selector + " #ValueLabel.Text", "Move Minimap");
+            builder.set(selector + " #RowLabel.Text", row.label);
+            builder.set(selector + " #RowDescription.Text", description(row.id));
+            builder.set(selector + " #ValueLabel.Text", row.label);
             return;
         }
         builder.append("#DapperMapSettingsList", "Pages/DapperMapMoveRow.ui");
-        builder.set(selector + " #RowDescription.Text", description("move_minimap"));
+        builder.set(selector + " #RowLabel.Text", row.label);
+        builder.set(selector + " #RowDescription.Text", description(row.id));
         builder.append(selector + " #BtnSlot", "Pages/BasicTextButton.ui");
-        builder.set(selector + " #BtnSlot[0].TextSpans", Message.raw("MOVE MINIMAP").color(BLUE));
+        builder.set(selector + " #BtnSlot[0].TextSpans", Message.raw(row.id.equals("colours") ? "EDIT COLOURS" : "MOVE MINIMAP").color(BLUE));
         events.addEventBinding(CustomUIEventBindingType.Activating, selector + " #BtnSlot[0]",
-                EventData.of("Action", "move_minimap"), false);
+                EventData.of("Action", row.id), false);
     }
 
     private void toggleRow(
@@ -236,6 +237,14 @@ public final class DapperMapSettingsPage
             return;
         }
 
+        if ("colours".equals(action)) {
+            if (!this.sessions.getSettings(this.playerRef.getUuid(), this.config).enabled) return;
+            Player player = store.getComponent(ref, Player.getComponentType());
+            if (player != null) player.getPageManager().openCustomPage(ref, store,
+                    new DapperMapColoursPage(this.playerRef, this.sessions, this.config));
+            return;
+        }
+
         if ("move_minimap".equals(action)) {
             if (!this.sessions.getSettings(this.playerRef.getUuid(), this.config).enabled) return;
             Player player =
@@ -299,6 +308,7 @@ public final class DapperMapSettingsPage
     private static String description(String id) {
         return switch (id) {
             case "enabled" -> "Show or hide your minimap.";
+            case "colours" -> "Choose colours for your minimap and markers.";
             case "zoom" -> "Choose how far around you the map shows.";
             case "size" -> "Change the size of the map on your screen.";
             case "interface_scale" -> "Resize the map and its information together.";
@@ -479,8 +489,9 @@ public final class DapperMapSettingsPage
                 new Row("shape", "Map Shape", Kind.DROPDOWN),
                 new Row("rotation", "Map Rotation", Kind.DROPDOWN),
                 new Row("speed", "Update Speed", Kind.DROPDOWN),
+                new Row("colours", "Minimap Colours", Kind.ACTION),
                 new Row("section_1", "POSITION", Kind.HEADER),
-                new Row("move_minimap", "Move Minimap", Kind.ACTION),
+                new Row("move_minimap", "Screen Position", Kind.ACTION),
                 new Row("panel_position", "Information Panel", Kind.DROPDOWN),
                 new Row("section_2", "MARKERS", Kind.HEADER),
                 new Row("players", "Player Markers", Kind.DROPDOWN),

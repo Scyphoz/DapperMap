@@ -58,6 +58,7 @@ public class MinimapSessionManager {
         this.settingsByPlayer.put(playerUuid, settings);
         DynamicMinimapSession session = (DynamicMinimapSession)this.sessionsByPlayer.get(playerUuid);
         if (session != null) {
+            session.settings().colours = settings.colours;
             session.settings().enabled = settings.enabled;
             session.settings().rotationMode = settings.rotationMode;
             session.settings().zoomBlocks = settings.zoomBlocks;

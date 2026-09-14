@@ -16,6 +16,7 @@ public final class DynamicMinimapSetting {
     public static final int INFO_ABOVE = 1;
     public static final int INFO_LEFT = 2;
     public static final int INFO_RIGHT = 3;
+    public volatile MinimapColours colours = new MinimapColours();
     public boolean enabled = true;
     public int rotationMode = 0;
     public int zoomBlocks = 96;
@@ -80,6 +81,7 @@ public final class DynamicMinimapSetting {
 
     public DynamicMinimapSetting copy() {
         DynamicMinimapSetting copy = new DynamicMinimapSetting();
+        copy.colours = this.colours; // immutable, safe to share
         copy.enabled = this.enabled;
         copy.rotationMode = this.rotationMode;
         copy.zoomBlocks = this.zoomBlocks;

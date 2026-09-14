@@ -15,6 +15,7 @@ import dev.scyphoz.dappermap.DapperMap;
 import dev.scyphoz.dappermap.config.MinimapConfig;
 import dev.scyphoz.dappermap.dynamic.DynamicMinimapSetting;
 import dev.scyphoz.dappermap.pages.DapperMapSettingsPage;
+import dev.scyphoz.dappermap.pages.DapperMapColoursPage;
 import dev.scyphoz.dappermap.service.MinimapSessionManager;
 import javax.annotation.Nonnull;
 
@@ -44,6 +45,19 @@ public class MinimapCommand extends AbstractPlayerCommand {
             String extra = parts.length > 2 ? parts[2].toLowerCase() : "";
             DynamicMinimapSetting settings = this.sessions.getSettings(playerRef.getUuid(), config);
             switch (subcommand) {
+                case "colour":
+                case "colours":
+                case "color":
+                case "colors":
+                    if (value.isEmpty()) {
+                        if (!settings.enabled) { context.sendMessage(Message.raw("Enable Minimap before opening Colours.")); return; }
+                        player.getPageManager().openCustomPage(ref, store, new DapperMapColoursPage(playerRef, this.sessions, config));
+                    } else {
+                        var result = MinimapColourCommand.execute(settings, value + (extra.isEmpty() ? "" : " " + extra));
+                        if (result.changed()) this.sessions.applySettings(playerRef, settings);
+                        context.sendMessage(Message.raw(result.message()));
+                    }
+                    break;
                 case "settings":
                 case "menu":
                 case "gui":
@@ -331,7 +345,9 @@ public class MinimapCommand extends AbstractPlayerCommand {
 
     private static void showHelp(CommandContext context) {
         context.sendMessage(Message.raw("DapperMap commands:"));
-        context.sendMessage(Message.raw("/mm settings"));
+        context.sendMessage(Message.raw("/mm settings | /mm colours"));
+        context.sendMessage(Message.raw("/mm colours list | /mm colour <target> <#RRGGBB|R G B>"));
+        context.sendMessage(Message.raw("/mm colour reset <target|all>"));
         context.sendMessage(Message.raw("/mm toggle|on|off|status"));
         context.sendMessage(Message.raw("/mm zoom close|medium|far|<16..256>"));
         context.sendMessage(Message.raw("/mm speed very-fast|fast|normal|slow"));
