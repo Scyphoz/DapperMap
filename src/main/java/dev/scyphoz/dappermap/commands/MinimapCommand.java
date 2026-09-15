@@ -223,7 +223,7 @@ public class MinimapCommand extends AbstractPlayerCommand {
                 case "markers":
                 case "blips":
                     if (!setMarkerToggle(settings, value, extra)) {
-                        context.sendMessage(Message.raw("Usage: /mm markers players|entities|death on|off"));
+                        context.sendMessage(Message.raw("Usage: /mm markers players|entities|death|worldmap on|off"));
                         return;
                     }
 
@@ -489,6 +489,11 @@ public class MinimapCommand extends AbstractPlayerCommand {
                 case "death":
                     settings.showDeathMarker = enabled;
                     break;
+                case "worldmap":
+                case "world-map":
+                case "native":
+                    settings.showWorldMapMarkers = enabled;
+                    break;
                 default:
                     return false;
             }
@@ -600,6 +605,7 @@ public class MinimapCommand extends AbstractPlayerCommand {
                 + ", markers[players=" + settings.showOtherPlayers
                 + ", entities=" + settings.showEntities
                 + ", death=" + settings.showDeathMarker
+                + ", worldmap=" + settings.showWorldMapMarkers
                 + ", height=" + settings.limitMobHeight
                 + ", range=" + settings.mobVerticalRange + "]"
                 + ", clock=" + (settings.showClock ? (settings.clock24Hour ? "24h" : "12h") : "off")
@@ -619,7 +625,7 @@ public class MinimapCommand extends AbstractPlayerCommand {
         context.sendMessage(Message.raw("/mm speed very-fast|fast|normal|slow"));
         context.sendMessage(Message.raw("/mm position <x 0..100> <y 0..100>"));
         context.sendMessage(Message.raw("/mm panel below|above|left|right"));
-        context.sendMessage(Message.raw("/mm markers players|entities|death on|off"));
+        context.sendMessage(Message.raw("/mm markers players|entities|death|worldmap on|off"));
         context.sendMessage(Message.raw("/mm height on|off | /mm height-range <4..256>"));
         context.sendMessage(Message.raw("/mm coordinates on|off | /mm clock on|off|12|24"));
         context.sendMessage(Message.raw("/mm compass on|off | /mm biome on|off"));

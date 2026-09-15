@@ -17,6 +17,7 @@ import com.hypixel.hytale.server.core.universe.world.World;
 import com.hypixel.hytale.server.core.universe.world.storage.EntityStore;
 import dev.scyphoz.dappermap.dynamic.DynamicMinimapMarker.Style;
 import dev.scyphoz.dappermap.integration.BetterMapIntegration;
+import dev.scyphoz.dappermap.integration.NativeWorldMapIntegration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -743,6 +744,18 @@ public final class DynamicMinimapSession {
             );
         }
 
+        if (this.settings.showWorldMapMarkers) {
+            Player player = store.getComponent(playerRef, Player.getComponentType());
+            if (player != null) {
+                try {
+                    markers.addAll(NativeWorldMapIntegration.getMarkers(
+                            store.getExternalData().getWorld(),
+                            player,
+                            this.settings.colours));
+                } catch (Throwable ignored) { }
+            }
+        }
+
         if (this.settings.betterMapEnabled && BetterMapIntegration.isAvailable()) {
             long now = System.currentTimeMillis();
             if (now - this.lastBetterMapScanMs >= 750L) {
@@ -828,6 +841,12 @@ public final class DynamicMinimapSession {
             String path = switch (marker.style) {
                 case DEATH -> this.deathIcon();
                 case BETTERMAP -> BetterMapIntegration.resolveIconAsset(
+                        this.playerRef,
+                        marker.assetPath,
+                        marker.color,
+                        this.slug
+                );
+                case NATIVE_WORLDMAP -> NativeWorldMapIntegration.resolveIconAsset(
                         this.playerRef,
                         marker.assetPath,
                         marker.color,

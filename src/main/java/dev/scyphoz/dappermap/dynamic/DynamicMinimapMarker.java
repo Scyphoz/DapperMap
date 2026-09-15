@@ -48,9 +48,20 @@ public final class DynamicMinimapMarker {
         return new DynamicMinimapMarker(x, z, color, size, Style.BETTERMAP, assetPath, true);
     }
 
+    public static DynamicMinimapMarker nativeWorldMap(
+            double x,
+            double z,
+            String assetPath,
+            Color color,
+            int size
+    ) {
+        return new DynamicMinimapMarker(x, z, color, size, Style.NATIVE_WORLDMAP, assetPath, true);
+    }
+
     public enum Style {
         DOT,
         DEATH,
-        BETTERMAP
+        BETTERMAP,
+        NATIVE_WORLDMAP
     }
 }

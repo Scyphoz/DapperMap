@@ -34,6 +34,7 @@ public final class DynamicMinimapSetting {
     public boolean showOtherPlayers = true;
     public boolean showEntities = true;
     public boolean showDeathMarker = true;
+    public boolean showWorldMapMarkers = true;
     public boolean limitMobHeight = true;
     public int mobVerticalRange = 32;
 
@@ -95,6 +96,7 @@ public final class DynamicMinimapSetting {
         copy.showOtherPlayers = this.showOtherPlayers;
         copy.showEntities = this.showEntities;
         copy.showDeathMarker = this.showDeathMarker;
+        copy.showWorldMapMarkers = this.showWorldMapMarkers;
         copy.limitMobHeight = this.limitMobHeight;
         copy.mobVerticalRange = this.mobVerticalRange;
         copy.position = this.position;

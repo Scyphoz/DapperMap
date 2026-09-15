@@ -216,7 +216,7 @@ public final class BetterMapIntegration {
         );
     }
 
-    private static byte[] tintPng(byte[] source, int rgb) {
+    static byte[] tintPng(byte[] source, int rgb) {
         try {
             BufferedImage image = ImageIO.read(new ByteArrayInputStream(source));
             if (image == null) {

@@ -67,6 +67,7 @@ public class MinimapSessionManager {
             session.settings().showOtherPlayers = settings.showOtherPlayers;
             session.settings().showEntities = settings.showEntities;
             session.settings().showDeathMarker = settings.showDeathMarker;
+            session.settings().showWorldMapMarkers = settings.showWorldMapMarkers;
             session.settings().limitMobHeight = settings.limitMobHeight;
             session.settings().mobVerticalRange = settings.mobVerticalRange;
             session.settings().position = settings.position;

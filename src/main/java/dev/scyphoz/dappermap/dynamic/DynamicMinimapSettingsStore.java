@@ -46,6 +46,7 @@ public final class DynamicMinimapSettingsStore {
                                 + "  \"showOtherPlayers\": %s,\n"
                                 + "  \"showEntities\": %s,\n"
                                 + "  \"showDeathMarker\": %s,\n"
+                                + "  \"showWorldMapMarkers\": %s,\n"
                                 + "  \"limitMobHeight\": %s,\n"
                                 + "  \"mobVerticalRange\": %d,\n"
                                 + "  \"position\": %d,\n"
@@ -70,6 +71,7 @@ public final class DynamicMinimapSettingsStore {
                                 settings.showOtherPlayers,
                                 settings.showEntities,
                                 settings.showDeathMarker,
+                                settings.showWorldMapMarkers,
                                 settings.limitMobHeight,
                                 settings.mobVerticalRange,
                                 settings.position,
@@ -115,6 +117,7 @@ public final class DynamicMinimapSettingsStore {
                     Boolean showOtherPlayers = extractBool(json, "showOtherPlayers");
                     Boolean showEntities = extractBool(json, "showEntities");
                     Boolean showDeathMarker = extractBool(json, "showDeathMarker");
+                    Boolean showWorldMapMarkers = extractBool(json, "showWorldMapMarkers");
                     Boolean limitMobHeight = extractBool(json, "limitMobHeight");
                     Integer mobVerticalRange = extractInt(json, "mobVerticalRange");
                     Integer position = extractInt(json, "position");
@@ -166,6 +169,10 @@ public final class DynamicMinimapSettingsStore {
 
                     if (showDeathMarker != null) {
                         settings.showDeathMarker = showDeathMarker;
+                    }
+
+                    if (showWorldMapMarkers != null) {
+                        settings.showWorldMapMarkers = showWorldMapMarkers;
                     }
 
                     if (limitMobHeight != null) {

@@ -321,6 +321,7 @@ public final class DapperMapSettingsPage
             case "players" -> "Show nearby players on your minimap.";
             case "entities" -> "Show nearby creatures on your minimap.";
             case "death" -> "Mark the location of your last death.";
+            case "worldmap" -> "Show Hytale personal, shared, POI, spawn and respawn world-map markers.";
             case "height" -> "Hide creatures far above or below you.";
             case "vrange" -> "Set how far above and below to show creatures.";
             case "clock" -> "Show the current time in your Hytale world.";
@@ -381,6 +382,7 @@ public final class DapperMapSettingsPage
             case "players" -> settings.showOtherPlayers = Boolean.parseBoolean(value);
             case "entities" -> settings.showEntities = Boolean.parseBoolean(value);
             case "death" -> settings.showDeathMarker = Boolean.parseBoolean(value);
+            case "worldmap" -> settings.showWorldMapMarkers = Boolean.parseBoolean(value);
             case "height" -> settings.limitMobHeight = Boolean.parseBoolean(value);
             case "clock" -> settings.showClock = Boolean.parseBoolean(value);
             case "clock_format" -> settings.clock24Hour = Boolean.parseBoolean(value);
@@ -424,7 +426,7 @@ public final class DapperMapSettingsPage
                 entries.add(entry("24-hour", "true"));
                 entries.add(entry("12-hour", "false"));
             }
-            case "players", "entities", "death", "height", "coordinates", "clock", "compass", "biome", "bettermap" -> {
+            case "players", "entities", "death", "worldmap", "height", "coordinates", "clock", "compass", "biome", "bettermap" -> {
                 entries.add(entry("Enabled", "true"));
                 entries.add(entry("Disabled", "false"));
             }
@@ -466,6 +468,7 @@ public final class DapperMapSettingsPage
             case "players" -> Boolean.toString(settings.showOtherPlayers);
             case "entities" -> Boolean.toString(settings.showEntities);
             case "death" -> Boolean.toString(settings.showDeathMarker);
+            case "worldmap" -> Boolean.toString(settings.showWorldMapMarkers);
             case "height" -> Boolean.toString(settings.limitMobHeight);
             case "clock" -> Boolean.toString(settings.showClock);
             case "clock_format" -> Boolean.toString(settings.clock24Hour);
@@ -525,6 +528,7 @@ public final class DapperMapSettingsPage
                 new Row("compass", "Compass Readout", Kind.DROPDOWN),
                 new Row("biome", "Biome Readout", Kind.DROPDOWN),
                 new Row("section_4", "INTEGRATIONS", Kind.HEADER),
+                new Row("worldmap", "Hytale World Map Markers", Kind.DROPDOWN),
                 new Row("bettermap", "BetterMap", Kind.DROPDOWN)
         };
     }
