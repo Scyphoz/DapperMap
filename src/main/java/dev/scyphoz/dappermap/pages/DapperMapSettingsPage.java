@@ -407,7 +407,11 @@ public final class DapperMapSettingsPage
                 values.add(settings.interfaceScalePercent);
                 for (int value : values) entries.add(entry(value + "%", Integer.toString(value)));
             }
-            case "texture_resolution" -> addNumericEntries(entries, settings.textureResolution, 256, 512, 64, " px");
+            case "texture_resolution" -> {
+                for (int value : new int[]{256, 320, 384, 448, 512, 1024}) {
+                    entries.add(entry(value + " px", Integer.toString(value)));
+                }
+            }
             case "speed" -> {
                 for (int value = 0; value <= 3; value++) entries.add(entry(displaySpeed(value), Integer.toString(value)));
             }

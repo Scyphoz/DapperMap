@@ -198,6 +198,27 @@ public final class DynamicMinimapSession {
                 return;
             }
 
+            if (this.settings.textureResolution != this.builtTextureResolution) {
+                this.builtTextureResolution = this.settings.textureResolution;
+                this.hud.setTextureResolution(this.settings.textureResolution);
+
+                // Resolution changes only the raster assets. Keep the mounted
+                // HUD tree and invalidate the terrain image for a clean rerender.
+                // Force a genuinely fresh, player-centred terrain render. Keeping the
+                // previous buffer centre can leave needsTerrain false until the next
+                // signature/recenter event, making the resolution control appear inert.
+                this.bufferCenterX = Double.NaN;
+                this.bufferCenterZ = Double.NaN;
+                this.bufferComplete = false;
+                this.warmupUntilMs = 0L;
+                this.lastSignature = 0L;
+                this.lastSignatureMs = 0L;
+                this.lastTerrainMs = 0L;
+                this.northUpTerrainPng = null;
+                ++this.terrainGeneration;
+                this.rotationSequence.incrementAndGet();
+            }
+
             if (this.settings.sizePixels != this.builtSize) {
                 this.builtSize = this.settings.sizePixels;
                 this.hud.setMapSize(this.settings.sizePixels);
@@ -362,6 +383,17 @@ public final class DynamicMinimapSession {
      * This keeps player-up rotation readable without increasing expensive world
      * map stitching to the same frequency.
      */
+    /**
+     * Terrain paths include raster resolution so the client never resolves a
+     * newly rendered PNG through one of the old-resolution rotating cache keys.
+     * We still keep the bounded 16-slot rotation within each resolution.
+     */
+    private String terrainAssetPath(int textureResolution, int frame) {
+        int resolution = Math.max(256, Math.min(1024, textureResolution));
+        return "UI/DapperMap/terrain-" + this.slug + "-r"
+                + resolution + "-" + (frame & 15) + ".png";
+    }
+
     private long rotationIntervalMs() {
         return switch (this.settings.updateSpeed) {
             case 0 -> 25L;   // 40 Hz (scheduler ceiling)
@@ -374,8 +406,7 @@ public final class DynamicMinimapSession {
 
     private void ensureHud() {
         if (this.hud != null
-                && this.hud.isShown()
-                && this.settings.textureResolution == this.builtTextureResolution) {
+                && this.hud.isShown()) {
             if (this.settings.shape != this.builtShape) {
                 this.builtShape = this.settings.shape;
                 this.hud.setShape(this.settings.shape);
@@ -519,7 +550,8 @@ public final class DynamicMinimapSession {
             world.execute(() -> {
                 if (!this.running
                         || renderHud != this.hud
-                        || sequence <= this.deliveredSequence) {
+                        || sequence <= this.deliveredSequence
+                        || this.settings.textureResolution != renderSettings.textureResolution) {
                     return;
                 }
 
@@ -528,8 +560,10 @@ public final class DynamicMinimapSession {
                 ++this.terrainGeneration;
 
                 int frame = this.frameIndex.incrementAndGet();
-                String path = "UI/DapperMap/terrain-" + this.slug + "-"
-                        + (frame & 15) + ".png";
+                String path = this.terrainAssetPath(
+                        renderSettings.textureResolution,
+                        frame
+                );
 
                 boolean delivered = this.firstTerrainForHud
                         ? DynamicAssetPublisher.deliverWithRebuild(
@@ -632,8 +666,10 @@ public final class DynamicMinimapSession {
                 }
 
                 int frame = this.frameIndex.incrementAndGet();
-                String path = "UI/DapperMap/terrain-" + this.slug + "-"
-                        + (frame & 15) + ".png";
+                String path = this.terrainAssetPath(
+                        renderSettings.textureResolution,
+                        frame
+                );
 
                 if (!DynamicAssetPublisher.deliver(
                         this.playerRef,

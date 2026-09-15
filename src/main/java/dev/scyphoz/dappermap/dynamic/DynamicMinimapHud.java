@@ -120,23 +120,31 @@ public final class DynamicMinimapHud extends CustomUIHud {
         // (such as DapperMap's settings page) is open can cause the client to rebuild that
         // page mid-update, producing malformed/discoloured controls.
         //
-        // Pre-publish the *other* shape first without rebuilding, then publish the active
-        // shape with the single common-assets rebuild.  That rebuild registers both masks.
-        // Future circle <-> square changes can then reuse an already registered mask and
-        // DynamicAssetPublisher's per-player hash cache prevents another rebuild.
-        DynamicMinimapSetting alternateMaskSettings = this.settings.copy();
-        alternateMaskSettings.shape = this.settings.isCircle()
-                ? DynamicMinimapSetting.SHAPE_SQUARE
-                : DynamicMinimapSetting.SHAPE_CIRCLE;
-        alternateMaskSettings.normalize();
+        // Register every selectable shape/resolution combination before the one
+        // initial common-assets rebuild. Future shape and texture-resolution
+        // changes can then swap paths without rebuilding an open settings page.
+        for (int resolution : new int[]{256, 320, 384, 448, 512, 1024}) {
+            for (int shape : new int[]{
+                    DynamicMinimapSetting.SHAPE_SQUARE,
+                    DynamicMinimapSetting.SHAPE_CIRCLE}) {
+                if (resolution == this.settings.textureResolution
+                        && shape == this.settings.shape) {
+                    continue;
+                }
 
-        byte[] alternateMask = DynamicMinimapRenderer.renderShapeMask(alternateMaskSettings);
-        if (alternateMask != null) {
-            DynamicAssetPublisher.deliver(
-                    this.ownerRef,
-                    "UI/Custom/" + maskFileFor(alternateMaskSettings),
-                    alternateMask
-            );
+                DynamicMinimapSetting maskSettings = this.settings.copy();
+                maskSettings.textureResolution = resolution;
+                maskSettings.shape = shape;
+                maskSettings.normalize();
+                byte[] candidate = DynamicMinimapRenderer.renderShapeMask(maskSettings);
+                if (candidate != null) {
+                    DynamicAssetPublisher.deliver(
+                            this.ownerRef,
+                            "UI/Custom/" + maskFileFor(maskSettings),
+                            candidate
+                    );
+                }
+            }
         }
 
         byte[] mask = DynamicMinimapRenderer.renderShapeMask(this.settings);
@@ -244,6 +252,35 @@ public final class DynamicMinimapHud extends CustomUIHud {
 
         // The frame is a normal dynamic AssetImage, so it can be delivered and
         // swapped without rebuilding the common UI asset registry.
+        byte[] frame = DynamicMinimapRenderer.renderFrame(this.settings);
+        if (frame != null) {
+            DynamicAssetPublisher.deliver(this.ownerRef, this.framePath, frame);
+        }
+
+        if (!this.built) {
+            return;
+        }
+
+        UICommandBuilder builder = new UICommandBuilder();
+        builder.set("#WayfinderMmRoot #WayfinderMmClip.MaskTexturePath", this.maskFile);
+        builder.set("#WayfinderMmRoot #WayfinderMmFrame.AssetPath", this.framePath);
+        this.update(false, builder);
+    }
+
+    /**
+     * Changes raster resolution without recreating the Custom HUD or rebuilding
+     * common assets. All supported mask paths are registered during initial load.
+     */
+    public void setTextureResolution(int resolution) {
+        int normalized = Math.max(256, Math.min(1024, resolution));
+        if (this.settings.textureResolution == normalized) {
+            return;
+        }
+
+        this.settings.textureResolution = normalized;
+        this.settings.normalize();
+        this.updateStaticAssetPaths();
+
         byte[] frame = DynamicMinimapRenderer.renderFrame(this.settings);
         if (frame != null) {
             DynamicAssetPublisher.deliver(this.ownerRef, this.framePath, frame);

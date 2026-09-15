@@ -207,8 +207,8 @@ public class MinimapCommand extends AbstractPlayerCommand {
                     break;
                 case "resolution":
                 case "texture-resolution":
-                    if (!setRangedInt(value, 256, 512, v -> settings.textureResolution = v)) {
-                        context.sendMessage(Message.raw("Usage: /mm resolution <256..512>"));
+                    if (!setRangedInt(value, 256, 1024, v -> settings.textureResolution = v)) {
+                        context.sendMessage(Message.raw("Usage: /mm resolution <256..1024>"));
                         return;
                     }
                     this.sessions.applySettings(playerRef, settings);
@@ -632,7 +632,7 @@ public class MinimapCommand extends AbstractPlayerCommand {
         context.sendMessage(Message.raw("/mm integration bettermap enable|disable"));
         context.sendMessage(Message.raw("/mm colours list | /mm colour <target> <#RRGGBB|R G B>"));
         context.sendMessage(Message.raw("/mm colour reset <target|all>"));
-        context.sendMessage(Message.raw("Advanced: /mm resolution <256..512>"));
+        context.sendMessage(Message.raw("Advanced: /mm resolution <256..1024>"));
     }
 
     private void addNoArg(String name, String description, String... aliases) {

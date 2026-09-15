@@ -125,7 +125,7 @@ public final class DynamicMinimapSetting {
 
         this.zoomBlocks = clamp(this.zoomBlocks, 16, 256);
         this.sizePixels = clamp(this.sizePixels, 120, 360);
-        this.textureResolution = clamp(this.textureResolution, 256, 512);
+        this.textureResolution = clamp(this.textureResolution, 256, 1024);
         this.interfaceScalePercent = clamp(this.interfaceScalePercent, 75, 160);
         this.mobVerticalRange = clamp(this.mobVerticalRange, 4, 256);
         if (this.position < 0 || this.position > 3) {
