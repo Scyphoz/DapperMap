@@ -44,6 +44,7 @@ public final class DapperMapColoursPage extends InteractiveCustomUIPage<DapperMa
     private final PlayerRef owner;
     private final MinimapSessionManager sessions;
     private final MinimapConfig config;
+    private final boolean adminMode;
     private MinimapColours draft;
     private Key selected = Key.EDGE;
     private final EnumSet<Key> edited = EnumSet.noneOf(Key.class);
@@ -56,12 +57,20 @@ public final class DapperMapColoursPage extends InteractiveCustomUIPage<DapperMa
         this.owner = owner;
         this.sessions = sessions;
         this.config = config;
+        this.adminMode = false;
         this.draft = sessions.getSettings(owner.getUuid(), config).colours;
+    }
+
+    public DapperMapColoursPage(PlayerRef owner, MinimapSessionManager sessions, MinimapConfig config, boolean adminMode) {
+        super(owner, CustomPageLifetime.CanDismiss, Ev.CODEC);
+        this.owner = owner; this.sessions = sessions; this.config = config; this.adminMode = adminMode;
+        this.draft = (adminMode ? sessions.getAdminDefaults(config) : sessions.getSettings(owner.getUuid(), config)).colours;
     }
 
     @Override
     public void build(Ref<EntityStore> ref, UICommandBuilder ui, UIEventBuilder events, Store<EntityStore> store) {
-        ui.append("Pages/DapperMapColours.ui");
+        if (adminMode && !owner.hasPermission(DapperMapSettingsPage.ADMIN_PERMISSION)) return;
+        ui.append(adminMode ? "Pages/DapperMapAdminColours.ui" : "Pages/DapperMapColours.ui");
         ui.set("#ColourTarget.Entries", Arrays.stream(Key.values())
                 .filter(DapperMapColoursPage::isEditorVisible)
                 .map(key -> new DropdownEntryInfo(
@@ -298,7 +307,7 @@ public final class DapperMapColoursPage extends InteractiveCustomUIPage<DapperMa
         }
 
         if ("save".equals(action)) {
-            var settings = sessions.getSettings(owner.getUuid(), config);
+            var settings = adminMode ? sessions.getAdminDefaults(config).copy() : sessions.getSettings(owner.getUuid(), config);
             if (!settings.enabled) {
                 UICommandBuilder ui = new UICommandBuilder();
                 ui.set("#ColourChanges.Text", "Minimap is disabled. Cancel, enable it, then edit colours.");
@@ -308,7 +317,7 @@ public final class DapperMapColoursPage extends InteractiveCustomUIPage<DapperMa
 
             // Only touched keys overwrite live settings (commands may run while this page is open).
             settings.colours = mergeDraft(settings.colours);
-            sessions.applySettings(owner, settings);
+            if (adminMode) sessions.setAdminDefaults(settings); else sessions.applySettings(owner, settings);
             stopPulse();
             openSettings(ref, store);
             return;
@@ -365,7 +374,7 @@ public final class DapperMapColoursPage extends InteractiveCustomUIPage<DapperMa
             player.getPageManager().openCustomPage(
                     ref,
                     store,
-                    new DapperMapSettingsPage(owner, sessions, config)
+                    new DapperMapSettingsPage(owner, sessions, config, adminMode)
             );
         }
     }

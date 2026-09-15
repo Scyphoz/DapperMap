@@ -42,6 +42,7 @@ public final class MoveMinimapPage
     private final PlayerRef playerRef;
     private final MinimapSessionManager sessions;
     private final MinimapConfig config;
+    private final boolean adminMode;
 
     private int pendingX;
     private int pendingY;
@@ -62,14 +63,22 @@ public final class MoveMinimapPage
         this.playerRef = playerRef;
         this.sessions = sessions;
         this.config = config;
+        this.adminMode = false;
 
-        DynamicMinimapSetting settings =
-                sessions.getSettings(playerRef.getUuid(), config);
+        DynamicMinimapSetting settings = sessions.getSettings(playerRef.getUuid(), config);
 
         this.pendingX = settings.hudPositionX;
         this.pendingY = settings.hudPositionY;
         this.previewShape = settings.shape;
         this.previewPanelPosition = settings.infoPanelPosition;
+    }
+
+    public MoveMinimapPage(PlayerRef playerRef, MinimapSessionManager sessions, MinimapConfig config, boolean adminMode) {
+        super(playerRef, CustomPageLifetime.CanDismiss, Ev.CODEC);
+        this.playerRef = playerRef; this.sessions = sessions; this.config = config; this.adminMode = adminMode;
+        DynamicMinimapSetting settings = adminMode ? sessions.getAdminDefaults(config) : sessions.getSettings(playerRef.getUuid(), config);
+        this.pendingX = settings.hudPositionX; this.pendingY = settings.hudPositionY;
+        this.previewShape = settings.shape; this.previewPanelPosition = settings.infoPanelPosition;
     }
 
     @Override
@@ -79,7 +88,8 @@ public final class MoveMinimapPage
             UIEventBuilder events,
             Store<EntityStore> store
     ) {
-        builder.append("Pages/DapperMapMoveMinimap.ui");
+        if (adminMode && !playerRef.hasPermission(DapperMapSettingsPage.ADMIN_PERMISSION)) return;
+        builder.append(adminMode ? "Pages/DapperMapAdminMoveMinimap.ui" : "Pages/DapperMapMoveMinimap.ui");
 
         builder.clear("#MovePreviewCanvas");
         builder.appendInline(
@@ -251,20 +261,16 @@ public final class MoveMinimapPage
         }
 
         if ("save".equals(action)) {
-            DynamicMinimapSetting settings =
-                    this.sessions.getSettings(
-                            this.playerRef.getUuid(),
-                            this.config
-                    );
+            DynamicMinimapSetting settings = this.adminMode
+                    ? this.sessions.getAdminDefaults(this.config).copy()
+                    : this.sessions.getSettings(this.playerRef.getUuid(), this.config);
 
             settings.hudPositionX = this.pendingX;
             settings.hudPositionY = this.pendingY;
             settings.normalize();
 
-            this.sessions.applySettings(
-                    this.playerRef,
-                    settings
-            );
+            if (this.adminMode) this.sessions.setAdminDefaults(settings);
+            else this.sessions.applySettings(this.playerRef, settings);
 
             openSettings(ref, store);
             return;
@@ -508,7 +514,8 @@ public final class MoveMinimapPage
                     new DapperMapSettingsPage(
                             this.playerRef,
                             this.sessions,
-                            this.config
+                            this.config,
+                            this.adminMode
                     )
             );
         }

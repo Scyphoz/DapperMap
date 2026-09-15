@@ -10,6 +10,7 @@ import com.hypixel.hytale.server.core.util.Config;
 import dev.scyphoz.dappermap.commands.MinimapCommand;
 import dev.scyphoz.dappermap.config.MinimapConfig;
 import dev.scyphoz.dappermap.events.PlayerReadyListener;
+import dev.scyphoz.dappermap.permissions.DapperMapPermissions;
 import dev.scyphoz.dappermap.service.MinimapSessionManager;
 import java.util.Objects;
 import javax.annotation.Nonnull;
@@ -26,6 +27,7 @@ public class DapperMap extends JavaPlugin {
 
     protected void setup() {
         config.save();
+        DapperMapPermissions.register();
         this.sessions.setDataDirectory(this.getDataDirectory());
         this.getCommandRegistry().registerCommand(new MinimapCommand("dappermap", "Configure DapperMap", this.sessions));
         EventRegistry var10000 = this.getEventRegistry();

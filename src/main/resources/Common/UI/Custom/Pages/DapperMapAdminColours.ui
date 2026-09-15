@@ -1,0 +1,228 @@
+$C = "../Common.ui";
+
+$C.@PageOverlay {}
+$C.@DecoratedContainer {
+  Anchor: (Width: 820, Height: 760);
+
+  #Title {
+    Label {
+      Text: "DapperMap Colours";
+      Style: (...$C.@TitleStyle, HorizontalAlignment: Center, TextColor: #ffd66b);
+      Padding: (Horizontal: 19);
+    }
+  }
+
+  #Content {
+    LayoutMode: Top;
+    Padding: (Horizontal: 20);
+
+    Group {
+      Anchor: (Height: 42);
+      Background: #244f38(0.96);
+      Padding: (Horizontal: 12);
+      Label {
+        Text: "Choose a HUD element, then click the colour swatch. Changes are previewed here before you save.";
+        Style: (FontSize: 13, TextColor: #d9eefc, HorizontalAlignment: Center, VerticalAlignment: Center);
+      }
+    }
+
+    Group {
+      Anchor: (Height: 52);
+      LayoutMode: Left;
+      Padding: (Vertical: 7);
+
+      Label {
+        FlexWeight: 1;
+        Text: "Colour To Change";
+        Style: (FontSize: 15, RenderBold: true, TextColor: #f4f7fb, HorizontalAlignment: Start, VerticalAlignment: Center);
+      }
+
+      $C.@DropdownBox #ColourTarget {
+        @Anchor = (Width: 390, Height: 38);
+        ShowLabel: true;
+      }
+    }
+
+    Label #ColourDescription {
+      Anchor: (Height: 26);
+      Style: (FontSize: 12, TextColor: #9ddcff, HorizontalAlignment: Start, VerticalAlignment: Center);
+    }
+
+    // Full HUD preview. Each colour-bearing component has its own ID so the server
+    // can update it immediately and colour-pulse only the currently selected target.
+    Group #HudPreview {
+      Anchor: (Height: 330);
+      Background: #183526(0.82);
+      LayoutMode: Left;
+      Padding: (Horizontal: 18, Vertical: 14);
+
+      Group #PreviewMapArea {
+        Anchor: (Width: 390, Height: 300);
+        LayoutMode: CenterMiddle;
+
+        Group #PreviewShadow {
+          Anchor: (Width: 264, Height: 264);
+          Background: #03080c;
+          Padding: (Full: 3);
+
+          Group #PreviewOuterEdge {
+            Anchor: (Full: 0);
+            Background: #e0ae52;
+            Padding: (Full: 3);
+
+            Group #PreviewMap {
+                  Anchor: (Full: 0);
+                  Background: #0a1218;
+
+                  // A few muted terrain-like blocks make marker colours easier to judge.
+                  Group { Anchor: (Left: 20, Top: 26, Width: 72, Height: 62); Background: #355443(0.72); }
+                  Group { Anchor: (Left: 96, Top: 24, Width: 82, Height: 86); Background: #4f6543(0.68); }
+                  Group { Anchor: (Left: 42, Top: 116, Width: 92, Height: 72); Background: #31576b(0.65); }
+                  Group { Anchor: (Left: 144, Top: 126, Width: 74, Height: 76); Background: #6b5e43(0.68); }
+
+                  Group #PreviewTickTop { Anchor: (Left: 112, Top: 2, Width: 18, Height: 3); Background: #ced6e2; }
+                  Group #PreviewTickRight { Anchor: (Right: 2, Top: 112, Width: 3, Height: 18); Background: #ced6e2; }
+                  Group #PreviewTickBottom { Anchor: (Left: 112, Bottom: 2, Width: 18, Height: 3); Background: #ced6e2; }
+                  Group #PreviewTickLeft { Anchor: (Left: 2, Top: 112, Width: 3, Height: 18); Background: #ced6e2; }
+
+                  Label #PreviewNorth { Anchor: (Left: 111, Top: 7, Width: 22, Height: 22); Text: "N"; Style: (FontSize: 13, RenderBold: true, TextColor: #ffdc50, HorizontalAlignment: Center, VerticalAlignment: Center); }
+                  Label #PreviewEast { Anchor: (Right: 7, Top: 111, Width: 22, Height: 22); Text: "E"; Style: (FontSize: 13, RenderBold: true, TextColor: #ffdc50, HorizontalAlignment: Center, VerticalAlignment: Center); }
+                  Label #PreviewSouth { Anchor: (Left: 111, Bottom: 7, Width: 22, Height: 22); Text: "S"; Style: (FontSize: 13, RenderBold: true, TextColor: #ffdc50, HorizontalAlignment: Center, VerticalAlignment: Center); }
+                  Label #PreviewWest { Anchor: (Left: 7, Top: 111, Width: 22, Height: 22); Text: "W"; Style: (FontSize: 13, RenderBold: true, TextColor: #ffdc50, HorizontalAlignment: Center, VerticalAlignment: Center); }
+
+                  Group #PreviewSelfOutline { Anchor: (Left: 115, Top: 112, Width: 24, Height: 24); Background: #000000; Padding: (Full: 3); LayoutMode: CenterMiddle;
+                    Label #PreviewSelf { Anchor: (Full: 0); Text: "▲"; Style: (FontSize: 17, RenderBold: true, TextColor: #28ff64, HorizontalAlignment: Center, VerticalAlignment: Center); }
+                  }
+
+                  Group #PreviewPlayerOutline { Anchor: (Left: 72, Top: 77, Width: 16, Height: 16); Background: #000000; Padding: (Full: 3); }
+                  Group #PreviewPlayer { Anchor: (Left: 75, Top: 80, Width: 10, Height: 10); Background: #508cff; }
+
+                  Label #PreviewDeathOutline { Anchor: (Left: 172, Top: 72, Width: 24, Height: 24); Text: "✕"; Style: (FontSize: 22, RenderBold: true, TextColor: #000000, HorizontalAlignment: Center, VerticalAlignment: Center); }
+                  Label #PreviewDeath { Anchor: (Left: 174, Top: 74, Width: 20, Height: 20); Text: "✕"; Style: (FontSize: 17, RenderBold: true, TextColor: #ffffff, HorizontalAlignment: Center, VerticalAlignment: Center); }
+
+                  Group #PreviewHostileActiveOutline { Anchor: (Left: 58, Top: 164, Width: 16, Height: 16); Background: #000000; Padding: (Full: 3); }
+                  Group #PreviewHostileActive { Anchor: (Left: 61, Top: 167, Width: 10, Height: 10); Background: #dc2828; }
+
+                  Group #PreviewHostileOutline { Anchor: (Left: 158, Top: 178, Width: 16, Height: 16); Background: #000000; Padding: (Full: 3); }
+                  Group #PreviewHostile { Anchor: (Left: 161, Top: 181, Width: 10, Height: 10); Background: #ff8c00; }
+
+                  Group #PreviewNeutralOutline { Anchor: (Left: 184, Top: 134, Width: 16, Height: 16); Background: #000000; Padding: (Full: 3); }
+                  Group #PreviewNeutral { Anchor: (Left: 187, Top: 137, Width: 10, Height: 10); Background: #e6c828; }
+
+                  Group #PreviewFriendlyOutline { Anchor: (Left: 91, Top: 142, Width: 16, Height: 16); Background: #000000; Padding: (Full: 3); }
+                  Group #PreviewFriendly { Anchor: (Left: 94, Top: 145, Width: 10, Height: 10); Background: #3cd25a; }
+            }
+          }
+        }
+      }
+
+      Group #PreviewPanel {
+        Anchor: (Width: 370, Height: 300);
+        Background: #071016;
+        LayoutMode: Top;
+        Padding: (Full: 12);
+
+        Label #PreviewBrand {
+          Anchor: (Height: 38);
+          Text: "DapperMap";
+          Style: (FontSize: 19, RenderBold: true, TextColor: #ffd66b, HorizontalAlignment: Center, VerticalAlignment: Center);
+        }
+
+        Group #PreviewCoords {
+          Anchor: (Height: 48);
+          Background: #102232;
+          LayoutMode: CenterMiddle;
+          Label #PreviewCoordsText { Text: "X 124  Y 67  Z -302"; Style: (FontSize: 14, RenderBold: true, TextColor: #f5f7fb, HorizontalAlignment: Center, VerticalAlignment: Center); }
+        }
+
+        Group {
+          Anchor: (Height: 48);
+          LayoutMode: Left;
+          Group #PreviewCompass {
+            FlexWeight: 1;
+            Background: #132733;
+            LayoutMode: CenterMiddle;
+            Label #PreviewCompassText { Text: "NW 315°"; Style: (FontSize: 14, RenderBold: true, TextColor: #ffd66b, HorizontalAlignment: Center, VerticalAlignment: Center); }
+          }
+          Group { Anchor: (Width: 4); }
+          Group #PreviewClock {
+            FlexWeight: 1;
+            Background: #183040;
+            LayoutMode: CenterMiddle;
+            Label #PreviewClockText { Text: "18:42"; Style: (FontSize: 14, RenderBold: true, TextColor: #9ddcff, HorizontalAlignment: Center, VerticalAlignment: Center); }
+          }
+        }
+
+        Group #PreviewBiome {
+          Anchor: (Height: 48);
+          Background: #0f1f29;
+          LayoutMode: CenterMiddle;
+          Label #PreviewBiomeText { Text: "Emerald Grove"; Style: (FontSize: 14, RenderBold: true, TextColor: #cfe0ef, HorizontalAlignment: Center, VerticalAlignment: Center); }
+        }
+
+        Label {
+          FlexWeight: 1;
+          Text: "Selected element slowly pulses in the preview";
+          Style: (FontSize: 11, TextColor: #7f9bae, HorizontalAlignment: Center, VerticalAlignment: Center);
+        }
+      }
+    }
+
+    Group {
+      Anchor: (Height: 60);
+      LayoutMode: Left;
+      Padding: (Top: 7, Bottom: 7);
+
+      Label {
+        Anchor: (Width: 150, Height: 46);
+        Text: "Pick Colour";
+        Style: (FontSize: 15, RenderBold: true, TextColor: #f4f7fb, HorizontalAlignment: Start, VerticalAlignment: Center);
+      }
+
+      ColorPickerDropdownBox #ColourPicker {
+        Anchor: (Width: 430, Height: 46);
+        Style: $C.@DefaultColorPickerDropdownBoxStyle;
+        Color: #e0ae52;
+        Format: Rgb;
+        DisplayTextField: true;
+        ResetTransparencyWhenChangingColor: true;
+      }
+
+      Label #ColourHex {
+        FlexWeight: 1;
+        Anchor: (Height: 46);
+        Text: "#E0AE52";
+        Style: (FontSize: 14, RenderBold: true, TextColor: #9ddcff, HorizontalAlignment: End, VerticalAlignment: Center);
+      }
+    }
+
+    Group {
+      Anchor: (Height: 48);
+      LayoutMode: Left;
+      Padding: (Vertical: 5);
+      Group #ColourResetSlot { FlexWeight: 1; Anchor: (Height: 38); LayoutMode: CenterMiddle; }
+      Group { Anchor: (Width: 12); }
+      Group #ColourResetAllSlot { FlexWeight: 1; Anchor: (Height: 38); LayoutMode: CenterMiddle; }
+    }
+
+    Label #ColourChanges {
+      Anchor: (Height: 24);
+      Style: (FontSize: 12, TextColor: #9ddcff, HorizontalAlignment: Center, VerticalAlignment: Center);
+    }
+
+    Group {
+      FlexWeight: 1;
+    }
+
+    Group {
+      Anchor: (Height: 54);
+      LayoutMode: Left;
+      Padding: (Top: 8, Bottom: 6, Horizontal: 100);
+      Group #ColourSaveSlot { FlexWeight: 1; Anchor: (Height: 40); LayoutMode: CenterMiddle; }
+      Group { Anchor: (Width: 14); }
+      Group #ColourCancelSlot { FlexWeight: 1; Anchor: (Height: 40); LayoutMode: CenterMiddle; }
+    }
+  }
+}
+
+$C.@BackButton {}

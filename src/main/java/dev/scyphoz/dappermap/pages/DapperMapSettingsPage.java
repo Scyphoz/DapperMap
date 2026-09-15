@@ -1,11 +1,14 @@
 package dev.scyphoz.dappermap.pages;
 
+import com.hypixel.hytale.server.core.permissions.PermissionQuery;
+import dev.scyphoz.dappermap.permissions.DapperMapPermissions;
 import com.hypixel.hytale.codec.Codec;
 import com.hypixel.hytale.codec.KeyedCodec;
 import com.hypixel.hytale.codec.builder.BuilderCodec;
 import com.hypixel.hytale.component.Ref;
 import com.hypixel.hytale.component.Store;
 import com.hypixel.hytale.protocol.packets.interface_.CustomPageLifetime;
+import com.hypixel.hytale.protocol.packets.interface_.Page;
 import com.hypixel.hytale.protocol.packets.interface_.CustomUIEventBindingType;
 import com.hypixel.hytale.server.core.Message;
 import com.hypixel.hytale.server.core.entity.entities.Player;
@@ -40,6 +43,13 @@ public final class DapperMapSettingsPage
     private final PlayerRef playerRef;
     private final MinimapSessionManager sessions;
     private final MinimapConfig config;
+    private final boolean adminMode;
+    /**
+     * Retained for source compatibility. The authoritative definition now lives in
+     * {@link dev.scyphoz.dappermap.permissions.DapperMapPermissions#ADMIN}, which uses the
+     * same node the command framework generates for {@code /dappermap admin}.
+     */
+    public static final PermissionQuery ADMIN_PERMISSION = DapperMapPermissions.ADMIN;
 
     public DapperMapSettingsPage(
             PlayerRef playerRef,
@@ -55,6 +65,15 @@ public final class DapperMapSettingsPage
         this.playerRef = playerRef;
         this.sessions = sessions;
         this.config = config;
+        this.adminMode = false;
+    }
+
+    public DapperMapSettingsPage(PlayerRef playerRef, MinimapSessionManager sessions, MinimapConfig config, boolean adminMode) {
+        super(playerRef, CustomPageLifetime.CanDismiss, DapperMapSettingsPage.Ev.CODEC);
+        this.playerRef = playerRef;
+        this.sessions = sessions;
+        this.config = config;
+        this.adminMode = adminMode;
     }
 
     public void build(
@@ -63,11 +82,16 @@ public final class DapperMapSettingsPage
             UIEventBuilder events,
             Store<EntityStore> store
     ) {
-        DynamicMinimapSetting settings =
-                this.sessions.getSettings(this.playerRef.getUuid(), this.config);
+        if (this.adminMode && !this.playerRef.hasPermission(ADMIN_PERMISSION)) return;
+        DynamicMinimapSetting settings = this.adminMode
+                ? this.sessions.getAdminDefaults(this.config)
+                : this.sessions.getSettings(this.playerRef.getUuid(), this.config);
 
-        builder.append("Pages/DapperMapSettings.ui");
-        builder.set("#PageTitle.Text", "DapperMap");
+        builder.append(this.adminMode ? "Pages/DapperMapAdminSettings.ui" : "Pages/DapperMapSettings.ui");
+        builder.set("#PageTitle.Text", this.adminMode ? "DapperMap - Admin Settings" : "DapperMap");
+        if (this.adminMode) {
+            builder.set("#DapperMapTagline.Text", "Server defaults for new DapperMap players");
+        }
 
         this.renderList(builder, events, settings);
         this.bindFooterButtons(builder, events);
@@ -84,7 +108,7 @@ public final class DapperMapSettingsPage
 
         builder.set(
                 "#DapperMapResetButtonSlot[0].TextSpans",
-                Message.raw("RESET TO DEFAULTS").color(GOLD)
+                Message.raw(this.adminMode ? "RESET TO MOD DEFAULTS" : "RESET TO DEFAULTS").color(GOLD)
         );
 
         events.addEventBinding(
@@ -93,6 +117,22 @@ public final class DapperMapSettingsPage
                 EventData.of("Action", "reset_defaults"),
                 false
         );
+
+        if (!this.adminMode && this.playerRef.hasPermission(ADMIN_PERMISSION)) {
+            builder.append("#DapperMapAdminButtonSlot", "Pages/BasicTextButton.ui");
+            builder.set("#DapperMapAdminButtonSlot[0].TextSpans", Message.raw("ADMIN SETTINGS").color(GREEN));
+            events.addEventBinding(CustomUIEventBindingType.Activating, "#DapperMapAdminButtonSlot[0]",
+                    EventData.of("Action", "admin_settings"), false);
+        }
+
+        if (this.adminMode) {
+            // The admin page leaves the bottom-left slot free, so reuse it rather than
+            // changing the shared footer layout.
+            builder.append("#DapperMapAdminButtonSlot", "Pages/BasicTextButton.ui");
+            builder.set("#DapperMapAdminButtonSlot[0].TextSpans", Message.raw("SAVE CHANGES").color(GREEN));
+            events.addEventBinding(CustomUIEventBindingType.Activating, "#DapperMapAdminButtonSlot[0]",
+                    EventData.of("Action", "admin_save"), false);
+        }
     }
 
     private void renderList(
@@ -234,20 +274,48 @@ public final class DapperMapSettingsPage
     ) {
         String action = event.action;
 
+        if (this.adminMode && !this.playerRef.hasPermission(ADMIN_PERMISSION)) return;
+        if ("admin_settings".equals(action)) {
+            if (!this.playerRef.hasPermission(ADMIN_PERMISSION)) return;
+            this.sessions.setAdminPageOrigin(this.playerRef.getUuid(), true);
+            Player player = store.getComponent(ref, Player.getComponentType());
+            if (player != null) player.getPageManager().openCustomPage(ref, store,
+                    new DapperMapSettingsPage(this.playerRef, this.sessions, this.config, true));
+            return;
+        }
+
+        if ("admin_save".equals(action)) {
+            if (!this.adminMode || !this.playerRef.hasPermission(ADMIN_PERMISSION)) return;
+            // Each edit is already persisted as it is made; re-saving here makes the button
+            // an explicit confirmation and guarantees the file matches what is on screen.
+            this.sessions.setAdminDefaults(this.sessions.getAdminDefaults(this.config));
+            Player player = store.getComponent(ref, Player.getComponentType());
+            if (player == null) return;
+            boolean fromPlayerPage = this.sessions.adminPageOpenedFromPlayerPage(this.playerRef.getUuid());
+            this.sessions.setAdminPageOrigin(this.playerRef.getUuid(), false);
+            if (fromPlayerPage) {
+                player.getPageManager().openCustomPage(ref, store,
+                        new DapperMapSettingsPage(this.playerRef, this.sessions, this.config));
+            } else {
+                player.getPageManager().setPage(ref, store, Page.None);
+            }
+            return;
+        }
+
         if (action == null || action.isEmpty()) {
             return;
         }
 
         if ("colours".equals(action)) {
-            if (!this.sessions.getSettings(this.playerRef.getUuid(), this.config).enabled) return;
+            if (!(this.adminMode ? this.sessions.getAdminDefaults(this.config) : this.sessions.getSettings(this.playerRef.getUuid(), this.config)).enabled) return;
             Player player = store.getComponent(ref, Player.getComponentType());
             if (player != null) player.getPageManager().openCustomPage(ref, store,
-                    new DapperMapColoursPage(this.playerRef, this.sessions, this.config));
+                    new DapperMapColoursPage(this.playerRef, this.sessions, this.config, this.adminMode));
             return;
         }
 
         if ("move_minimap".equals(action)) {
-            if (!this.sessions.getSettings(this.playerRef.getUuid(), this.config).enabled) return;
+            if (!(this.adminMode ? this.sessions.getAdminDefaults(this.config) : this.sessions.getSettings(this.playerRef.getUuid(), this.config)).enabled) return;
             Player player =
                     (Player) store.getComponent(
                             ref,
@@ -261,7 +329,8 @@ public final class DapperMapSettingsPage
                         new MoveMinimapPage(
                                 this.playerRef,
                                 this.sessions,
-                                this.config
+                                this.config,
+                                this.adminMode
                         )
                 );
             }
@@ -269,11 +338,14 @@ public final class DapperMapSettingsPage
             return;
         }
 
-        DynamicMinimapSetting settings =
-                this.sessions.getSettings(this.playerRef.getUuid(), this.config);
+        DynamicMinimapSetting settings = this.adminMode
+                ? this.sessions.getAdminDefaults(this.config).copy()
+                : this.sessions.getSettings(this.playerRef.getUuid(), this.config);
 
         if ("reset_defaults".equals(action)) {
-            settings = DynamicMinimapSetting.fromConfig(this.config);
+            settings = this.adminMode
+                    ? DynamicMinimapSetting.fromConfig(this.config)
+                    : this.sessions.getAdminDefaults(this.config).copy();
 
         } else if (action.startsWith("toggle_")) {
             applyToggle(
@@ -292,7 +364,8 @@ public final class DapperMapSettingsPage
             return;
         }
 
-        this.sessions.applySettings(this.playerRef, settings);
+        if (this.adminMode) this.sessions.setAdminDefaults(settings);
+        else this.sessions.applySettings(this.playerRef, settings);
 
         UICommandBuilder builder = new UICommandBuilder();
         UIEventBuilder events = new UIEventBuilder();
@@ -408,9 +481,9 @@ public final class DapperMapSettingsPage
                 for (int value : values) entries.add(entry(value + "%", Integer.toString(value)));
             }
             case "texture_resolution" -> {
-                for (int value : new int[]{256, 320, 384, 448, 512, 1024}) {
-                    entries.add(entry(value + " px", Integer.toString(value)));
-                }
+                TreeSet<Integer> values = new TreeSet<>(List.of(256, 320, 384, 448, 512, 1024));
+                values.add(settings.textureResolution);
+                for (int value : values) entries.add(entry(value + " px", Integer.toString(value)));
             }
             case "speed" -> {
                 for (int value = 0; value <= 3; value++) entries.add(entry(displaySpeed(value), Integer.toString(value)));

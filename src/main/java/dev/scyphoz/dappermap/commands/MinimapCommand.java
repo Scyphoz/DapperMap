@@ -7,7 +7,9 @@ import com.hypixel.hytale.server.core.command.system.CommandContext;
 import com.hypixel.hytale.server.core.command.system.arguments.system.RequiredArg;
 import com.hypixel.hytale.server.core.command.system.arguments.system.OptionalArg;
 import com.hypixel.hytale.server.core.command.system.arguments.types.ArgTypes;
+import com.hypixel.hytale.server.core.command.system.AbstractCommand;
 import com.hypixel.hytale.server.core.command.system.basecommands.AbstractPlayerCommand;
+import com.hypixel.hytale.server.core.permissions.provider.HytalePermissionsProvider;
 import com.hypixel.hytale.server.core.entity.entities.Player;
 import com.hypixel.hytale.server.core.universe.PlayerRef;
 import com.hypixel.hytale.server.core.universe.world.World;
@@ -19,6 +21,7 @@ import dev.scyphoz.dappermap.dynamic.MinimapColours;
 import dev.scyphoz.dappermap.dynamic.MinimapColours.Key;
 import dev.scyphoz.dappermap.integration.BetterMapIntegration;
 import dev.scyphoz.dappermap.pages.DapperMapSettingsPage;
+import dev.scyphoz.dappermap.permissions.DapperMapPermissions;
 import dev.scyphoz.dappermap.pages.DapperMapColoursPage;
 import dev.scyphoz.dappermap.service.MinimapSessionManager;
 import javax.annotation.Nonnull;
@@ -32,32 +35,50 @@ public class MinimapCommand extends AbstractPlayerCommand {
         super(name, description);
         this.sessions = sessions;
         this.addAliases("minimap", "mm", "dm");
-        addNoArg("settings", "Open settings", "menu", "gui");
-        addNoArg("on", "Show DapperMap"); addNoArg("off", "Hide DapperMap");
-        addNoArg("status", "Show current settings"); addNoArg("reset", "Reset settings", "defaults");
-        addString("zoom", "Set zoom", new String[]{"close", "medium", "far"});
-        addString("speed", "Set update speed", new String[]{"very-fast", "fast", "normal", "slow"}, "update");
-        addString("shape", "Set map shape", new String[]{"circle", "square"});
-        addString("rotation", "Set rotation", new String[]{"north", "player"}, "rotate");
-        addString("panel", "Set information panel position", new String[]{"below", "above", "left", "right"}, "info-panel", "infopanel");
-        addString("height", "Toggle creature height detection", ON_OFF, "height-detection");
-        addString("clock", "Configure clock", new String[]{"on", "off", "12", "24"});
-        addString("coordinates", "Toggle coordinates", ON_OFF, "coords");
-        addString("compass", "Toggle compass", ON_OFF); addString("biome", "Toggle biome", ON_OFF);
-        addInt("size", "Set map size"); addInt("scale", "Set interface scale", "interface-scale", "interfacescale");
-        addInt("height-range", "Set creature height range", "heightrange", "vrange");
-        addInt("resolution", "Set texture resolution", "texture-resolution");
-        addTwoInt("position", "Set map position", "pos");
-        addTwoString("markers", "Configure markers", "blips");
-        addTwoString("integration", "Configure integrations", "integrations");
-        this.addSubCommand(new ColourDispatchCommand("colours", "Configure colours", this, "colour", "color", "colors"));
+
+        // The player-facing tree.
+        registerSettingCommands(this, Scope.PLAYER);
+
+        // The admin tree is the same set of sub-commands, rooted under "admin" and
+        // routed at the server defaults instead of the caller's personal settings.
+        AdminDispatchCommand admin = new AdminDispatchCommand(this);
+        registerSettingCommands(admin, Scope.ADMIN);
+        this.addSubCommand(admin);
+    }
+
+    /**
+     * Registers the full setting table onto {@code parent}. Called once for the player
+     * tree and once for the admin tree so the two can never drift apart: adding a setting
+     * here gives you both {@code /dappermap <setting>} and {@code /dappermap admin <setting>},
+     * with identical argument types and tab completion.
+     */
+    private void registerSettingCommands(AbstractCommand parent, Scope scope) {
+        addNoArg(parent, scope, "settings", "Open settings", "menu", "gui");
+        addNoArg(parent, scope, "on", "Show DapperMap");
+        addNoArg(parent, scope, "off", "Hide DapperMap");
+        addNoArg(parent, scope, "status", "Show current settings");
+        addNoArg(parent, scope, "reset", "Reset settings", "defaults");
+        addString(parent, scope, "zoom", "Set zoom", new String[]{"close", "medium", "far"});
+        addString(parent, scope, "speed", "Set update speed", new String[]{"very-fast", "fast", "normal", "slow"}, "update");
+        addString(parent, scope, "shape", "Set map shape", new String[]{"circle", "square"});
+        addString(parent, scope, "rotation", "Set rotation", new String[]{"north", "player"}, "rotate");
+        addString(parent, scope, "panel", "Set information panel position", new String[]{"below", "above", "left", "right"}, "info-panel", "infopanel");
+        addString(parent, scope, "height", "Toggle creature height detection", ON_OFF, "height-detection");
+        addString(parent, scope, "clock", "Configure clock", new String[]{"on", "off", "12", "24"});
+        addString(parent, scope, "coordinates", "Toggle coordinates", ON_OFF, "coords");
+        addString(parent, scope, "compass", "Toggle compass", ON_OFF);
+        addString(parent, scope, "biome", "Toggle biome", ON_OFF);
+        addInt(parent, scope, "size", "Set map size");
+        addInt(parent, scope, "scale", "Set interface scale", "interface-scale", "interfacescale");
+        addInt(parent, scope, "height-range", "Set creature height range", "heightrange", "vrange");
+        addInt(parent, scope, "resolution", "Set texture resolution", "texture-resolution");
+        addTwoInt(parent, scope, "position", "Set map position", "pos");
+        addTwoString(parent, scope, "markers", "Configure markers", "blips");
+        addTwoString(parent, scope, "integration", "Configure integrations", "integrations");
+        parent.addSubCommand(new ColourDispatchCommand("colours", "Configure colours", this, scope, "colour", "color", "colors"));
     }
 
     private static final String[] ON_OFF = {"on", "off"};
-
-    public boolean canGeneratePermission() {
-        return false;
-    }
 
     protected void execute(@Nonnull CommandContext context, @Nonnull Store<EntityStore> store, @Nonnull Ref<EntityStore> ref, @Nonnull PlayerRef playerRef, @Nonnull World world) {
         boolean enabled = this.sessions.toggle((Player)store.getComponent(ref, Player.getComponentType()), playerRef,
@@ -294,6 +315,65 @@ public class MinimapCommand extends AbstractPlayerCommand {
     private record ColourCommandResult(boolean changed, String message) { }
 
     /** Parses /mm colour(s) arguments without requiring a separate command class. */
+    private void dispatchAdmin(@Nonnull CommandContext context, @Nonnull Store<EntityStore> store, @Nonnull Ref<EntityStore> ref,
+                               @Nonnull PlayerRef playerRef, String arguments) {
+        if (!playerRef.hasPermission(DapperMapPermissions.ADMIN)) {
+            context.sendMessage(Message.raw("You do not have permission to manage DapperMap server defaults."));
+            return;
+        }
+        MinimapConfig config = (MinimapConfig)DapperMap.getConfig().get();
+        Player player = store.getComponent(ref, Player.getComponentType());
+        String args = arguments == null ? "" : arguments.trim();
+        if (args.isEmpty() || args.equalsIgnoreCase("settings") || args.equalsIgnoreCase("menu") || args.equalsIgnoreCase("gui")) {
+            // Opened from the console, so "Save Changes" should close the UI rather than
+            // drop the admin into the player settings page.
+            this.sessions.setAdminPageOrigin(playerRef.getUuid(), false);
+            if (player != null) player.getPageManager().openCustomPage(ref, store,
+                    new DapperMapSettingsPage(playerRef, this.sessions, config, true));
+            return;
+        }
+        String[] parts = args.split("\\s+", 3);
+        String key = parts[0].toLowerCase();
+        String value = parts.length > 1 ? parts[1].toLowerCase() : "";
+        String extra = parts.length > 2 ? parts[2].toLowerCase() : "";
+        DynamicMinimapSetting settings = this.sessions.getAdminDefaults(config).copy();
+        boolean changed = false;
+        String usage = null;
+        switch (key) {
+            case "status" -> { context.sendMessage(Message.raw("DapperMap admin defaults: " + status(settings))); return; }
+            case "reset", "defaults" -> { this.sessions.resetAdminDefaults(config); context.sendMessage(Message.raw("DapperMap admin defaults reset to mod defaults.")); return; }
+            case "on" -> { settings.enabled = true; changed = true; }
+            case "off" -> { settings.enabled = false; changed = true; }
+            case "zoom" -> { changed = setZoom(settings, value); usage = "admin zoom close|medium|far|<16..256>"; }
+            case "speed", "update" -> { changed = setSpeed(settings, value); usage = "admin speed very-fast|fast|normal|slow"; }
+            case "shape" -> { changed = setShape(settings, value); usage = "admin shape circle|square"; }
+            case "rotation", "rotate" -> { changed = setRotation(settings, value); usage = "admin rotation north|player"; }
+            case "panel", "info-panel", "infopanel" -> { changed = setPanelPosition(settings, value); usage = "admin panel below|above|left|right"; }
+            case "position", "pos" -> { changed = setPosition(settings, value, extra); usage = "admin position <x 0..100> <y 0..100>"; }
+            case "size" -> { changed = setRangedInt(value,120,360,v->settings.sizePixels=v); usage = "admin size <120..360>"; }
+            case "scale", "interface-scale", "interfacescale" -> { changed = setRangedInt(value,75,160,v->settings.interfaceScalePercent=v); usage = "admin scale <75..160>"; }
+            case "resolution", "texture-resolution" -> { changed = setRangedInt(value,256,1024,v->settings.textureResolution=v); usage = "admin resolution <256..1024>"; }
+            case "height-range", "heightrange", "vrange" -> { changed = setRangedInt(value,4,256,v->settings.mobVerticalRange=v); usage = "admin height-range <4..256>"; }
+            case "markers", "blips" -> { changed = setMarkerToggle(settings, value, extra); usage = "admin markers players|entities|death|worldmap on|off"; }
+            case "height", "height-detection" -> { if ("on".equals(value)||"off".equals(value)) { settings.limitMobHeight="on".equals(value); changed=true; } usage="admin height on|off"; }
+            case "coordinates", "coords" -> { if ("on".equals(value)||"off".equals(value)) { settings.showCoordinates="on".equals(value); changed=true; } usage="admin coordinates on|off"; }
+            case "compass" -> { if ("on".equals(value)||"off".equals(value)) { settings.showCompass="on".equals(value); changed=true; } usage="admin compass on|off"; }
+            case "biome" -> { if ("on".equals(value)||"off".equals(value)) { settings.showBiome="on".equals(value); changed=true; } usage="admin biome on|off"; }
+            case "clock" -> { changed=setClock(settings,value); usage="admin clock on|off|12|24"; }
+            case "integration", "integrations" -> { changed=setIntegration(settings,value,extra,context); usage="admin integration bettermap enable|disable"; }
+            case "colour", "colours", "color", "colors" -> {
+                String colourArgs = args.substring(key.length()).trim();
+                var result = executeColourCommand(settings, colourArgs);
+                if (result.changed()) { this.sessions.setAdminDefaults(settings); }
+                context.sendMessage(Message.raw(result.message())); return;
+            }
+            default -> { context.sendMessage(Message.raw("Usage: /dappermap admin settings|status|reset|<setting> <value>")); return; }
+        }
+        if (!changed) { context.sendMessage(Message.raw("Usage: /dappermap " + usage)); return; }
+        settings.normalize(); this.sessions.setAdminDefaults(settings);
+        context.sendMessage(Message.raw("DapperMap admin default updated: " + key + "."));
+    }
+
     private static ColourCommandResult executeColourCommand(DynamicMinimapSetting settings, String arguments) {
         String[] parts = arguments.trim().split("\\s+", 2);
         String target = parts[0];
@@ -635,40 +715,45 @@ public class MinimapCommand extends AbstractPlayerCommand {
         context.sendMessage(Message.raw("Advanced: /mm resolution <256..1024>"));
     }
 
-    private void addNoArg(String name, String description, String... aliases) {
-        this.addSubCommand(new DispatchCommand(name, description, this, Kind.NONE, null, aliases));
+    private void addNoArg(AbstractCommand parent, Scope scope, String name, String description, String... aliases) {
+        parent.addSubCommand(new DispatchCommand(name, description, this, scope, Kind.NONE, null, aliases));
     }
 
-    private void addString(String name, String description, String[] suggestions, String... aliases) {
-        this.addSubCommand(new DispatchCommand(name, description, this, Kind.STRING, suggestions, aliases));
+    private void addString(AbstractCommand parent, Scope scope, String name, String description, String[] suggestions, String... aliases) {
+        parent.addSubCommand(new DispatchCommand(name, description, this, scope, Kind.STRING, suggestions, aliases));
     }
 
-    private void addInt(String name, String description, String... aliases) {
-        this.addSubCommand(new DispatchCommand(name, description, this, Kind.INTEGER, null, aliases));
+    private void addInt(AbstractCommand parent, Scope scope, String name, String description, String... aliases) {
+        parent.addSubCommand(new DispatchCommand(name, description, this, scope, Kind.INTEGER, null, aliases));
     }
 
-    private void addTwoInt(String name, String description, String... aliases) {
-        this.addSubCommand(new DispatchCommand(name, description, this, Kind.TWO_INTEGERS, null, aliases));
+    private void addTwoInt(AbstractCommand parent, Scope scope, String name, String description, String... aliases) {
+        parent.addSubCommand(new DispatchCommand(name, description, this, scope, Kind.TWO_INTEGERS, null, aliases));
     }
 
-    private void addTwoString(String name, String description, String... aliases) {
-        this.addSubCommand(new DispatchCommand(name, description, this, Kind.TWO_STRINGS, null, aliases));
+    private void addTwoString(AbstractCommand parent, Scope scope, String name, String description, String... aliases) {
+        parent.addSubCommand(new DispatchCommand(name, description, this, scope, Kind.TWO_STRINGS, null, aliases));
     }
+
+    /** Which settings store a sub-command writes to. */
+    private enum Scope { PLAYER, ADMIN }
 
     private enum Kind { NONE, STRING, INTEGER, TWO_INTEGERS, TWO_STRINGS }
 
     private static class DispatchCommand extends AbstractPlayerCommand {
         private final MinimapCommand root;
+        private final Scope scope;
         private final Kind kind;
         private final RequiredArg<String> firstString;
         private final RequiredArg<String> secondString;
         private final RequiredArg<Integer> firstInt;
         private final RequiredArg<Integer> secondInt;
 
-        DispatchCommand(String name, String description, MinimapCommand root, Kind kind,
+        DispatchCommand(String name, String description, MinimapCommand root, Scope scope, Kind kind,
                         String[] suggestions, String... aliases) {
             super(name, description);
             this.root = root;
+            this.scope = scope;
             this.kind = kind;
             if (aliases.length > 0) this.addAliases(aliases);
             this.firstString = kind == Kind.STRING || kind == Kind.TWO_STRINGS
@@ -687,8 +772,6 @@ public class MinimapCommand extends AbstractPlayerCommand {
             }
         }
 
-        public boolean canGeneratePermission() { return false; }
-
         @Override
         protected void execute(@Nonnull CommandContext context, @Nonnull Store<EntityStore> store,
                                @Nonnull Ref<EntityStore> ref, @Nonnull PlayerRef playerRef, @Nonnull World world) {
@@ -697,17 +780,49 @@ public class MinimapCommand extends AbstractPlayerCommand {
             else if (kind == Kind.INTEGER) args += " " + firstInt.get(context);
             else if (kind == Kind.TWO_INTEGERS) args += " " + firstInt.get(context) + " " + secondInt.get(context);
             else if (kind == Kind.TWO_STRINGS) args += " " + firstString.get(context) + " " + secondString.get(context);
-            root.dispatch(context, store, ref, playerRef, world, args);
+            if (scope == Scope.ADMIN) {
+                root.dispatchAdmin(context, store, ref, playerRef, args);
+            } else {
+                root.dispatch(context, store, ref, playerRef, world, args);
+            }
+        }
+    }
+
+    /**
+     * Container for the admin tree. Running it bare opens the admin settings page;
+     * the setting sub-commands are registered onto it by {@link #registerSettingCommands}.
+     *
+     * <p>Gated on {@link DapperMapPermissions#ADMIN}, which is the same node the framework
+     * generates for this sub-command. Requiring it explicitly matters: generated command
+     * nodes are permissive unless something requires them, so without this any player could
+     * reach the admin tree.
+     */
+    private static final class AdminDispatchCommand extends AbstractPlayerCommand {
+        private final MinimapCommand root;
+
+        AdminDispatchCommand(MinimapCommand root) {
+            super("admin", "Configure server defaults for new DapperMap players");
+            this.root = root;
+            this.requirePermission(DapperMapPermissions.ADMIN);
+            this.setPermissionGroups(HytalePermissionsProvider.OP_GROUP);
+        }
+
+        @Override
+        protected void execute(@Nonnull CommandContext context, @Nonnull Store<EntityStore> store,
+                               @Nonnull Ref<EntityStore> ref, @Nonnull PlayerRef playerRef, @Nonnull World world) {
+            root.dispatchAdmin(context, store, ref, playerRef, "");
         }
     }
 
     private static final class ColourDispatchCommand extends AbstractPlayerCommand {
         private final MinimapCommand root;
+        private final Scope scope;
         private final OptionalArg<String> arguments;
 
-        ColourDispatchCommand(String name, String description, MinimapCommand root, String... aliases) {
+        ColourDispatchCommand(String name, String description, MinimapCommand root, Scope scope, String... aliases) {
             super(name, description);
             this.root = root;
+            this.scope = scope;
             this.addAliases(aliases);
             this.arguments = this.withOptionalArg("arguments", "Colour target and value", ArgTypes.GREEDY_STRING);
             this.arguments.suggest((sender, entered, count, result) -> {
@@ -720,13 +835,15 @@ public class MinimapCommand extends AbstractPlayerCommand {
             });
         }
 
-        public boolean canGeneratePermission() { return false; }
-
         @Override
         protected void execute(@Nonnull CommandContext context, @Nonnull Store<EntityStore> store,
                                @Nonnull Ref<EntityStore> ref, @Nonnull PlayerRef playerRef, @Nonnull World world) {
             String suffix = this.arguments.provided(context) ? " " + this.arguments.get(context) : "";
-            root.dispatch(context, store, ref, playerRef, world, this.getName() + suffix);
+            if (scope == Scope.ADMIN) {
+                root.dispatchAdmin(context, store, ref, playerRef, this.getName() + suffix);
+            } else {
+                root.dispatch(context, store, ref, playerRef, world, this.getName() + suffix);
+            }
         }
     }
 

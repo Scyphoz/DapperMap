@@ -21,6 +21,21 @@ public final class DynamicMinimapSettingsStore {
         return (DynamicMinimapSetting)this.cache.computeIfAbsent(uuid, (ignored) -> this.load(uuid, defaults));
     }
 
+    /** True when this player has a settings file on disk, i.e. they are not a new player. */
+    public boolean hasStoredSettings(UUID uuid) {
+        return uuid != null && Files.exists(this.dataDir.resolve(String.valueOf(uuid) + ".json"), new LinkOption[0]);
+    }
+
+    /**
+     * Drops the cached copy for a player without touching their file. Used on disconnect so a
+     * rejoin re-derives from the current admin defaults when the player has no file of their own.
+     */
+    public void evict(UUID uuid) {
+        if (uuid != null) {
+            this.cache.remove(uuid);
+        }
+    }
+
     public void put(UUID uuid, DynamicMinimapSetting settings) {
         this.cache.put(uuid, settings);
         this.save(uuid);
