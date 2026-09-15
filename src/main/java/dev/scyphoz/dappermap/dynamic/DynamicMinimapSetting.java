@@ -31,7 +31,6 @@ public final class DynamicMinimapSetting {
      */
     public int interfaceScalePercent = 100;
     public int shape = 1;
-    public boolean showBorder = true;
     public boolean showOtherPlayers = true;
     public boolean showEntities = true;
     public boolean showDeathMarker = true;
@@ -56,6 +55,7 @@ public final class DynamicMinimapSetting {
 
     public int updateSpeed = 2;
     public boolean clock24Hour = true;
+    public boolean showCoordinates = true;
     public boolean showClock = true;
     public boolean showCompass = true;
     public boolean showBiome = true;
@@ -73,6 +73,7 @@ public final class DynamicMinimapSetting {
         DynamicMinimapSetting settings = new DynamicMinimapSetting();
         settings.enabled = config.isEnabledByDefault();
         settings.zoomBlocks = Math.max(16, config.getDefaultRadiusBlocks());
+        settings.showCoordinates = config.isShowCoordinates();
         settings.normalize();
         return settings;
     }
@@ -91,7 +92,6 @@ public final class DynamicMinimapSetting {
         copy.textureResolution = this.textureResolution;
         copy.interfaceScalePercent = this.interfaceScalePercent;
         copy.shape = this.shape;
-        copy.showBorder = this.showBorder;
         copy.showOtherPlayers = this.showOtherPlayers;
         copy.showEntities = this.showEntities;
         copy.showDeathMarker = this.showDeathMarker;
@@ -103,6 +103,7 @@ public final class DynamicMinimapSetting {
         copy.infoPanelPosition = this.infoPanelPosition;
         copy.updateSpeed = this.updateSpeed;
         copy.clock24Hour = this.clock24Hour;
+        copy.showCoordinates = this.showCoordinates;
         copy.showClock = this.showClock;
         copy.showCompass = this.showCompass;
         copy.showBiome = this.showBiome;

@@ -314,13 +314,15 @@ public final class DynamicMinimapHud extends CustomUIHud {
      * The readout subtree is rebuilt only when visibility actually changes, so
      * disabled rows disappear and the remaining rows reclaim their space.
      */
-    public void setInfoVisibility(boolean showCompass, boolean showClock, boolean showBiome) {
-        if (this.settings.showCompass == showCompass
+    public void setInfoVisibility(boolean showCoordinates, boolean showCompass, boolean showClock, boolean showBiome) {
+        if (this.settings.showCoordinates == showCoordinates
+                && this.settings.showCompass == showCompass
                 && this.settings.showClock == showClock
                 && this.settings.showBiome == showBiome) {
             return;
         }
 
+        this.settings.showCoordinates = showCoordinates;
         this.settings.showCompass = showCompass;
         this.settings.showClock = showClock;
         this.settings.showBiome = showBiome;
@@ -654,12 +656,9 @@ public final class DynamicMinimapHud extends CustomUIHud {
      */
     private void updateStaticAssetPaths() {
         String shape = this.settings.isCircle() ? "circle" : "square";
-        String frameId = shape + "-r" + this.settings.textureResolution
-                + "-nautical" + (this.settings.showBorder ? "-b" : "");
+        String frameId = shape + "-r" + this.settings.textureResolution + "-nautical";
 
-        // The clip mask depends only on shape + texture resolution.  In particular it
-        // does NOT depend on showBorder, so keeping the border flag in the mask filename
-        // caused needless new common assets (and common-assets rebuilds).
+        // The clip mask depends only on shape and texture resolution.
         this.maskFile = maskFileFor(this.settings);
         this.framePath = "UI/DapperMap/frame-" + this.slug + "-" + frameId + "-" + this.settings.colours.frameKey() + ".png";
     }
@@ -695,13 +694,15 @@ public final class DynamicMinimapHud extends CustomUIHud {
                 .append("Label #WayfinderMmBrand { Anchor: (Height: ")
                 .append(this.displaySize(BRAND_HEIGHT)).append("); Text: \"DapperMap\"; ")
                 .append("Style: LabelStyle(FontSize: ").append(this.displaySize(BRAND_FONT_SIZE))
-                .append(", RenderBold: true, TextColor: ").append(this.settings.colours.hex(BRAND_TEXT)).append(", HorizontalAlignment: Center, VerticalAlignment: Center); } ")
+                .append(", RenderBold: true, TextColor: ").append(this.settings.colours.hex(BRAND_TEXT)).append(", HorizontalAlignment: Center, VerticalAlignment: Center); } ");
 
-                .append("Group #WayfinderMmCoordsBand { Anchor: (Height: ")
-                .append(this.displaySize(COORDS_HEIGHT)).append("); Background: ").append(this.settings.colours.hex(COORDS_BACKGROUND)).append("(0.98); LayoutMode: CenterMiddle; ")
-                .append("Label #WayfinderMmCoords { Style: LabelStyle(FontSize: ")
-                .append(this.displaySize(COORDS_FONT_SIZE))
-                .append(", RenderBold: true, TextColor: ").append(this.settings.colours.hex(COORDS_TEXT)).append(", HorizontalAlignment: Center, VerticalAlignment: Center); } } ");
+        if (this.settings.showCoordinates) {
+            out.append("Group #WayfinderMmCoordsBand { Anchor: (Height: ")
+                    .append(this.displaySize(COORDS_HEIGHT)).append("); Background: ").append(this.settings.colours.hex(COORDS_BACKGROUND)).append("(0.98); LayoutMode: CenterMiddle; ")
+                    .append("Label #WayfinderMmCoords { Style: LabelStyle(FontSize: ")
+                    .append(this.displaySize(COORDS_FONT_SIZE))
+                    .append(", RenderBold: true, TextColor: ").append(this.settings.colours.hex(COORDS_TEXT)).append(", HorizontalAlignment: Center, VerticalAlignment: Center); } } ");
+        }
 
         if (this.settings.showCompass || this.settings.showClock) {
             out.append("Group #WayfinderMmMetaBand { Anchor: (Height: ")
@@ -764,7 +765,11 @@ public final class DynamicMinimapHud extends CustomUIHud {
     }
 
     private int readoutHeight() {
-        int height = (READOUT_PADDING_V * 2) + BRAND_HEIGHT + COORDS_HEIGHT;
+        int height = (READOUT_PADDING_V * 2) + BRAND_HEIGHT;
+
+        if (this.settings.showCoordinates) {
+            height += COORDS_HEIGHT;
+        }
 
         if (this.settings.showCompass || this.settings.showClock) {
             height += META_HEIGHT;
@@ -857,7 +862,9 @@ public final class DynamicMinimapHud extends CustomUIHud {
     }
 
     private void writeStatus(UICommandBuilder builder) {
-        builder.set("#WayfinderMmRoot #WayfinderMmReadout #WayfinderMmCoords.TextSpans", Message.raw(this.coordsText));
+        if (this.settings.showCoordinates) {
+            builder.set("#WayfinderMmRoot #WayfinderMmReadout #WayfinderMmCoords.TextSpans", Message.raw(this.coordsText));
+        }
 
         if (this.settings.showCompass) {
             builder.set("#WayfinderMmRoot #WayfinderMmReadout #WayfinderMmCompass.TextSpans", Message.raw(this.compassText));

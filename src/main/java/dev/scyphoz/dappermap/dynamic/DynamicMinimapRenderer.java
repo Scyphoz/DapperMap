@@ -218,7 +218,7 @@ public final class DynamicMinimapRenderer {
         int bucket = rotationBucket(mapAngle);
         String shape = settings.isCircle() ? "c" : "r";
         String key = shape + "@" + settings.textureResolution
-                + (settings.showBorder ? "b" : "") + "-rot" + bucket + "-" + colours.frameKey();
+                + "-rot" + bucket + "-" + colours.frameKey();
         byte[] cached = FRAME_CACHE.get(key);
         if (cached != null) {
             return cached;
@@ -236,12 +236,10 @@ public final class DynamicMinimapRenderer {
         );
         graphics.scale(scale, scale);
 
-        if (settings.showBorder) {
-            if (settings.isCircle()) {
-                drawNauticalCircleFrame(graphics, logicalSize, colours);
-            } else {
-                drawNauticalSquareFrame(graphics, logicalSize, colours);
-            }
+        if (settings.isCircle()) {
+            drawNauticalCircleFrame(graphics, logicalSize, colours);
+        } else {
+            drawNauticalSquareFrame(graphics, logicalSize, colours);
         }
 
         if (settings.isCircle()) {

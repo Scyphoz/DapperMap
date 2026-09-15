@@ -43,7 +43,6 @@ public final class DynamicMinimapSettingsStore {
                                 + "  \"textureResolution\": %d,\n"
                                 + "  \"interfaceScalePercent\": %d,\n"
                                 + "  \"shape\": %d,\n"
-                                + "  \"showBorder\": %s,\n"
                                 + "  \"showOtherPlayers\": %s,\n"
                                 + "  \"showEntities\": %s,\n"
                                 + "  \"showDeathMarker\": %s,\n"
@@ -55,6 +54,7 @@ public final class DynamicMinimapSettingsStore {
                                 + "  \"infoPanelPosition\": %d,\n"
                                 + "  \"updateSpeed\": %d,\n"
                                 + "  \"clock24Hour\": %s,\n"
+                                + "  \"showCoordinates\": %s,\n"
                                 + "  \"showClock\": %s,\n"
                                 + "  \"showCompass\": %s,\n"
                                 + "  \"showBiome\": %s,\n"
@@ -67,7 +67,6 @@ public final class DynamicMinimapSettingsStore {
                                 settings.textureResolution,
                                 settings.interfaceScalePercent,
                                 settings.shape,
-                                settings.showBorder,
                                 settings.showOtherPlayers,
                                 settings.showEntities,
                                 settings.showDeathMarker,
@@ -79,6 +78,7 @@ public final class DynamicMinimapSettingsStore {
                                 settings.infoPanelPosition,
                                 settings.updateSpeed,
                                 settings.clock24Hour,
+                                settings.showCoordinates,
                                 settings.showClock,
                                 settings.showCompass,
                                 settings.showBiome,
@@ -112,7 +112,6 @@ public final class DynamicMinimapSettingsStore {
                     Integer textureResolution = extractInt(json, "textureResolution");
                     Integer interfaceScalePercent = extractInt(json, "interfaceScalePercent");
                     Integer shape = extractInt(json, "shape");
-                    Boolean showBorder = extractBool(json, "showBorder");
                     Boolean showOtherPlayers = extractBool(json, "showOtherPlayers");
                     Boolean showEntities = extractBool(json, "showEntities");
                     Boolean showDeathMarker = extractBool(json, "showDeathMarker");
@@ -124,6 +123,7 @@ public final class DynamicMinimapSettingsStore {
                     Integer infoPanelPosition = extractInt(json, "infoPanelPosition");
                     Integer updateSpeed = extractInt(json, "updateSpeed");
                     Boolean clock24Hour = extractBool(json, "clock24Hour");
+                    Boolean showCoordinates = extractBool(json, "showCoordinates");
                     Boolean showClock = extractBool(json, "showClock");
                     Boolean showCompass = extractBool(json, "showCompass");
                     Boolean showBiome = extractBool(json, "showBiome");
@@ -154,10 +154,6 @@ public final class DynamicMinimapSettingsStore {
 
                     if (shape != null) {
                         settings.shape = shape;
-                    }
-
-                    if (showBorder != null) {
-                        settings.showBorder = showBorder;
                     }
 
                     if (showOtherPlayers != null) {
@@ -212,6 +208,10 @@ public final class DynamicMinimapSettingsStore {
 
                     if (clock24Hour != null) {
                         settings.clock24Hour = clock24Hour;
+                    }
+
+                    if (showCoordinates != null) {
+                        settings.showCoordinates = showCoordinates;
                     }
 
                     if (showClock != null) {

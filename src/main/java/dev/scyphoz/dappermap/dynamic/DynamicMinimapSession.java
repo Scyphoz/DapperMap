@@ -60,6 +60,7 @@ public final class DynamicMinimapSession {
     private int builtInterfaceScale = -1;
     private int builtTextureResolution = -1;
     private int builtRotationMode = -1;
+    private boolean builtShowCoordinates;
     private boolean builtShowCompass;
     private boolean builtShowClock;
     private boolean builtShowBiome;
@@ -233,13 +234,16 @@ public final class DynamicMinimapSession {
                 );
             }
 
-            if (this.settings.showCompass != this.builtShowCompass
+            if (this.settings.showCoordinates != this.builtShowCoordinates
+                    || this.settings.showCompass != this.builtShowCompass
                     || this.settings.showClock != this.builtShowClock
                     || this.settings.showBiome != this.builtShowBiome) {
+                this.builtShowCoordinates = this.settings.showCoordinates;
                 this.builtShowCompass = this.settings.showCompass;
                 this.builtShowClock = this.settings.showClock;
                 this.builtShowBiome = this.settings.showBiome;
                 this.hud.setInfoVisibility(
+                        this.settings.showCoordinates,
                         this.settings.showCompass,
                         this.settings.showClock,
                         this.settings.showBiome
@@ -338,7 +342,7 @@ public final class DynamicMinimapSession {
                 this.projectCachedMarkers(pixelsPerBlock, bufferPixels, yaw);
             }
 
-            String coords = coordsText(x, y, z);
+            String coords = this.settings.showCoordinates ? coordsText(x, y, z) : "";
             String compass = this.settings.showCompass ? compassText(yaw) : "";
             String clock = this.settings.showClock ? clockText(world, this.settings.clock24Hour) : "";
             String biome = this.settings.showBiome ? biomeText(player, this.settings.sizePixels) : "";

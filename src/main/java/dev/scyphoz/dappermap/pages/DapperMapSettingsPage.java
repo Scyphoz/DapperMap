@@ -324,12 +324,14 @@ public final class DapperMapSettingsPage
             case "height" -> "Hide creatures far above or below you.";
             case "vrange" -> "Set how far above and below to show creatures.";
             case "clock" -> "Show the current time in your Hytale world.";
+            case "coordinates" -> "Show your current world coordinates.";
             case "clock_format" -> "Choose a 12-hour or 24-hour clock.";
             case "compass" -> "Show the direction you are facing.";
             case "biome" -> "Show the name of the biome you are in.";
             case "bettermap" -> BetterMapIntegration.isAvailable()
                     ? "Show BetterMap waypoints on the minimap and around its edge."
                     : "BetterMap is not installed or could not be detected.";
+            case "texture_resolution" -> "Choose the resolution used to render minimap textures.";
             default -> "";
         };
     }
@@ -342,6 +344,7 @@ public final class DapperMapSettingsPage
             case "zoom" -> settings.zoomBlocks + " blocks";
             case "size" -> settings.sizePixels + " px";
             case "interface_scale" -> settings.interfaceScalePercent + "%";
+            case "texture_resolution" -> settings.textureResolution + " px";
             case "speed" -> displaySpeed(settings.updateSpeed);
             case "panel_position" -> displayPanelPosition(settings.infoPanelPosition);
             case "shape" -> settings.isCircle() ? "Circle" : "Square";
@@ -369,6 +372,7 @@ public final class DapperMapSettingsPage
             case "zoom" -> settings.zoomBlocks = Integer.parseInt(value);
             case "size" -> settings.sizePixels = Integer.parseInt(value);
             case "interface_scale" -> settings.interfaceScalePercent = Integer.parseInt(value);
+            case "texture_resolution" -> settings.textureResolution = Integer.parseInt(value);
             case "speed" -> settings.updateSpeed = Integer.parseInt(value);
             case "panel_position" -> settings.infoPanelPosition = Integer.parseInt(value);
             case "shape" -> settings.shape = Integer.parseInt(value);
@@ -380,6 +384,7 @@ public final class DapperMapSettingsPage
             case "height" -> settings.limitMobHeight = Boolean.parseBoolean(value);
             case "clock" -> settings.showClock = Boolean.parseBoolean(value);
             case "clock_format" -> settings.clock24Hour = Boolean.parseBoolean(value);
+            case "coordinates" -> settings.showCoordinates = Boolean.parseBoolean(value);
             case "compass" -> settings.showCompass = Boolean.parseBoolean(value);
             case "biome" -> settings.showBiome = Boolean.parseBoolean(value);
             case "bettermap" -> settings.betterMapEnabled = Boolean.parseBoolean(value);
@@ -400,6 +405,7 @@ public final class DapperMapSettingsPage
                 values.add(settings.interfaceScalePercent);
                 for (int value : values) entries.add(entry(value + "%", Integer.toString(value)));
             }
+            case "texture_resolution" -> addNumericEntries(entries, settings.textureResolution, 256, 512, 64, " px");
             case "speed" -> {
                 for (int value = 0; value <= 3; value++) entries.add(entry(displaySpeed(value), Integer.toString(value)));
             }
@@ -418,7 +424,7 @@ public final class DapperMapSettingsPage
                 entries.add(entry("24-hour", "true"));
                 entries.add(entry("12-hour", "false"));
             }
-            case "players", "entities", "death", "height", "clock", "compass", "biome", "bettermap" -> {
+            case "players", "entities", "death", "height", "coordinates", "clock", "compass", "biome", "bettermap" -> {
                 entries.add(entry("Enabled", "true"));
                 entries.add(entry("Disabled", "false"));
             }
@@ -451,6 +457,7 @@ public final class DapperMapSettingsPage
             case "zoom" -> Integer.toString(settings.zoomBlocks);
             case "size" -> Integer.toString(settings.sizePixels);
             case "interface_scale" -> Integer.toString(settings.interfaceScalePercent);
+            case "texture_resolution" -> Integer.toString(settings.textureResolution);
             case "speed" -> Integer.toString(settings.updateSpeed);
             case "panel_position" -> Integer.toString(settings.infoPanelPosition);
             case "shape" -> Integer.toString(settings.shape);
@@ -462,6 +469,7 @@ public final class DapperMapSettingsPage
             case "height" -> Boolean.toString(settings.limitMobHeight);
             case "clock" -> Boolean.toString(settings.showClock);
             case "clock_format" -> Boolean.toString(settings.clock24Hour);
+            case "coordinates" -> Boolean.toString(settings.showCoordinates);
             case "compass" -> Boolean.toString(settings.showCompass);
             case "biome" -> Boolean.toString(settings.showBiome);
             case "bettermap" -> Boolean.toString(settings.betterMapEnabled);
@@ -499,6 +507,7 @@ public final class DapperMapSettingsPage
                 new Row("shape", "Map Shape", Kind.DROPDOWN),
                 new Row("rotation", "Map Rotation", Kind.DROPDOWN),
                 new Row("speed", "Update Speed", Kind.DROPDOWN),
+                new Row("texture_resolution", "Texture Resolution", Kind.DROPDOWN),
                 new Row("colours", "Minimap Colours", Kind.ACTION),
                 new Row("section_1", "POSITION", Kind.HEADER),
                 new Row("move_minimap", "Screen Position", Kind.ACTION),
@@ -510,6 +519,7 @@ public final class DapperMapSettingsPage
                 new Row("height", "Creature Height Detection", Kind.DROPDOWN),
                 new Row("vrange", "Creature Height Range", Kind.DROPDOWN),
                 new Row("section_3", "INFORMATION", Kind.HEADER),
+                new Row("coordinates", "Coordinate Readout", Kind.DROPDOWN),
                 new Row("clock", "Hytale World Clock", Kind.DROPDOWN),
                 new Row("clock_format", "Clock Format", Kind.DROPDOWN),
                 new Row("compass", "Compass Readout", Kind.DROPDOWN),

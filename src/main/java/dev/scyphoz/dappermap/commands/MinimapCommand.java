@@ -5,6 +5,7 @@ import com.hypixel.hytale.component.Store;
 import com.hypixel.hytale.server.core.Message;
 import com.hypixel.hytale.server.core.command.system.CommandContext;
 import com.hypixel.hytale.server.core.command.system.arguments.system.RequiredArg;
+import com.hypixel.hytale.server.core.command.system.arguments.system.OptionalArg;
 import com.hypixel.hytale.server.core.command.system.arguments.types.ArgTypes;
 import com.hypixel.hytale.server.core.command.system.basecommands.AbstractPlayerCommand;
 import com.hypixel.hytale.server.core.entity.entities.Player;
@@ -26,23 +27,49 @@ import java.util.stream.Collectors;
 
 public class MinimapCommand extends AbstractPlayerCommand {
     private final MinimapSessionManager sessions;
-    private final RequiredArg<String> argsArg;
 
     public MinimapCommand(String name, String description, MinimapSessionManager sessions) {
         super(name, description);
         this.sessions = sessions;
-        this.argsArg = this.withRequiredArg("args", "subcommand + value", ArgTypes.GREEDY_STRING);
+        this.addAliases("minimap", "mm", "dm");
+        addNoArg("settings", "Open settings", "menu", "gui");
+        addNoArg("on", "Show DapperMap"); addNoArg("off", "Hide DapperMap");
+        addNoArg("status", "Show current settings"); addNoArg("reset", "Reset settings", "defaults");
+        addString("zoom", "Set zoom", new String[]{"close", "medium", "far"});
+        addString("speed", "Set update speed", new String[]{"very-fast", "fast", "normal", "slow"}, "update");
+        addString("shape", "Set map shape", new String[]{"circle", "square"});
+        addString("rotation", "Set rotation", new String[]{"north", "player"}, "rotate");
+        addString("panel", "Set information panel position", new String[]{"below", "above", "left", "right"}, "info-panel", "infopanel");
+        addString("height", "Toggle creature height detection", ON_OFF, "height-detection");
+        addString("clock", "Configure clock", new String[]{"on", "off", "12", "24"});
+        addString("coordinates", "Toggle coordinates", ON_OFF, "coords");
+        addString("compass", "Toggle compass", ON_OFF); addString("biome", "Toggle biome", ON_OFF);
+        addInt("size", "Set map size"); addInt("scale", "Set interface scale", "interface-scale", "interfacescale");
+        addInt("height-range", "Set creature height range", "heightrange", "vrange");
+        addInt("resolution", "Set texture resolution", "texture-resolution");
+        addTwoInt("position", "Set map position", "pos");
+        addTwoString("markers", "Configure markers", "blips");
+        addTwoString("integration", "Configure integrations", "integrations");
+        this.addSubCommand(new ColourDispatchCommand("colours", "Configure colours", this, "colour", "color", "colors"));
     }
+
+    private static final String[] ON_OFF = {"on", "off"};
 
     public boolean canGeneratePermission() {
         return false;
     }
 
     protected void execute(@Nonnull CommandContext context, @Nonnull Store<EntityStore> store, @Nonnull Ref<EntityStore> ref, @Nonnull PlayerRef playerRef, @Nonnull World world) {
+        boolean enabled = this.sessions.toggle((Player)store.getComponent(ref, Player.getComponentType()), playerRef,
+                (MinimapConfig)DapperMap.getConfig().get());
+        context.sendMessage(Message.raw(enabled ? "DapperMap shown." : "DapperMap hidden."));
+    }
+
+    private void dispatch(@Nonnull CommandContext context, @Nonnull Store<EntityStore> store, @Nonnull Ref<EntityStore> ref,
+                          @Nonnull PlayerRef playerRef, @Nonnull World world, String args) {
         MinimapConfig config = (MinimapConfig)DapperMap.getConfig().get();
         Player player = (Player)store.getComponent(ref, Player.getComponentType());
-        String args = ((String)this.argsArg.get(context)).trim();
-        this.sessions.noteCommandUsed();
+        args = args.trim();
         if (!args.isEmpty() && !args.equalsIgnoreCase("toggle")) {
             String[] parts = args.split("\\s+", 3);
             String subcommand = parts[0].toLowerCase();
@@ -178,16 +205,6 @@ public class MinimapCommand extends AbstractPlayerCommand {
                     this.sessions.applySettings(playerRef, settings);
                     context.sendMessage(Message.raw("DapperMap creature height range: " + settings.mobVerticalRange + " blocks above/below."));
                     break;
-                case "border":
-                    Boolean borderEnabled = parseOnOff(value);
-                    if (borderEnabled == null) {
-                        context.sendMessage(Message.raw("Usage: /mm border on|off"));
-                        return;
-                    }
-                    settings.showBorder = borderEnabled;
-                    this.sessions.applySettings(playerRef, settings);
-                    context.sendMessage(Message.raw("DapperMap border " + (borderEnabled ? "on." : "off.")));
-                    break;
                 case "resolution":
                 case "texture-resolution":
                     if (!setRangedInt(value, 256, 512, v -> settings.textureResolution = v)) {
@@ -200,9 +217,8 @@ public class MinimapCommand extends AbstractPlayerCommand {
                 case "reset":
                 case "defaults":
                     DynamicMinimapSetting defaults = DynamicMinimapSetting.fromConfig(config);
-                    defaults.betterMapEnabled = settings.betterMapEnabled;
                     this.sessions.applySettings(playerRef, defaults);
-                    context.sendMessage(Message.raw("DapperMap settings reset to defaults (integration preference preserved)."));
+                    context.sendMessage(Message.raw("DapperMap settings reset to defaults."));
                     break;
                 case "markers":
                 case "blips":
@@ -230,6 +246,18 @@ public class MinimapCommand extends AbstractPlayerCommand {
 
                     this.sessions.applySettings(playerRef, settings);
                     context.sendMessage(Message.raw("DapperMap clock setting changed."));
+                    break;
+                case "coordinates":
+                case "coords":
+                    Boolean coordinatesEnabled = parseOnOff(value);
+                    if (coordinatesEnabled == null) {
+                        context.sendMessage(Message.raw("Usage: /mm coordinates on|off"));
+                        return;
+                    }
+
+                    settings.showCoordinates = coordinatesEnabled;
+                    this.sessions.applySettings(playerRef, settings);
+                    context.sendMessage(Message.raw("DapperMap coordinate readout " + (coordinatesEnabled ? "on." : "off.")));
                     break;
                 case "compass":
                     Boolean compassEnabled = parseOnOff(value);
@@ -569,13 +597,13 @@ public class MinimapCommand extends AbstractPlayerCommand {
                 + ", rotation=" + (settings.rotationMode == DynamicMinimapSetting.ROTATION_NORTH_UP ? "north" : "player")
                 + ", position=" + settings.hudPositionX + "," + settings.hudPositionY
                 + ", panel=" + panelPositionName(settings.infoPanelPosition)
-                + ", border=" + settings.showBorder
                 + ", markers[players=" + settings.showOtherPlayers
                 + ", entities=" + settings.showEntities
                 + ", death=" + settings.showDeathMarker
                 + ", height=" + settings.limitMobHeight
                 + ", range=" + settings.mobVerticalRange + "]"
                 + ", clock=" + (settings.showClock ? (settings.clock24Hour ? "24h" : "12h") : "off")
+                + ", coordinates=" + settings.showCoordinates
                 + ", compass=" + settings.showCompass
                 + ", biome=" + settings.showBiome
                 + ", integrations[bettermap=" + settings.betterMapEnabled + "]";
@@ -593,11 +621,107 @@ public class MinimapCommand extends AbstractPlayerCommand {
         context.sendMessage(Message.raw("/mm panel below|above|left|right"));
         context.sendMessage(Message.raw("/mm markers players|entities|death on|off"));
         context.sendMessage(Message.raw("/mm height on|off | /mm height-range <4..256>"));
-        context.sendMessage(Message.raw("/mm clock on|off|12|24 | /mm compass on|off | /mm biome on|off"));
+        context.sendMessage(Message.raw("/mm coordinates on|off | /mm clock on|off|12|24"));
+        context.sendMessage(Message.raw("/mm compass on|off | /mm biome on|off"));
         context.sendMessage(Message.raw("/mm integration bettermap enable|disable"));
         context.sendMessage(Message.raw("/mm colours list | /mm colour <target> <#RRGGBB|R G B>"));
         context.sendMessage(Message.raw("/mm colour reset <target|all>"));
-        context.sendMessage(Message.raw("Advanced: /mm border on|off | /mm resolution <256..512>"));
+        context.sendMessage(Message.raw("Advanced: /mm resolution <256..512>"));
+    }
+
+    private void addNoArg(String name, String description, String... aliases) {
+        this.addSubCommand(new DispatchCommand(name, description, this, Kind.NONE, null, aliases));
+    }
+
+    private void addString(String name, String description, String[] suggestions, String... aliases) {
+        this.addSubCommand(new DispatchCommand(name, description, this, Kind.STRING, suggestions, aliases));
+    }
+
+    private void addInt(String name, String description, String... aliases) {
+        this.addSubCommand(new DispatchCommand(name, description, this, Kind.INTEGER, null, aliases));
+    }
+
+    private void addTwoInt(String name, String description, String... aliases) {
+        this.addSubCommand(new DispatchCommand(name, description, this, Kind.TWO_INTEGERS, null, aliases));
+    }
+
+    private void addTwoString(String name, String description, String... aliases) {
+        this.addSubCommand(new DispatchCommand(name, description, this, Kind.TWO_STRINGS, null, aliases));
+    }
+
+    private enum Kind { NONE, STRING, INTEGER, TWO_INTEGERS, TWO_STRINGS }
+
+    private static class DispatchCommand extends AbstractPlayerCommand {
+        private final MinimapCommand root;
+        private final Kind kind;
+        private final RequiredArg<String> firstString;
+        private final RequiredArg<String> secondString;
+        private final RequiredArg<Integer> firstInt;
+        private final RequiredArg<Integer> secondInt;
+
+        DispatchCommand(String name, String description, MinimapCommand root, Kind kind,
+                        String[] suggestions, String... aliases) {
+            super(name, description);
+            this.root = root;
+            this.kind = kind;
+            if (aliases.length > 0) this.addAliases(aliases);
+            this.firstString = kind == Kind.STRING || kind == Kind.TWO_STRINGS
+                    ? this.withRequiredArg("value", "Setting value", ArgTypes.STRING) : null;
+            this.secondString = kind == Kind.TWO_STRINGS
+                    ? this.withRequiredArg("state", "Setting state", ArgTypes.STRING) : null;
+            this.firstInt = kind == Kind.INTEGER || kind == Kind.TWO_INTEGERS
+                    ? this.withRequiredArg("value", "Numeric value", ArgTypes.INTEGER) : null;
+            this.secondInt = kind == Kind.TWO_INTEGERS
+                    ? this.withRequiredArg("y", "Vertical position", ArgTypes.INTEGER) : null;
+            if (this.firstString != null && suggestions != null) {
+                this.firstString.suggest((sender, entered, count, result) -> {
+                    String prefix = entered.toLowerCase();
+                    for (String value : suggestions) if (value.startsWith(prefix)) result.suggest(value);
+                });
+            }
+        }
+
+        public boolean canGeneratePermission() { return false; }
+
+        @Override
+        protected void execute(@Nonnull CommandContext context, @Nonnull Store<EntityStore> store,
+                               @Nonnull Ref<EntityStore> ref, @Nonnull PlayerRef playerRef, @Nonnull World world) {
+            String args = this.getName();
+            if (kind == Kind.STRING) args += " " + firstString.get(context);
+            else if (kind == Kind.INTEGER) args += " " + firstInt.get(context);
+            else if (kind == Kind.TWO_INTEGERS) args += " " + firstInt.get(context) + " " + secondInt.get(context);
+            else if (kind == Kind.TWO_STRINGS) args += " " + firstString.get(context) + " " + secondString.get(context);
+            root.dispatch(context, store, ref, playerRef, world, args);
+        }
+    }
+
+    private static final class ColourDispatchCommand extends AbstractPlayerCommand {
+        private final MinimapCommand root;
+        private final OptionalArg<String> arguments;
+
+        ColourDispatchCommand(String name, String description, MinimapCommand root, String... aliases) {
+            super(name, description);
+            this.root = root;
+            this.addAliases(aliases);
+            this.arguments = this.withOptionalArg("arguments", "Colour target and value", ArgTypes.GREEDY_STRING);
+            this.arguments.suggest((sender, entered, count, result) -> {
+                String prefix = entered.toLowerCase();
+                for (String value : java.util.stream.Stream.concat(
+                        java.util.stream.Stream.of("list", "reset all"),
+                        Arrays.stream(Key.values()).map(key -> key.id)).toList()) {
+                    if (value.startsWith(prefix)) result.suggest(value);
+                }
+            });
+        }
+
+        public boolean canGeneratePermission() { return false; }
+
+        @Override
+        protected void execute(@Nonnull CommandContext context, @Nonnull Store<EntityStore> store,
+                               @Nonnull Ref<EntityStore> ref, @Nonnull PlayerRef playerRef, @Nonnull World world) {
+            String suffix = this.arguments.provided(context) ? " " + this.arguments.get(context) : "";
+            root.dispatch(context, store, ref, playerRef, world, this.getName() + suffix);
+        }
     }
 
 }

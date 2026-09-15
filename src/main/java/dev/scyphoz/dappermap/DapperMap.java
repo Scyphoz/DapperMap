@@ -27,8 +27,7 @@ public class DapperMap extends JavaPlugin {
     protected void setup() {
         config.save();
         this.sessions.setDataDirectory(this.getDataDirectory());
-        this.getCommandRegistry().registerCommand(new MinimapCommand("mm", "Configure Dappermap", this.sessions));
-        this.getCommandRegistry().registerCommand(new MinimapCommand("minimap", "Configure Dappermap", this.sessions));
+        this.getCommandRegistry().registerCommand(new MinimapCommand("dappermap", "Configure DapperMap", this.sessions));
         EventRegistry var10000 = this.getEventRegistry();
         PlayerReadyListener var10002 = new PlayerReadyListener(this.sessions);
         Objects.requireNonNull(var10002);

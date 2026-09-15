@@ -10,9 +10,7 @@ public class MinimapConfig {
 
     private boolean enabledByDefault = true;
     private int defaultRadiusBlocks = 96;
-    private int updateIntervalTicks = 10;
     private boolean showCoordinates = true;
-    private boolean showWaypoints = true;
 
     private MinimapConfig() {
     }
@@ -25,16 +23,8 @@ public class MinimapConfig {
         return this.defaultRadiusBlocks;
     }
 
-    public int getUpdateIntervalTicks() {
-        return this.updateIntervalTicks;
-    }
-
     public boolean isShowCoordinates() {
         return this.showCoordinates;
-    }
-
-    public boolean isShowWaypoints() {
-        return this.showWaypoints;
     }
 
     static {
@@ -52,21 +42,9 @@ public class MinimapConfig {
                 )
                 .add()
                 .append(
-                        new KeyedCodec<>("UpdateIntervalTicks", Codec.INTEGER),
-                        (config, value, extraInfo) -> config.updateIntervalTicks = value,
-                        (config, extraInfo) -> config.updateIntervalTicks
-                )
-                .add()
-                .append(
                         new KeyedCodec<>("ShowCoordinates", Codec.BOOLEAN),
                         (config, value, extraInfo) -> config.showCoordinates = value,
                         (config, extraInfo) -> config.showCoordinates
-                )
-                .add()
-                .append(
-                        new KeyedCodec<>("ShowWaypoints", Codec.BOOLEAN),
-                        (config, value, extraInfo) -> config.showWaypoints = value,
-                        (config, extraInfo) -> config.showWaypoints
                 )
                 .add()
                 .build();

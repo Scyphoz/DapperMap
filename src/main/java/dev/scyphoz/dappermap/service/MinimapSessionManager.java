@@ -10,12 +10,10 @@ import java.nio.file.Path;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicInteger;
 
 public class MinimapSessionManager {
     private final Map<UUID, DynamicMinimapSetting> settingsByPlayer = new ConcurrentHashMap();
     private final Map<UUID, DynamicMinimapSession> sessionsByPlayer = new ConcurrentHashMap();
-    private final AtomicInteger commandUses = new AtomicInteger();
     private DynamicMinimapSettingsStore settingsStore;
 
     public MinimapSessionManager() {
@@ -66,7 +64,6 @@ public class MinimapSessionManager {
             session.settings().textureResolution = settings.textureResolution;
             session.settings().interfaceScalePercent = settings.interfaceScalePercent;
             session.settings().shape = settings.shape;
-            session.settings().showBorder = settings.showBorder;
             session.settings().showOtherPlayers = settings.showOtherPlayers;
             session.settings().showEntities = settings.showEntities;
             session.settings().showDeathMarker = settings.showDeathMarker;
@@ -78,6 +75,7 @@ public class MinimapSessionManager {
             session.settings().infoPanelPosition = settings.infoPanelPosition;
             session.settings().updateSpeed = settings.updateSpeed;
             session.settings().clock24Hour = settings.clock24Hour;
+            session.settings().showCoordinates = settings.showCoordinates;
             session.settings().showClock = settings.showClock;
             session.settings().showCompass = settings.showCompass;
             session.settings().showBiome = settings.showBiome;
@@ -97,17 +95,6 @@ public class MinimapSessionManager {
             this.stop(playerRef.getUuid(), true);
         }
 
-    }
-
-    public void noteCommandUsed() {
-        this.commandUses.incrementAndGet();
-    }
-
-    public int getCommandUses() {
-        return this.commandUses.get();
-    }
-
-    public void refreshIfDue(Player player, PlayerRef playerRef) {
     }
 
     public void onDisconnect(PlayerRef playerRef) {
