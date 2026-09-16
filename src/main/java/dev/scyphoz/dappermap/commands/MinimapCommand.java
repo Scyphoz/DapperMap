@@ -9,7 +9,6 @@ import com.hypixel.hytale.server.core.command.system.arguments.system.OptionalAr
 import com.hypixel.hytale.server.core.command.system.arguments.types.ArgTypes;
 import com.hypixel.hytale.server.core.command.system.AbstractCommand;
 import com.hypixel.hytale.server.core.command.system.basecommands.AbstractPlayerCommand;
-import com.hypixel.hytale.server.core.permissions.provider.HytalePermissionsProvider;
 import com.hypixel.hytale.server.core.entity.entities.Player;
 import com.hypixel.hytale.server.core.universe.PlayerRef;
 import com.hypixel.hytale.server.core.universe.world.World;
@@ -35,6 +34,11 @@ public class MinimapCommand extends AbstractPlayerCommand {
         super(name, description);
         this.sessions = sessions;
         this.addAliases("minimap", "mm", "dm");
+        // The bare command (and its aliases) toggles the minimap. Give it its own short node
+        // rather than letting the framework auto-generate one from this command's own name,
+        // for the same reason every sub-command below does: scyphoz.dappermap.command.* should
+        // cover it without relying on what this top-level command happens to be called.
+        this.requirePermission(DapperMapPermissions.player("toggle"));
 
         // The player-facing tree.
         registerSettingCommands(this, Scope.PLAYER);
@@ -756,6 +760,20 @@ public class MinimapCommand extends AbstractPlayerCommand {
             this.scope = scope;
             this.kind = kind;
             if (aliases.length > 0) this.addAliases(aliases);
+            if (scope == Scope.ADMIN) {
+                // Belt-and-braces: the "admin" container already gates this whole subtree,
+                // but requiring it again on every leaf means each admin sub-command is safe
+                // to reason about on its own, and none of them depend on the framework's
+                // per-node ancestor-permission check being the only thing standing guard.
+                this.requirePermission(DapperMapPermissions.ADMIN);
+            } else {
+                // Explicit short node (scyphoz.dappermap.command.<name>) instead of the
+                // framework's auto-generated scyphoz.dappermap.command.dappermap.<name>.
+                // DapperMapPermissions.player(...) registers it against the default player
+                // group via PermissionsModule, not via setPermissionGroups — see that
+                // method's javadoc for why setPermissionGroups was dropped here.
+                this.requirePermission(DapperMapPermissions.player(name.toLowerCase(java.util.Locale.ROOT)));
+            }
             this.firstString = kind == Kind.STRING || kind == Kind.TWO_STRINGS
                     ? this.withRequiredArg("value", "Setting value", ArgTypes.STRING) : null;
             this.secondString = kind == Kind.TWO_STRINGS
@@ -792,10 +810,10 @@ public class MinimapCommand extends AbstractPlayerCommand {
      * Container for the admin tree. Running it bare opens the admin settings page;
      * the setting sub-commands are registered onto it by {@link #registerSettingCommands}.
      *
-     * <p>Gated on {@link DapperMapPermissions#ADMIN}, which is the same node the framework
-     * generates for this sub-command. Requiring it explicitly matters: generated command
-     * nodes are permissive unless something requires them, so without this any player could
-     * reach the admin tree.
+     * <p>Gated on {@link DapperMapPermissions#ADMIN}, a node deliberately kept outside the
+     * player command tree (see that class's javadoc). Requiring it explicitly matters:
+     * generated command nodes are permissive unless something requires them, so without
+     * this any player could reach the admin tree.
      */
     private static final class AdminDispatchCommand extends AbstractPlayerCommand {
         private final MinimapCommand root;
@@ -804,7 +822,10 @@ public class MinimapCommand extends AbstractPlayerCommand {
             super("admin", "Configure server defaults for new DapperMap players");
             this.root = root;
             this.requirePermission(DapperMapPermissions.ADMIN);
-            this.setPermissionGroups(HytalePermissionsProvider.OP_GROUP);
+            // Not setPermissionGroups(OP_GROUP) here: that call is a coarse "anyone in this
+            // group" fast path that bypasses the node-specific deny-aware check (see
+            // DapperMapPermissions.DEFAULT_PLAYER_GROUP javadoc). ADMIN_NODE is already
+            // registered against OP_GROUP the deny-respecting way in DapperMapPermissions.register().
         }
 
         @Override
@@ -823,6 +844,11 @@ public class MinimapCommand extends AbstractPlayerCommand {
             super(name, description);
             this.root = root;
             this.scope = scope;
+            if (scope == Scope.ADMIN) {
+                this.requirePermission(DapperMapPermissions.ADMIN);
+            } else {
+                this.requirePermission(DapperMapPermissions.player(name.toLowerCase(java.util.Locale.ROOT)));
+            }
             this.addAliases(aliases);
             this.arguments = this.withOptionalArg("arguments", "Colour target and value", ArgTypes.GREEDY_STRING);
             this.arguments.suggest((sender, entered, count, result) -> {

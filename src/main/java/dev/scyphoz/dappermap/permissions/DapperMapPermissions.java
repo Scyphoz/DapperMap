@@ -7,29 +7,92 @@ import com.hypixel.hytale.server.core.permissions.provider.HytalePermissionsProv
 /**
  * Central definition of DapperMap's permission nodes.
  *
- * <p>The node deliberately matches the one the command framework generates for
- * {@code /dappermap admin}: {@code <manifest group>.<manifest name>.command.<root>.<sub>},
- * lowercased. Keeping them identical means a single grant covers both the command
- * and the settings UI, and it stays compatible with grants that were already issued.
+ * <p><b>Deliberately NOT nested under each other.</b> This server's permission provider
+ * matches grants by prefix, so any node that is a descendant of another is silently covered
+ * by a wildcard grant of the ancestor. The three branches below share no prefix beyond
+ * {@code scyphoz.dappermap}, so a grant aimed at any one of them can never reach another:
  *
- * <p>If the manifest {@code Group} or {@code Name} is ever changed, update
- * {@link #ADMIN_NODE} to match, or the generated command node and this node will
- * drift apart.
+ * <ul>
+ *   <li>{@code scyphoz.dappermap.command.<setting>} — one player-facing command/UI per node.
+ *       {@code scyphoz.dappermap.command.*} grants every player command and nothing else.</li>
+ *   <li>{@code scyphoz.dappermap.admin} — the admin UI and every {@code /dappermap admin ...}
+ *       sub-command, as one node (see below for why the admin tree isn't split further).</li>
+ * </ul>
+ *
+ * <p>An earlier version mirrored the framework's own auto-generated command nodes instead
+ * (e.g. {@code scyphoz.dappermap.command.dappermap.zoom}, with admin nested one level deeper
+ * still, at {@code scyphoz.dappermap.command.dappermap.admin}). That put admin inside the
+ * player tree, so a "grant every player command" wildcard silently granted admin too. Player
+ * commands here are shortened for the same reason admin was moved: {@code command.dappermap.*}
+ * only existed because the top-level command happens to be named "dappermap"; dropping that
+ * redundant segment gives {@code scyphoz.dappermap.command.*} as a clean, flat "every player
+ * command" wildcard, structurally guaranteed not to overlap {@link #ADMIN_NODE}.
  */
 public final class DapperMapPermissions {
 
-    /** Manifest Group "Scyphoz" + Name "DapperMap", lowercased by the command framework. */
-    private static final String COMMAND_BASE = "scyphoz.dappermap.command.dappermap";
+    /** Root for DapperMap nodes that live outside the auto-generated command tree. */
+    private static final String PLUGIN_ROOT = "scyphoz.dappermap";
 
-    /** Grants access to the admin settings UI and to {@code /dappermap admin ...}. */
-    public static final String ADMIN_NODE = COMMAND_BASE + ".admin";
+    /** Root for the player-facing command tree: {@code scyphoz.dappermap.command.<setting>}. */
+    private static final String COMMAND_ROOT = PLUGIN_ROOT + ".command";
+
+    /**
+     * Grants access to the admin settings UI and to every {@code /dappermap admin ...}
+     * sub-command. Required explicitly on the admin command and on each of its
+     * sub-commands (see {@code MinimapCommand}) rather than left to the framework's
+     * per-node auto-generation, so no player-command wildcard can reach it and no
+     * single ungated node is left as a hole.
+     */
+    public static final String ADMIN_NODE = PLUGIN_ROOT + ".admin";
 
     /** Query form, which also resolves parent wildcards such as {@code scyphoz.*} and {@code *}. */
     public static final PermissionQuery ADMIN = PermissionQuery.of(ADMIN_NODE);
 
+    /**
+     * Default group every player belongs to, or inherits through, out of the box. Every
+     * player-command node is registered against it via {@link PermissionsModule#registerPermission},
+     * the same call used for {@link #ADMIN_NODE} against the operator group — the path that
+     * actually goes through the deny-aware permission check.
+     *
+     * <p>{@code AbstractCommand.setPermissionGroups(...)} looks similar but is not the same
+     * mechanism: its constant-pool neighbourhood (a {@code GameMode}-keyed switch table
+     * alongside the same group name strings) indicates it is a coarse "anyone in this group
+     * may run this command" fast path, evaluated independently of — and in addition to — the
+     * node-specific permission. Since almost every player is a member of this default group,
+     * calling it here would let it silently override any admin who explicitly denies a
+     * specific player one of these nodes. Use {@link #player(String)} instead, which never
+     * touches {@code setPermissionGroups}.
+     */
+    public static final String DEFAULT_PLAYER_GROUP = HytalePermissionsProvider.DEFAULT_GROUP;
+
     private static boolean registered;
+    private static final java.util.Set<String> registeredPlayerNodes = new java.util.HashSet<>();
 
     private DapperMapPermissions() {
+    }
+
+    /**
+     * Node for a single player-facing command/UI, e.g. {@code player("zoom")} yields
+     * {@code scyphoz.dappermap.command.zoom}. One level directly under {@link #COMMAND_ROOT},
+     * so {@code scyphoz.dappermap.command.*} covers every one of them without covering
+     * {@link #ADMIN_NODE}.
+     *
+     * <p>Registers the node against {@link #DEFAULT_PLAYER_GROUP} the first time it is asked
+     * for, via the same deny-respecting {@code PermissionsModule.registerPermission} call used
+     * for admin, so a server admin's explicit deny on a specific player and node actually
+     * takes effect. Must be called during plugin setup, before the command tree goes live —
+     * every caller in {@code MinimapCommand} already does this by construction.
+     *
+     * @param settingName the sub-command's own registered name — must match exactly, since a
+     *                     mismatch here would leave that command checking a node nobody
+     *                     actually granted.
+     */
+    public static synchronized PermissionQuery player(String settingName) {
+        String node = COMMAND_ROOT + "." + settingName;
+        if (registeredPlayerNodes.add(node)) {
+            PermissionsModule.registerPermission(node, DEFAULT_PLAYER_GROUP);
+        }
+        return PermissionQuery.of(node);
     }
 
     /**

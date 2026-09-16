@@ -46,8 +46,9 @@ public final class DapperMapSettingsPage
     private final boolean adminMode;
     /**
      * Retained for source compatibility. The authoritative definition now lives in
-     * {@link dev.scyphoz.dappermap.permissions.DapperMapPermissions#ADMIN}, which uses the
-     * same node the command framework generates for {@code /dappermap admin}.
+     * {@link dev.scyphoz.dappermap.permissions.DapperMapPermissions#ADMIN}, a node kept
+     * deliberately outside the player command tree so player-command wildcard grants
+     * can never reach it.
      */
     public static final PermissionQuery ADMIN_PERMISSION = DapperMapPermissions.ADMIN;
 
