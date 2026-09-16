@@ -33,7 +33,7 @@ $C.@DecoratedContainer {
 
       Label {
         FlexWeight: 1;
-        Text: "HUD element to change colour";
+        Text: "HUD element to change colour:";
         Style: (FontSize: 15, RenderBold: true, TextColor: #f4f7fb, HorizontalAlignment: Start, VerticalAlignment: Center);
       }
 
