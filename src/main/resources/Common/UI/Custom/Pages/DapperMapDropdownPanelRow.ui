@@ -1,8 +1,8 @@
 $C = "../Common.ui";
 
 Group {
-  Anchor: (Height: 64);
-  Background: #16182b(0.94);
+  Anchor: (Height: 68);
+  Background: PatchStyle(TexturePath: "DapperMapGlassRow.png", Border: 10);
   LayoutMode: Left;
   Padding: (Horizontal: 12, Vertical: 7);
 
@@ -21,7 +21,7 @@ Group {
       Style: (
         FontSize: 15,
         RenderBold: true,
-        TextColor: #f4f2ff,
+        TextColor: #e5e1ff,
         VerticalAlignment: Center
       );
     }

@@ -1,12 +1,12 @@
 Group {
-  Anchor: (Height: 64);
-  Background: #16182b(0.94);
+  Anchor: (Height: 62);
+  Background: PatchStyle(TexturePath: "DapperMapGlassRow.png", Border: 10);
   LayoutMode: Left;
   Padding: (Horizontal: 12, Vertical: 7);
 
   Group #Accent {
     Anchor: (Width: 7, Height: 7);
-    Background: #57d8d0;
+    Background: #5adbd3;
   }
 
   Group #Info {
@@ -16,7 +16,7 @@ Group {
 
     Label #RowLabel {
       Anchor: (Height: 36);
-      Style: (FontSize: 15, RenderBold: true, TextColor: #f4f7fb, VerticalAlignment: Center);
+      Style: (FontSize: 14, RenderBold: true, TextColor: #f4f7fb, VerticalAlignment: Center);
     }
   }
 
@@ -28,7 +28,7 @@ Group {
 
   Label #ValueLabel {
     Anchor: (Width: 138, Height: 38);
-    Background: #24203d(0.94);
+    Background: PatchStyle(TexturePath: "DapperMapGlassControl.png", Border: 9);
     Style: (FontSize: 14, RenderBold: true, TextColor: #f4c76b, HorizontalAlignment: Center, VerticalAlignment: Center);
   }
 

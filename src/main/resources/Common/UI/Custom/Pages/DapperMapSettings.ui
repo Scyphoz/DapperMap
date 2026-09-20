@@ -1,139 +1,156 @@
 $C = "../Common.ui";
 $C.@PageOverlay {
   LayoutMode: CenterMiddle;
-  Group #DapperMapShell {
-    Anchor: (Width: 1120, Height: 760);
-    Background: #0c0e19(0.98);
-    LayoutMode: Top;
-    Padding: (Full: 2);
-  Group #Title {
-    Anchor: (Height: 48);
-    Background: #111322(0.98);
-    LayoutMode: CenterMiddle;
-    Label #PageTitle {
-      Style: (...$C.@TitleStyle, HorizontalAlignment: Center, TextColor: #b8aeff);
-      Padding: (Horizontal: 19);
-    }
-  }
 
-  Group #Content {
-    FlexWeight: 1;
+  Group #DapperMapShell {
+    Anchor: (Width: 1080, Height: 700);
+    Background: #0b0c18(0.93);
     LayoutMode: Top;
-    Padding: (Horizontal: 16);
+    Padding: (Full: 1);
+
+    Group #PlayerTopAccent { Anchor: (Height: 0); Visible: false; }
+    Group #AdminTopAccent { Anchor: (Height: 0); Visible: false; }
 
     Group #DapperMapHeader {
-      Anchor: (Height: 74);
-      Background: #101222(0.98);
-      LayoutMode: Left;
-      Padding: (Horizontal: 20, Vertical: 10);
-      Group {
-        FlexWeight: 1;
-        LayoutMode: Top;
-        Label { Anchor: (Height: 22); Text: "DapperMap"; Style: (FontSize: 18, RenderBold: true, TextColor: #b8aeff, HorizontalAlignment: Start, VerticalAlignment: Center); }
-        Label #DapperMapTagline { Anchor: (Height: 28); Text: "Navigation instrument / personal profile"; Style: (FontSize: 11, TextColor: #6fe8df, HorizontalAlignment: Start, VerticalAlignment: Center); }
-      }
-      Group {
-        Anchor: (Width: 190, Height: 50);
-        LayoutMode: Top;
-        Label { Anchor: (Height: 16); Text: "EXPLORE"; Style: (FontSize: 9, TextColor: #b8aeff, HorizontalAlignment: End, VerticalAlignment: Center); }
-        Label { Anchor: (Height: 16); Text: "UNDERSTAND"; Style: (FontSize: 9, TextColor: #57d8d0, HorizontalAlignment: End, VerticalAlignment: Center); }
-        Label { Anchor: (Height: 16); Text: "GO FURTHER"; Style: (FontSize: 9, TextColor: #f4c76b, HorizontalAlignment: End, VerticalAlignment: Center); }
-      }
-    }
+      Anchor: (Height: 96);
+      LayoutMode: Top;
+      Padding: (Left: 34, Right: 30, Top: 22, Bottom: 10);
 
-    Group { Anchor: (Height: 1); Background: #353650(0.9); }
-    Group { Anchor: (Height: 12); }
+      Group { FlexWeight: 1; LayoutMode: Left;
+        Group { FlexWeight: 1; LayoutMode: Top;
+          Label { Anchor: (Height: 46); Text: "DapperMap"; Style: (FontSize: 34, RenderBold: false, TextColor: #c8b8ff, HorizontalAlignment: Start, VerticalAlignment: Center); }
+          Label #DapperMapTagline { Anchor: (Height: 20); Text: "NAVIGATION INSTRUMENT"; Style: (FontSize: 10, TextColor: #9697ba, HorizontalAlignment: Start, VerticalAlignment: Center); }
+        }
+Group { Anchor: (Width: 116); }
+      }
+      Group { Anchor: (Height: 1); Background: #48445b(0.52); }
+    }
 
     Group #DapperMapWorkspace {
       FlexWeight: 1;
       LayoutMode: Left;
+      Padding: (Left: 20, Right: 20, Bottom: 14);
 
       Group #DapperMapNavigation {
-        Anchor: (Width: 185);
-        Background: #111322(0.96);
+        Anchor: (Width: 168);
         LayoutMode: Top;
-        Padding: (Horizontal: 12, Vertical: 16);
-        Label { Anchor: (Height: 28); Text: "INSTRUMENT PANEL"; Style: (FontSize: 9, RenderBold: true, TextColor: #667089, HorizontalAlignment: Start, VerticalAlignment: Center); }
-        Group #DapperMapTabDisplaySlot { Anchor: (Height: 46); LayoutMode: CenterMiddle; }
-        Group #DapperMapTabMarkersSlot { Anchor: (Height: 46); LayoutMode: CenterMiddle; }
-        Group #DapperMapTabInterfaceSlot { Anchor: (Height: 46); LayoutMode: CenterMiddle; }
-        Group { Anchor: (Height: 1); Background: #34364d(0.8); }
+        Padding: (Left: 14, Right: 14, Top: 0, Bottom: 16);
+        Group { Anchor: (Height: 17); }
+
+        Label { Anchor: (Height: 18); Text: "INSTRUMENT"; Style: (FontSize: 9, TextColor: #6f7690, HorizontalAlignment: Start, VerticalAlignment: Center); }
+        Group { Anchor: (Height: 12); }
+
+        Group #DapperMapTabDisplaySlot { Anchor: (Height: 54); Background: PatchStyle(TexturePath: "DapperMapGlassPanelSoft.png", Border: 10); LayoutMode: CenterMiddle; Group #DapperMapTabDisplayActive { Anchor: (Full: 0); Background: PatchStyle(TexturePath: "DapperMapGlassActive.png", Border: 10); } }
+        Group { Anchor: (Height: 8); }
+        Group #DapperMapTabMarkersSlot { Anchor: (Height: 54); Background: PatchStyle(TexturePath: "DapperMapGlassPanelSoft.png", Border: 10); LayoutMode: CenterMiddle; Group #DapperMapTabMarkersActive { Anchor: (Full: 0); Background: PatchStyle(TexturePath: "DapperMapGlassActive.png", Border: 10); Visible: false; } }
+        Group { Anchor: (Height: 8); }
+        Group #DapperMapTabInterfaceSlot { Anchor: (Height: 54); Background: PatchStyle(TexturePath: "DapperMapGlassPanelSoft.png", Border: 10); LayoutMode: CenterMiddle; Group #DapperMapTabInterfaceActive { Anchor: (Full: 0); Background: PatchStyle(TexturePath: "DapperMapGlassActive.png", Border: 10); Visible: false; } }
+        Group { Anchor: (Height: 8); }
+        Group #DapperMapTabColoursSlot { Anchor: (Height: 54); Background: PatchStyle(TexturePath: "DapperMapGlassPanelSoft.png", Border: 10); LayoutMode: CenterMiddle; Group #DapperMapTabColoursActive { Anchor: (Full: 0); Background: PatchStyle(TexturePath: "DapperMapGlassActive.png", Border: 10); Visible: false; } }
+
+        Group { Anchor: (Height: 18); }
+        Group { Anchor: (Height: 1); Background: #48445b(0.46); }
         Group { FlexWeight: 1; }
-        Label { Anchor: (Height: 68); Text: "SAME WORLD. CLEARER JOURNEYS."; Style: (FontSize: 10, TextColor: #8178b9, HorizontalAlignment: Start, VerticalAlignment: Center); }
+
+        Group #DapperMapAdminButtonFrame { Anchor: (Height: 42); Background: PatchStyle(TexturePath: "DapperMapGlassButton.png", Border: 10); LayoutMode: Top;
+          Group #DapperMapAdminButtonSlot { FlexWeight: 1; LayoutMode: CenterMiddle; }
+        }
       }
 
-      Group { Anchor: (Width: 12); }
+      Group { Anchor: (Width: 16); }
+
+      Group #DapperMapMainColumn {
+        FlexWeight: 1;
+        LayoutMode: Top;
+
+        Group #DapperMapUpperDeck {
+          FlexWeight: 1;
+          LayoutMode: Left;
 
       Group #DapperMapControlPanel {
         FlexWeight: 1;
-        Background: #141627(0.96);
+        Background: PatchStyle(TexturePath: "DapperMapGlassPanel.png", Border: 12);
         LayoutMode: Top;
-        Padding: (Horizontal: 14, Vertical: 12);
-        Label { Anchor: (Height: 24); Text: "CONFIGURATION"; Style: (FontSize: 10, RenderBold: true, TextColor: #f4f2ff, HorizontalAlignment: Start, VerticalAlignment: Center); }
-        Label { Anchor: (Height: 28); Text: "Changes apply to your live navigation instrument."; Style: (FontSize: 11, TextColor: #8e9bb2, HorizontalAlignment: Start, VerticalAlignment: Center); }
-        Group { Anchor: (Height: 1); Background: #34364d(0.8); }
-        Group #DapperMapSettingsListContainer {
-          FlexWeight: 1;
-          LayoutMode: TopScrolling;
-          ScrollbarStyle: $C.@DefaultScrollbarStyle;
-          Padding: (Top: 8, Right: 6);
+        Padding: (Horizontal: 20, Top: 0, Bottom: 14);
+        Group { Anchor: (Height: 17); }
+
+        Label #PageSectionTitle { Anchor: (Height: 38); Text: "DISPLAY"; Style: (FontSize: 25, RenderBold: true, TextColor: #d7ccff, HorizontalAlignment: Start, VerticalAlignment: Center); }
+        Label #PageSectionDescription { Anchor: (Height: 24); Text: "Customize how DapperMap appears in-game."; Style: (FontSize: 11, TextColor: #a5a3c2, HorizontalAlignment: Start, VerticalAlignment: Center); }
+        Group { Anchor: (Height: 12); }
+        Group { Anchor: (Height: 1); Background: #48445b(0.50); }
+        Group { Anchor: (Height: 12); }
+
+        Group #DapperMapSettingsListContainer { FlexWeight: 1; LayoutMode: TopScrolling; ScrollbarStyle: $C.@DefaultScrollbarStyle; Padding: (Right: 6);
           Group #DapperMapSettingsList { LayoutMode: Top; }
         }
+
+        Group #DapperMapColourEditor { FlexWeight: 1; LayoutMode: Top; Visible: false;
+          Label { Anchor: (Height: 24); Text: "HUD COLOURS"; Style: (FontSize: 12, RenderBold: true, TextColor: #b9afff, HorizontalAlignment: Start, VerticalAlignment: Center); }
+          Label { Anchor: (Height: 24); Text: "Select an instrument element, then tune its colour."; Style: (FontSize: 10, TextColor: #8f97af, HorizontalAlignment: Start, VerticalAlignment: Center); }
+          Group { Anchor: (Height: 12); }
+          Group { Anchor: (Height: 52); Background: PatchStyle(TexturePath: "DapperMapGlassRow.png", Border: 10); LayoutMode: Full; Padding: (Horizontal: 10, Vertical: 7); $C.@DropdownBox #ColourTarget { @Anchor = (Full: 0); ShowLabel: true; } }
+          Label #ColourDescription { Anchor: (Height: 42); Style: (FontSize: 10, TextColor: #65d8d2, HorizontalAlignment: Start, VerticalAlignment: Center); }
+          Group { Anchor: (Height: 52); Background: PatchStyle(TexturePath: "DapperMapGlassRow.png", Border: 10); LayoutMode: Full; Padding: (Horizontal: 10, Vertical: 7); ColorPickerDropdownBox #ColourPicker { Anchor: (Full: 0); Style: $C.@DefaultColorPickerDropdownBoxStyle; Color: #7b6cff; Format: Rgb; DisplayTextField: true; ResetTransparencyWhenChangingColor: true; } }
+          Label #ColourHex { Anchor: (Height: 30); Text: "#7B6CFF"; Style: (FontSize: 12, RenderBold: true, TextColor: #65d8d2, HorizontalAlignment: End, VerticalAlignment: Center); }
+          Group { Anchor: (Height: 12); }
+          Group { Anchor: (Height: 44); LayoutMode: Left;
+            Group #ColourResetSlot { FlexWeight: 1; Background: PatchStyle(TexturePath: "DapperMapGlassRow.png", Border: 10); LayoutMode: CenterMiddle; }
+            Group { Anchor: (Width: 10); }
+            Group #ColourResetAllSlot { FlexWeight: 1; Background: PatchStyle(TexturePath: "DapperMapGlassRow.png", Border: 10); LayoutMode: CenterMiddle; }
+          }
+          Group { FlexWeight: 1; }
+        }
+
       }
 
-      Group { Anchor: (Width: 12); }
+      Group { Anchor: (Width: 16); }
 
       Group #DapperMapPreviewPanel {
-        Anchor: (Width: 258);
-        Background: #111322(0.96);
+        Anchor: (Width: 286);
+        Background: PatchStyle(TexturePath: "DapperMapGlassPanel.png", Border: 12);
         LayoutMode: Top;
-        Padding: (Horizontal: 14, Vertical: 12);
-        Label { Anchor: (Height: 24); Text: "PREVIEW"; Style: (FontSize: 10, RenderBold: true, TextColor: #b8aeff, HorizontalAlignment: Start, VerticalAlignment: Center); }
-        Group #DapperMapPreviewMap {
-          Anchor: (Height: 226);
-          Background: #090b15;
-          Padding: (Full: 7);
-          Group {
-            Anchor: (Full: 0);
-            Background: #172f32;
-            Group { Anchor: (Left: 8, Top: 12, Width: 96, Height: 74); Background: #285348; }
-            Group { Anchor: (Right: 8, Top: 16, Width: 100, Height: 92); Background: #376342; }
-            Group { Anchor: (Left: 24, Bottom: 16, Width: 118, Height: 82); Background: #244a61; }
-            Group { Anchor: (Right: 18, Bottom: 18, Width: 68, Height: 72); Background: #66553d; }
-            Label { Anchor: (Left: 94, Top: 4, Width: 28, Height: 24); Text: "N"; Style: (FontSize: 13, RenderBold: true, TextColor: #6fe8df, HorizontalAlignment: Center, VerticalAlignment: Center); }
-            Label { Anchor: (Left: 98, Top: 91, Width: 22, Height: 28); Text: "^"; Style: (FontSize: 20, RenderBold: true, TextColor: #f4c76b, HorizontalAlignment: Center, VerticalAlignment: Center); }
-            Group { Anchor: (Left: 3, Top: 3, Width: 36, Height: 3); Background: #7b6cff; }
-            Group { Anchor: (Left: 3, Top: 3, Width: 3, Height: 36); Background: #7b6cff; }
-            Group { Anchor: (Right: 3, Bottom: 3, Width: 36, Height: 3); Background: #7b6cff; }
-            Group { Anchor: (Right: 3, Bottom: 3, Width: 3, Height: 36); Background: #7b6cff; }
-          }
-        }
+        Padding: (Horizontal: 14, Top: 0, Bottom: 14);
+        Group { Anchor: (Height: 17); }
+
+        Label { Anchor: (Height: 28); Text: "PREVIEW"; Style: (FontSize: 13, RenderBold: true, TextColor: #c8baff, HorizontalAlignment: Start, VerticalAlignment: Center); }
+        Label { Anchor: (Height: 18); Text: "LIVE INSTRUMENT"; Style: (FontSize: 8, TextColor: #6f7690, HorizontalAlignment: Start, VerticalAlignment: Center); }
         Group { Anchor: (Height: 10); }
-        Group #DapperMapPreviewTelemetry {
-          Anchor: (Height: 190);
-          Background: #15172a(0.96);
-          LayoutMode: Top;
-          Padding: (Horizontal: 10, Vertical: 8);
-          Label { Anchor: (Height: 26); Text: "DapperMap"; Style: (FontSize: 10, RenderBold: true, TextColor: #b8aeff, HorizontalAlignment: Start, VerticalAlignment: Center); }
-          Label { Anchor: (Height: 18); Text: "COORDINATES"; Style: (FontSize: 8, TextColor: #57d8d0, HorizontalAlignment: Start, VerticalAlignment: Center); }
-          Label { Anchor: (Height: 25); Text: "-328, 72, 551"; Style: (FontSize: 12, RenderBold: true, TextColor: #f4f2ff, HorizontalAlignment: Start, VerticalAlignment: Center); }
-          Label { Anchor: (Height: 18); Text: "BEARING"; Style: (FontSize: 8, TextColor: #57d8d0, HorizontalAlignment: Start, VerticalAlignment: Center); }
-          Label { Anchor: (Height: 25); Text: "128° SE"; Style: (FontSize: 12, RenderBold: true, TextColor: #6fe8df, HorizontalAlignment: Start, VerticalAlignment: Center); }
-          Label { Anchor: (Height: 18); Text: "WORLD TIME  /  REGION"; Style: (FontSize: 8, TextColor: #57d8d0, HorizontalAlignment: Start, VerticalAlignment: Center); }
-          Label { Anchor: (Height: 25); Text: "22:14  /  Emerald Lowlands"; Style: (FontSize: 10, RenderBold: true, TextColor: #c7d3e2, HorizontalAlignment: Start, VerticalAlignment: Center); }
+
+        Group #PreviewStage { Anchor: (Height: 326); Background: PatchStyle(TexturePath: "DapperMapGlassPanel.png", Border: 12); LayoutMode: Full; Padding: (Full: 4);
+          AssetImage #PreviewHudImage { Anchor: (Left: 3, Top: 3, Width: 238, Height: 316); Visible: true; }
+          Label #PreviewDisabled { Visible: false; Anchor: (Full: 0); Text: "MINIMAP DISABLED"; Style: (FontSize: 13, RenderBold: true, TextColor: #8491a4, HorizontalAlignment: Center, VerticalAlignment: Center); }
+        }
+
+        Group { Anchor: (Height: 14); }
+        Group { Anchor: (Height: 1); Background: #48445b(0.44); }
+        Group { Anchor: (Height: 14); }
+        Label { Anchor: (Height: 18); Text: "SETTINGS PREVIEW"; Style: (FontSize: 8, TextColor: #707891, HorizontalAlignment: Center, VerticalAlignment: Center); }
+        Group { FlexWeight: 1; }
+      }
+        }
+
+        Group { Anchor: (Height: 12); }
+
+        Group #DapperMapActionDeck {
+          Anchor: (Height: 58);
+          Background: PatchStyle(TexturePath: "DapperMapGlassPanelSoft.png", Border: 10);
+          LayoutMode: Left;
+          Padding: (Left: 18, Right: 18, Top: 7, Bottom: 7);
+
+          Group #DapperMapResetButtonFrame { Anchor: (Width: 170, Height: 44); Background: PatchStyle(TexturePath: "DapperMapGlassButton.png", Border: 10); LayoutMode: Top;
+            Group #DapperMapResetButtonSlot { FlexWeight: 1; LayoutMode: CenterMiddle; }
+          }
+          Group { FlexWeight: 1; }
+          Group #DapperMapCloseButtonFrame { Anchor: (Width: 92, Height: 44); Background: PatchStyle(TexturePath: "DapperMapGlassButton.png", Border: 10); LayoutMode: Top;
+            Group #DapperMapCloseButtonSlot { FlexWeight: 1; LayoutMode: CenterMiddle; }
+          }
+          Group { Anchor: (Width: 10); }
+          Group #DapperMapApplyButtonFrame { Anchor: (Width: 112, Height: 44); Background: PatchStyle(TexturePath: "DapperMapGlassActive.png", Border: 10); LayoutMode: Top;
+            Group #DapperMapApplyButtonSlot { FlexWeight: 1; LayoutMode: CenterMiddle; }
+          }
         }
       }
     }
-
-    Group #DapperMapResetFooter {
-      Anchor: (Height: 58);
-      LayoutMode: Left;
-      Padding: (Top: 10, Bottom: 6);
-      Group #DapperMapAdminButtonSlot { Anchor: (Width: 210, Height: 40); LayoutMode: CenterMiddle; }
-      Group { FlexWeight: 1; }
-      Group #DapperMapResetButtonSlot { Anchor: (Width: 240, Height: 40); LayoutMode: CenterMiddle; }
-    }
-  }
   }
 }
 $C.@BackButton {}

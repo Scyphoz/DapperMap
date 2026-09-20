@@ -1,7 +1,7 @@
 Group {
-  Anchor: (Height: 42);
+  Anchor: (Height: 38);
   Padding: (Left: 10, Top: 14);
   Label #SectionLabel {
-    Style: (FontSize: 11, RenderBold: true, TextColor: #b8aeff, HorizontalAlignment: Start, VerticalAlignment: Center);
+    Style: (FontSize: 10, RenderBold: true, TextColor: #b8aeff, HorizontalAlignment: Start, VerticalAlignment: Center);
   }
 }

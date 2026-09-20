@@ -9,6 +9,7 @@ import java.awt.Color;
 import static dev.scyphoz.dappermap.dynamic.MinimapColours.Key.*;
 import java.awt.Font;
 import java.awt.FontMetrics;
+import java.awt.GradientPaint;
 import java.awt.Graphics2D;
 import java.awt.RenderingHints;
 import java.awt.geom.AffineTransform;
@@ -18,8 +19,10 @@ import java.awt.geom.Path2D;
 import java.awt.geom.RoundRectangle2D;
 import java.awt.image.BufferedImage;
 import java.awt.image.ImageObserver;
+import java.awt.Shape;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.util.Arrays;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -369,6 +372,88 @@ public final class DynamicMinimapRenderer {
         }
     }
 
+
+    /**
+     * Renders the settings-page preview from the same frame/chrome/telemetry renderer used by
+     * the live HUD. Only the world data is synthetic and frozen; the HUD itself is not rebuilt
+     * in Custom UI markup, preventing the settings preview from drifting from the in-game HUD.
+     */
+    public static byte[] renderSettingsPreview(DynamicMinimapSetting settings) {
+        DynamicMinimapSetting preview = settings.copy();
+        preview.normalize();
+        int mapSize = Math.max(180, Math.min(256, preview.sizePixels));
+        int panelWidth = 164;
+        int gap = preview.isCircle() ? 8 : 16;
+        int panelHeight = 24 + 12;
+        if (preview.showCoordinates) panelHeight += 43;
+        if (preview.showCompass) panelHeight += 43;
+        if (preview.showClock) panelHeight += 43;
+        if (preview.showBiome) panelHeight += 43;
+
+        byte[] overlayPng = renderHudOverlay(preview, mapSize, panelWidth, panelHeight, gap, 0.0D,
+                "1,119, 298", "268° W", preview.clock24Hour ? "NIGHT 23:01" : "NIGHT 11:01 PM", "Plains Spawn");
+        if (overlayPng == null) return null;
+        try {
+            BufferedImage overlay = ImageIO.read(new ByteArrayInputStream(overlayPng));
+            BufferedImage hud = new BufferedImage(overlay.getWidth(), overlay.getHeight(), BufferedImage.TYPE_INT_ARGB);
+            Graphics2D g = hud.createGraphics();
+            g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            boolean side = preview.infoPanelPosition == DynamicMinimapSetting.INFO_LEFT
+                    || preview.infoPanelPosition == DynamicMinimapSetting.INFO_RIGHT;
+            int mapX = preview.infoPanelPosition == DynamicMinimapSetting.INFO_LEFT ? panelWidth + gap
+                    : (side ? 0 : Math.max(0, (hud.getWidth() - mapSize) / 2));
+            int mapY = preview.infoPanelPosition == DynamicMinimapSetting.INFO_ABOVE ? panelHeight + gap
+                    : (preview.infoPanelPosition == DynamicMinimapSetting.INFO_BELOW ? 0
+                    : Math.max(0, (hud.getHeight() - mapSize) / 2));
+
+            Shape oldClip = g.getClip();
+            if (preview.isCircle()) g.setClip(new Ellipse2D.Double(mapX + 3, mapY + 3, mapSize - 6, mapSize - 6));
+            else g.setClip(new RoundRectangle2D.Double(mapX + 3, mapY + 3, mapSize - 6, mapSize - 6, 8, 8));
+            // Frozen representative terrain. This is deliberately data-only: all bezel, compass,
+            // panel geometry and typography come from the live HUD renderer below.
+            GradientPaint land = new GradientPaint(mapX, mapY, new Color(38, 83, 48),
+                    mapX + mapSize, mapY + mapSize, new Color(76, 108, 54));
+            g.setPaint(land); g.fillRect(mapX, mapY, mapSize, mapSize);
+            g.setColor(new Color(45, 91, 108));
+            Path2D river = new Path2D.Double();
+            river.moveTo(mapX + mapSize * .08, mapY + mapSize * .78);
+            river.curveTo(mapX + mapSize * .32, mapY + mapSize * .55, mapX + mapSize * .43, mapY + mapSize * .86, mapX + mapSize * .61, mapY + mapSize * .52);
+            river.curveTo(mapX + mapSize * .76, mapY + mapSize * .26, mapX + mapSize * .65, mapY + mapSize * .12, mapX + mapSize * .83, mapY - 4);
+            g.setStroke(new BasicStroke(Math.max(12f, mapSize * .085f), BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+            g.draw(river);
+            g.setClip(oldClip);
+
+            // Use the same generated marker assets as the live HUD.
+            if (preview.showOtherPlayers)
+                drawPreviewAsset(g, renderDot(preview.colours.rgb(PLAYERS), preview.colours), mapX + mapSize * 35 / 100, mapY + mapSize * 30 / 100, 11);
+            if (preview.showEntities) {
+                drawPreviewAsset(g, renderDot(preview.colours.rgb(HOSTILE), preview.colours), mapX + mapSize * 73 / 100, mapY + mapSize * 35 / 100, 11);
+                drawPreviewAsset(g, renderDot(preview.colours.rgb(FRIENDLY), preview.colours), mapX + mapSize * 69 / 100, mapY + mapSize * 72 / 100, 11);
+            }
+            if (preview.showDeathMarker) drawPreviewAsset(g, renderDeath(preview.colours), mapX + mapSize * 18 / 100, mapY + mapSize * 54 / 100, 16);
+            drawPreviewAsset(g, renderSelfArrow(0.0D, preview.colours), mapX + mapSize / 2 - 12, mapY + mapSize / 2 - 12, 24);
+            g.drawImage(overlay, 0, 0, null);
+            g.dispose();
+
+            int stageW = 360, stageH = 286;
+            BufferedImage stage = new BufferedImage(stageW, stageH, BufferedImage.TYPE_INT_ARGB);
+            Graphics2D sg = stage.createGraphics();
+            sg.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC);
+            double scale = Math.min((stageW - 8.0) / hud.getWidth(), (stageH - 8.0) / hud.getHeight());
+            int w = Math.max(1, (int)Math.round(hud.getWidth() * scale));
+            int h = Math.max(1, (int)Math.round(hud.getHeight() * scale));
+            sg.drawImage(hud, (stageW - w) / 2, (stageH - h) / 2, w, h, null);
+            sg.dispose();
+            return toPng(stage);
+        } catch (Exception ignored) { return null; }
+    }
+
+    private static void drawPreviewAsset(Graphics2D g, byte[] png, double x, double y, int size) throws IOException {
+        if (png == null) return;
+        BufferedImage image = ImageIO.read(new ByteArrayInputStream(png));
+        if (image != null) g.drawImage(image, (int)Math.round(x), (int)Math.round(y), size, size, null);
+    }
+
     private static void drawTelemetry(Graphics2D graphics, DynamicMinimapSetting settings,
                                       int x, int y, int width, String coords,
                                       String compass, String clock, String biome) {
@@ -493,7 +578,7 @@ public final class DynamicMinimapRenderer {
                 || settings.infoPanelPosition == DynamicMinimapSetting.INFO_RIGHT);
         int textX = x + telemetryInset(settings, width,
                 baseInset + (curvedSide ? curveInset : 0));
-        drawHudText(graphics, caption, textX, y + 14, 7,
+        drawHudText(graphics, caption, textX, y + 14, 8,
                 settings.colours.awt(TICKS, 255), true);
         drawHudText(graphics, value == null ? "" : value, textX, y + 31, 10,
                 valueColor, true);

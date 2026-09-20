@@ -1,6 +1,6 @@
 Group {
-  Anchor: (Height: 64);
-  Background: #141625(0.82);
+  Anchor: (Height: 62);
+  Background: #151622(0.72);
   LayoutMode: Left;
   Padding: (Horizontal: 12, Vertical: 7);
 
@@ -16,11 +16,11 @@ Group {
 
     Label #RowLabel {
       Anchor: (Height: 23);
-      Style: (FontSize: 15, RenderBold: true, TextColor: #8192a4, HorizontalAlignment: Start, VerticalAlignment: Center);
+      Style: (FontSize: 14, RenderBold: true, TextColor: #8192a4, HorizontalAlignment: Start, VerticalAlignment: Center);
     }
     Label #RowDescription {
       Anchor: (Height: 19);
-      Style: (FontSize: 11, TextColor: #687b8e, HorizontalAlignment: Start, VerticalAlignment: Center);
+      Style: (FontSize: 12, TextColor: #687b8e, HorizontalAlignment: Start, VerticalAlignment: Center);
     }
   }
 

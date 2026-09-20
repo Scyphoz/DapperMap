@@ -1,32 +1,48 @@
 Group {
-  Anchor: (Height: 64);
-  Background: #16182b(0.94);
+  Anchor: (Height: 62);
+  Background: PatchStyle(TexturePath: "DapperMapGlassRow.png", Border: 10);
   LayoutMode: Left;
-  Padding: (Horizontal: 10, Vertical: 8);
+  Padding: (Horizontal: 12, Vertical: 7);
 
-  Group #Accent {
-    Anchor: (Width: 7, Height: 7);
-    Background: #7b6cff;
-  }
+  Group #Accent { Anchor: (Width: 7, Height: 7); Background: #58d8d1; }
 
   Group #Info {
     FlexWeight: 1;
     LayoutMode: Top;
     Padding: (Left: 14, Right: 10);
-
-    Label #RowLabel {
-      Anchor: (Height: 23);
-      Style: (FontSize: 15, RenderBold: true, TextColor: #f4f2ff, HorizontalAlignment: Start, VerticalAlignment: Center);
-    }
-
-    Label #RowDescription {
-      Anchor: (Height: 19);
-      Style: (FontSize: 11, TextColor: #8e9bb2, HorizontalAlignment: Start, VerticalAlignment: Center);
-    }
+    Label #RowLabel { Anchor: (Height: 23); Style: (FontSize: 14, RenderBold: true, TextColor: #d9d0f5, HorizontalAlignment: Start, VerticalAlignment: Center); }
+    Label #RowDescription { Anchor: (Height: 19); Style: (FontSize: 10, TextColor: #9997b1, HorizontalAlignment: Start, VerticalAlignment: Center); }
   }
 
-  Group #BtnSlot {
-    Anchor: (Width: 132, Height: 38);
-    LayoutMode: CenterMiddle;
+  Label #StateLabel {
+    Anchor: (Width: 96, Height: 30);
+    Style: (FontSize: 10, RenderBold: true, TextColor: #5adbd3, HorizontalAlignment: End, VerticalAlignment: Center);
+  }
+
+  Group { Anchor: (Width: 10); }
+
+  Group #ToggleFrame {
+    Anchor: (Width: 58, Height: 30);
+    LayoutMode: Full;
+
+    Group #ToggleOff {
+      Anchor: (Full: 0);
+      Background: PatchStyle(TexturePath: "DapperMapGlassControl.png", Border: 9);
+      LayoutMode: Left;
+      Padding: (Left: 4, Right: 4, Top: 4, Bottom: 4);
+      Group { Anchor: (Width: 22, Height: 22); Background: #777b94; }
+      Group { FlexWeight: 1; }
+    }
+
+    Group #ToggleOn {
+      Anchor: (Full: 0);
+      Background: #4bcfc8(0.92);
+      LayoutMode: Left;
+      Padding: (Left: 4, Right: 4, Top: 4, Bottom: 4);
+      Group { FlexWeight: 1; }
+      Group { Anchor: (Width: 22, Height: 22); Background: #e9ffff; }
+    }
+
+    Group #BtnSlot { Anchor: (Full: 0); LayoutMode: Full; }
   }
 }

@@ -1,8 +1,8 @@
 Group {
-  Anchor: (Height: 64);
-  Background: #16182b(0.94);
+  Anchor: (Height: 62);
+  Background: PatchStyle(TexturePath: "DapperMapGlassRow.png", Border: 10);
   LayoutMode: Left;
-  Padding: (Horizontal: 10, Vertical: 8);
+  Padding: (Horizontal: 12, Vertical: 7);
 
   Group #Accent {
     Anchor: (Width: 7, Height: 7);
@@ -17,12 +17,12 @@ Group {
     Label #RowLabel {
       Text: "Screen Position";
       Anchor: (Height: 23);
-      Style: (FontSize: 15, RenderBold: true, TextColor: #f4f2ff, HorizontalAlignment: Start, VerticalAlignment: Center);
+      Style: (FontSize: 14, RenderBold: true, TextColor: #d9d0f5, HorizontalAlignment: Start, VerticalAlignment: Center);
     }
 
     Label #RowDescription {
       Anchor: (Height: 19);
-      Style: (FontSize: 11, TextColor: #8e9bb2, HorizontalAlignment: Start, VerticalAlignment: Center);
+      Style: (FontSize: 10, TextColor: #9997b1, HorizontalAlignment: Start, VerticalAlignment: Center);
     }
   }
 
