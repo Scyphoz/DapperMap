@@ -248,7 +248,7 @@ public final class DynamicMinimapRenderer {
             double center = (double)logicalSize / 2.0D;
             graphics.rotate(bucketAngle(bucket), center, center);
             drawCardinals(graphics, logicalSize, true, colours);
-            drawNorthNeedle(graphics, logicalSize / 2, 18, colours);
+            drawNorthNeedle(graphics, logicalSize / 2, 3, colours);
             graphics.setTransform(beforeCompass);
         } else {
             drawSquareCardinalsRotated(
@@ -297,16 +297,27 @@ public final class DynamicMinimapRenderer {
         Graphics2D graphics = image.createGraphics();
         graphics.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
 
-        Color panel = settings.colours.awt(PANEL, 232);
+        Color panel = settings.colours.awt(PANEL, 168);
         Color edge = settings.colours.awt(EDGE, 235);
         Color survey = settings.colours.awt(TICKS, 245);
 
         Path2D.Double shell = panelShellPath(settings, panelX, panelY, panelWidth, panelHeight);
+        graphics.setStroke(new BasicStroke(3.2F, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+        graphics.setColor(withAlpha(FIXED_FRAME_SHADOW, 105));
+        graphics.draw(shell);
         graphics.setColor(panel);
         graphics.fill(shell);
 
-        graphics.setStroke(new BasicStroke(1.6F, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
-        graphics.setColor(edge);
+        // A faint second tint and inner hairline give the panel a translucent,
+        // glass-like edge without making the telemetry background opaque.
+        graphics.setColor(new Color(255, 255, 255, 12));
+        graphics.fill(shell);
+
+        graphics.setStroke(new BasicStroke(1.35F, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+        graphics.setColor(settings.colours.awt(EDGE, 195));
+        graphics.draw(shell);
+        graphics.setStroke(new BasicStroke(0.65F, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+        graphics.setColor(settings.colours.awt(TICKS, 82));
         graphics.draw(shell);
 
         drawConnectorDivider(graphics, settings, mapX, mapY, mapSize, gap, survey, edge);
@@ -736,9 +747,17 @@ public final class DynamicMinimapRenderer {
         graphics.draw(new Ellipse2D.Double((double)2.0F, (double)2.0F, (double)outer, (double)outer));
         graphics.setStroke(new BasicStroke(2.2F, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
         graphics.setColor(colours.awt(EDGE, 245));
-        for (int start : new int[]{12, 102, 192, 282}) {
+        // Four 30-degree gaps are centred exactly on E/N/W/S.
+        for (int start : new int[]{15, 105, 195, 285}) {
             graphics.draw(new Arc2D.Double(4, 4, size - 9, size - 9, start, 60, Arc2D.OPEN));
         }
+
+        // Cyan side highlights echo the concept artwork without obscuring the
+        // E/W cardinal labels.
+        graphics.setStroke(new BasicStroke(3.1F, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+        graphics.setColor(colours.awt(TICKS, 245));
+        graphics.draw(new Arc2D.Double(7, 7, size - 15, size - 15, -27, 18, Arc2D.OPEN));
+        graphics.draw(new Arc2D.Double(7, 7, size - 15, size - 15, 153, 18, Arc2D.OPEN));
 
         // Four short survey bars replace the dense nautical ruler used by
         // Cartographer. Their asymmetry is the signature of the aperture style.
@@ -792,9 +811,9 @@ public final class DynamicMinimapRenderer {
     private static void drawNorthNeedle(Graphics2D graphics, int center, int top, MinimapColours colours) {
         Path2D.Double needle = new Path2D.Double();
         needle.moveTo((double)center, (double)top);
-        needle.lineTo((double)(center + 6), (double)(top + 16));
-        needle.lineTo((double)center, (double)(top + 11));
-        needle.lineTo((double)(center - 6), (double)(top + 16));
+        needle.lineTo((double)(center + 5), (double)(top + 11));
+        needle.lineTo((double)center, (double)(top + 8));
+        needle.lineTo((double)(center - 5), (double)(top + 11));
         needle.closePath();
         graphics.setColor(withAlpha(FIXED_FRAME_SHADOW, 190));
         graphics.translate(1, 1);

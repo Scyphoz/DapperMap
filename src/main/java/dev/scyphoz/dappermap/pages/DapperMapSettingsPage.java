@@ -378,16 +378,22 @@ public final class DapperMapSettingsPage
             return;
         }
 
+        if ("reset_defaults".equals(action)) {
+            DynamicMinimapSetting reset = this.adminMode
+                    ? this.sessions.resetAdminDefaults(this.config)
+                    : this.sessions.resetSettings(this.playerRef, this.config);
+            UICommandBuilder resetBuilder = new UICommandBuilder();
+            UIEventBuilder resetEvents = new UIEventBuilder();
+            this.renderList(resetBuilder, resetEvents, reset);
+            this.sendUpdate(resetBuilder, resetEvents, false);
+            return;
+        }
+
         DynamicMinimapSetting settings = this.adminMode
                 ? this.sessions.getAdminDefaults(this.config).copy()
                 : this.sessions.getSettings(this.playerRef.getUuid(), this.config);
 
-        if ("reset_defaults".equals(action)) {
-            settings = this.adminMode
-                    ? DynamicMinimapSetting.fromConfig(this.config)
-                    : this.sessions.getAdminDefaults(this.config).copy();
-
-        } else if (action.startsWith("toggle_")) {
+        if (action.startsWith("toggle_")) {
             applyToggle(
                     settings,
                     action.substring("toggle_".length())

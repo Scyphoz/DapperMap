@@ -36,6 +36,16 @@ public final class DynamicMinimapSettingsStore {
         }
     }
 
+    /** Removes both the cached value and persisted override for a player. */
+    public void delete(UUID uuid) {
+        if (uuid == null) return;
+        this.cache.remove(uuid);
+        try {
+            Files.deleteIfExists(this.dataDir.resolve(String.valueOf(uuid) + ".json"));
+        } catch (IOException ignored) {
+        }
+    }
+
     public void put(UUID uuid, DynamicMinimapSetting settings) {
         this.cache.put(uuid, settings);
         this.save(uuid);

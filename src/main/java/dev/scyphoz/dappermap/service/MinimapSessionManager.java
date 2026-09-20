@@ -160,6 +160,19 @@ public class MinimapSessionManager {
 
     }
 
+    /**
+     * Restores the current server defaults without leaving a player override
+     * behind. This keeps future admin-default changes inheritable as expected.
+     */
+    public DynamicMinimapSetting resetSettings(PlayerRef playerRef, MinimapConfig config) {
+        DynamicMinimapSetting defaults = this.getAdminDefaults(config).copy();
+        this.applySettings(playerRef, defaults);
+        UUID uuid = playerRef.getUuid();
+        this.customisedPlayers.remove(uuid);
+        if (this.settingsStore != null) this.settingsStore.delete(uuid);
+        return defaults;
+    }
+
     public void onDisconnect(PlayerRef playerRef) {
         if (playerRef != null) {
             UUID uuid = playerRef.getUuid();
