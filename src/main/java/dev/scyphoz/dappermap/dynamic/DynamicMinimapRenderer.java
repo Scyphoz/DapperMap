@@ -935,7 +935,7 @@ public final class DynamicMinimapRenderer {
         graphics.setColor(withAlpha(FIXED_FRAME_SHADOW, 190));
         graphics.drawRect(2, 2, size - 5, size - 5);
         graphics.setStroke(new BasicStroke(1.5F));
-        graphics.setColor(colours.awt(EDGE, 235));
+        graphics.setColor(colours.awt(EDGE, 245));
         graphics.drawRect(4, 4, size - 9, size - 9);
         int start = 34;
         int end = size - 34;
@@ -945,7 +945,7 @@ public final class DynamicMinimapRenderer {
             boolean major = i % 4 == 0;
             int tick = major ? 16 : 6;
             graphics.setStroke(new BasicStroke(major ? 1.8F : 1.0F));
-            graphics.setColor(major ? colours.awt(EDGE, 235) : colours.awt(TICKS, 225));
+            graphics.setColor(major ? colours.awt(TICKS, 255) : colours.awt(TICKS, 225));
             graphics.drawLine(pos, 8, pos, 8 + tick);
             graphics.drawLine(pos, size - 9, pos, size - 9 - tick);
             graphics.drawLine(8, pos, 8 + tick, pos);
@@ -985,11 +985,11 @@ public final class DynamicMinimapRenderer {
 
     private static void drawCornerBracket(Graphics2D graphics, int x, int y, int xDir, int yDir, MinimapColours colours) {
         graphics.setStroke(new BasicStroke(2.0F, 1, 1));
-        graphics.setColor(colours.awt(EDGE, 235));
+        graphics.setColor(colours.awt(EDGE, 245));
         graphics.drawLine(x, y, x + xDir * 28, y);
         graphics.drawLine(x, y, x, y + yDir * 28);
         graphics.setStroke(new BasicStroke(1.0F, 1, 1));
-        graphics.setColor(colours.awt(TICKS, 210));
+        graphics.setColor(colours.awt(TICKS, 225));
         graphics.drawLine(x + xDir * 7, y + yDir * 7, x + xDir * 18, y + yDir * 7);
         graphics.drawLine(x + xDir * 7, y + yDir * 7, x + xDir * 7, y + yDir * 18);
     }
@@ -1042,7 +1042,7 @@ public final class DynamicMinimapRenderer {
 
     private static void drawCardinals(Graphics2D graphics, int size, boolean circle, MinimapColours colours) {
         graphics.setFont(CARDINAL_FONT);
-        int margin = circle ? 17 : 15;
+        int margin = circle ? 27 : 15;
         drawCardinal(graphics, "N", size / 2, margin, colours);
         drawCardinal(graphics, "S", size / 2, size - margin, colours);
         drawCardinal(graphics, "E", size - margin, size / 2, colours);
