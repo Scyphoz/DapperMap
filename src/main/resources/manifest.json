@@ -10,7 +10,7 @@
         }
     ],
     "Website": "https://your-plugin-website.com",
-    "ServerVersion": ">=0.6.3 <0.7.0",
+    "ServerVersion": ">=0.6.1 <0.7.0",
     "Dependencies": {
         "Hytale:AssetModule": "*"
     },
