@@ -248,7 +248,6 @@ public final class DynamicMinimapRenderer {
             double center = (double)logicalSize / 2.0D;
             graphics.rotate(bucketAngle(bucket), center, center);
             drawCardinals(graphics, logicalSize, true, colours);
-            drawNorthNeedle(graphics, logicalSize / 2, 3, colours);
             graphics.setTransform(beforeCompass);
         } else {
             drawSquareCardinalsRotated(
@@ -302,25 +301,20 @@ public final class DynamicMinimapRenderer {
         Color survey = settings.colours.awt(TICKS, 245);
 
         Path2D.Double shell = panelShellPath(settings, panelX, panelY, panelWidth, panelHeight);
-        graphics.setStroke(new BasicStroke(3.2F, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
-        graphics.setColor(withAlpha(FIXED_FRAME_SHADOW, 105));
-        graphics.draw(shell);
+        // Keep the information panel as a restrained pane of tinted glass.  The
+        // concept does not use a coloured outline around the whole panel; only
+        // a very faint transparency break defines its outer silhouette.
         graphics.setColor(panel);
         graphics.fill(shell);
-
-        // A faint second tint and inner hairline give the panel a translucent,
-        // glass-like edge without making the telemetry background opaque.
-        graphics.setColor(new Color(255, 255, 255, 12));
+        graphics.setColor(new Color(255, 255, 255, 10));
         graphics.fill(shell);
-
-        graphics.setStroke(new BasicStroke(1.35F, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
-        graphics.setColor(settings.colours.awt(EDGE, 195));
-        graphics.draw(shell);
-        graphics.setStroke(new BasicStroke(0.65F, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
-        graphics.setColor(settings.colours.awt(TICKS, 82));
+        graphics.setStroke(new BasicStroke(0.75F, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+        graphics.setColor(new Color(205, 225, 242, 46));
         graphics.draw(shell);
 
-        drawConnectorDivider(graphics, settings, mapX, mapY, mapSize, gap, survey, edge);
+        // Give only the panel edge facing the minimap a restrained cyan accent.
+        // The remaining perimeter stays as the faint glass boundary above.
+        drawMapFacingPanelEdge(graphics, settings, panelX, panelY, panelWidth, panelHeight);
         graphics.dispose();
         return toPng(image);
     }
@@ -385,9 +379,6 @@ public final class DynamicMinimapRenderer {
         Color caption = settings.colours.awt(TICKS, 255);
 
         graphics.setColor(caption);
-        int barX = settings.infoPanelPosition == DynamicMinimapSetting.INFO_LEFT
-                ? x + width - 9 : x + 6;
-        graphics.fillRoundRect(barX, cursor + 3, 3, brandHeight - 6, 2, 2);
         drawHudText(graphics, "DapperMap", x + telemetryInset(settings, width, 14),
                 cursor + 16, 9, settings.colours.awt(BRAND_TEXT, 255), true);
         cursor += brandHeight;
@@ -411,6 +402,86 @@ public final class DynamicMinimapRenderer {
             drawTelemetryRow(graphics, settings, x, width, cursor, baseInset, 12,
                     "REGION", biome, settings.colours.awt(BIOME_TEXT, 255));
         }
+    }
+
+    /** Draws a faint cyan accent across the complete information-panel edge nearest the minimap. */
+    private static void drawMapFacingPanelEdge(Graphics2D graphics, DynamicMinimapSetting settings,
+                                               int x, int y, int width, int height) {
+        graphics.setStroke(new BasicStroke(1.0F, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+        graphics.setColor(settings.colours.awt(TICKS, 105));
+
+        double x0 = x + 1.0D;
+        double y0 = y + 1.0D;
+        double x1 = x + width - 1.0D;
+        double y1 = y + height - 1.0D;
+        double cx = (x0 + x1) / 2.0D;
+        double cy = (y0 + y1) / 2.0D;
+        double corner = 10.0D;
+        double inset = Math.min(10.0D, Math.min(width, height) * 0.07D);
+        double spread = Math.min(60.0D,
+                (settings.infoPanelPosition == DynamicMinimapSetting.INFO_LEFT
+                        || settings.infoPanelPosition == DynamicMinimapSetting.INFO_RIGHT
+                        ? height : width) * 0.34D);
+
+        // Non-circular styles keep a straight map-facing edge, now spanning the full side.
+        if (!settings.isCircle()) {
+            switch (settings.infoPanelPosition) {
+                case DynamicMinimapSetting.INFO_LEFT ->
+                        graphics.drawLine(x + width - 1, y + 1, x + width - 1, y + height - 1);
+                case DynamicMinimapSetting.INFO_RIGHT ->
+                        graphics.drawLine(x + 1, y + 1, x + 1, y + height - 1);
+                case DynamicMinimapSetting.INFO_ABOVE ->
+                        graphics.drawLine(x + 1, y + height - 1, x + width - 1, y + height - 1);
+                case DynamicMinimapSetting.INFO_BELOW ->
+                        graphics.drawLine(x + 1, y + 1, x + width - 1, y + 1);
+                default -> { }
+            }
+            return;
+        }
+
+        // Circular styles trace the complete map-facing side of the glass shell: straight
+        // sections at the ends plus the shallow inward curve around the minimap.
+        Path2D.Double edge = new Path2D.Double();
+        switch (settings.infoPanelPosition) {
+            case DynamicMinimapSetting.INFO_RIGHT -> {
+                edge.moveTo(x0, y0 + corner);
+                edge.lineTo(x0, cy - spread);
+                edge.curveTo(x0 + inset * 0.35D, cy - spread * 0.55D,
+                        x0 + inset, cy - spread * 0.35D, x0 + inset, cy);
+                edge.curveTo(x0 + inset, cy + spread * 0.35D,
+                        x0 + inset * 0.35D, cy + spread * 0.55D, x0, cy + spread);
+                edge.lineTo(x0, y1 - corner);
+            }
+            case DynamicMinimapSetting.INFO_LEFT -> {
+                edge.moveTo(x1, y0 + corner);
+                edge.lineTo(x1, cy - spread);
+                edge.curveTo(x1 - inset * 0.35D, cy - spread * 0.55D,
+                        x1 - inset, cy - spread * 0.35D, x1 - inset, cy);
+                edge.curveTo(x1 - inset, cy + spread * 0.35D,
+                        x1 - inset * 0.35D, cy + spread * 0.55D, x1, cy + spread);
+                edge.lineTo(x1, y1 - corner);
+            }
+            case DynamicMinimapSetting.INFO_BELOW -> {
+                edge.moveTo(x0 + corner, y0);
+                edge.lineTo(cx - spread, y0);
+                edge.curveTo(cx - spread * 0.55D, y0 + inset * 0.35D,
+                        cx - spread * 0.35D, y0 + inset, cx, y0 + inset);
+                edge.curveTo(cx + spread * 0.35D, y0 + inset,
+                        cx + spread * 0.55D, y0 + inset * 0.35D, cx + spread, y0);
+                edge.lineTo(x1 - corner, y0);
+            }
+            case DynamicMinimapSetting.INFO_ABOVE -> {
+                edge.moveTo(x0 + corner, y1);
+                edge.lineTo(cx - spread, y1);
+                edge.curveTo(cx - spread * 0.55D, y1 - inset * 0.35D,
+                        cx - spread * 0.35D, y1 - inset, cx, y1 - inset);
+                edge.curveTo(cx + spread * 0.35D, y1 - inset,
+                        cx + spread * 0.55D, y1 - inset * 0.35D, cx + spread, y1);
+                edge.lineTo(x1 - corner, y1);
+            }
+            default -> { return; }
+        }
+        graphics.draw(edge);
     }
 
     private static void drawTelemetryRow(Graphics2D graphics, DynamicMinimapSetting settings,
@@ -448,9 +519,7 @@ public final class DynamicMinimapRenderer {
                                                 int panelX, int panelY,
                                                 int panelWidth, int panelHeight) {
         Path2D.Double path = new Path2D.Double();
-        boolean side = settings.infoPanelPosition == DynamicMinimapSetting.INFO_LEFT
-                || settings.infoPanelPosition == DynamicMinimapSetting.INFO_RIGHT;
-        if (!settings.isCircle() || !side) {
+        if (!settings.isCircle()) {
             path.append(new RoundRectangle2D.Double(panelX + 1, panelY + 1,
                     panelWidth - 2, panelHeight - 2, 12, 12), false);
             return path;
@@ -752,21 +821,27 @@ public final class DynamicMinimapRenderer {
             graphics.draw(new Arc2D.Double(4, 4, size - 9, size - 9, start, 60, Arc2D.OPEN));
         }
 
-        // Cyan side highlights echo the concept artwork without obscuring the
-        // E/W cardinal labels.
-        graphics.setStroke(new BasicStroke(3.1F, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
-        graphics.setColor(colours.awt(TICKS, 245));
-        graphics.draw(new Arc2D.Double(7, 7, size - 15, size - 15, -27, 18, Arc2D.OPEN));
-        graphics.draw(new Arc2D.Double(7, 7, size - 15, size - 15, 153, 18, Arc2D.OPEN));
-
-        // Four short survey bars replace the dense nautical ruler used by
-        // Cartographer. Their asymmetry is the signature of the aperture style.
+        // Keep the four stronger cardinal survey bars, then add the smaller
+        // sub-compass dashes used by the square frame so the circular frame
+        // has the same intermediate bearing references.
         graphics.setStroke(new BasicStroke(4.0F, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
         graphics.setColor(colours.awt(TICKS, 255));
         for (int i = 0; i < 4; i++) {
             double angle = -Math.PI / 2D + i * Math.PI / 2D;
             drawRadialTick(graphics, center, center, size / 2.0D - 5.0D,
                     size / 2.0D - 17.0D, angle, 4.0F, colours.awt(TICKS, 255));
+        }
+
+        // Three short dashes between each pair of cardinal points (22.5 degree
+        // spacing). This gives the circular aperture the same readable minor
+        // compass graduation as the square style without crowding the rim.
+        for (int i = 0; i < 16; i++) {
+            if (i % 4 == 0) {
+                continue; // Cardinal positions already use the stronger bars above.
+            }
+            double angle = -Math.PI / 2D + i * Math.PI / 8D;
+            drawRadialTick(graphics, center, center, size / 2.0D - 7.0D,
+                    size / 2.0D - 13.0D, angle, 1.4F, colours.awt(TICKS, 225));
         }
     }
 
@@ -895,7 +970,7 @@ public final class DynamicMinimapRenderer {
         int baseline = centerY + metrics.getAscent() / 2 - 1;
         graphics.setColor(new Color(0, 0, 0, 170));
         graphics.drawString(label, left + 1, baseline + 1);
-        graphics.setColor(colours.awt(TICKS, 255));
+        graphics.setColor(colours.awt(EDGE, 255));
         graphics.drawString(label, left, baseline);
     }
 
