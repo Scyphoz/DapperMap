@@ -40,13 +40,25 @@ Group { Anchor: (Width: 116); }
         Label { Anchor: (Height: 18); Text: "INSTRUMENT"; Style: (FontSize: 9, TextColor: #6f7690, HorizontalAlignment: Start, VerticalAlignment: Center); }
         Group { Anchor: (Height: 12); }
 
-        Group #DapperMapTabDisplaySlot { Anchor: (Height: 54); Background: PatchStyle(TexturePath: "DapperMapGlassPanelSoft.png", Border: 10); LayoutMode: CenterMiddle; Group #DapperMapTabDisplayActive { Anchor: (Full: 0); Background: PatchStyle(TexturePath: "DapperMapGlassActive.png", Border: 10); } }
+        Group #DapperMapTabDisplaySlot { Anchor: (Height: 54); Background: PatchStyle(TexturePath: "DapperMapGlassPanelSoft.png", Border: 10); LayoutMode: Full;
+          Group #DapperMapTabDisplayButtonSlot { Anchor: (Full: 0); LayoutMode: CenterMiddle; }
+          Group #DapperMapTabDisplayActive { Anchor: (Full: 0); Background: PatchStyle(TexturePath: "DapperMapGlassActive.png", Border: 10); LayoutMode: CenterMiddle; Label { Anchor: (Full: 0); Text: "○  DISPLAY"; Style: (FontSize: 15, TextColor: #c8b8ff, HorizontalAlignment: Center, VerticalAlignment: Center); } }
+        }
         Group { Anchor: (Height: 8); }
-        Group #DapperMapTabMarkersSlot { Anchor: (Height: 54); Background: PatchStyle(TexturePath: "DapperMapGlassPanelSoft.png", Border: 10); LayoutMode: CenterMiddle; Group #DapperMapTabMarkersActive { Anchor: (Full: 0); Background: PatchStyle(TexturePath: "DapperMapGlassActive.png", Border: 10); Visible: false; } }
+        Group #DapperMapTabMarkersSlot { Anchor: (Height: 54); Background: PatchStyle(TexturePath: "DapperMapGlassPanelSoft.png", Border: 10); LayoutMode: Full;
+          Group #DapperMapTabMarkersButtonSlot { Anchor: (Full: 0); LayoutMode: CenterMiddle; }
+          Group #DapperMapTabMarkersActive { Anchor: (Full: 0); Background: PatchStyle(TexturePath: "DapperMapGlassActive.png", Border: 10); LayoutMode: CenterMiddle; Visible: false; Label { Anchor: (Full: 0); Text: "○  MARKERS"; Style: (FontSize: 15, TextColor: #c8b8ff, HorizontalAlignment: Center, VerticalAlignment: Center); } }
+        }
         Group { Anchor: (Height: 8); }
-        Group #DapperMapTabInterfaceSlot { Anchor: (Height: 54); Background: PatchStyle(TexturePath: "DapperMapGlassPanelSoft.png", Border: 10); LayoutMode: CenterMiddle; Group #DapperMapTabInterfaceActive { Anchor: (Full: 0); Background: PatchStyle(TexturePath: "DapperMapGlassActive.png", Border: 10); Visible: false; } }
+        Group #DapperMapTabInterfaceSlot { Anchor: (Height: 54); Background: PatchStyle(TexturePath: "DapperMapGlassPanelSoft.png", Border: 10); LayoutMode: Full;
+          Group #DapperMapTabInterfaceButtonSlot { Anchor: (Full: 0); LayoutMode: CenterMiddle; }
+          Group #DapperMapTabInterfaceActive { Anchor: (Full: 0); Background: PatchStyle(TexturePath: "DapperMapGlassActive.png", Border: 10); LayoutMode: CenterMiddle; Visible: false; Label { Anchor: (Full: 0); Text: "○  INTERFACE"; Style: (FontSize: 15, TextColor: #c8b8ff, HorizontalAlignment: Center, VerticalAlignment: Center); } }
+        }
         Group { Anchor: (Height: 8); }
-        Group #DapperMapTabColoursSlot { Anchor: (Height: 54); Background: PatchStyle(TexturePath: "DapperMapGlassPanelSoft.png", Border: 10); LayoutMode: CenterMiddle; Group #DapperMapTabColoursActive { Anchor: (Full: 0); Background: PatchStyle(TexturePath: "DapperMapGlassActive.png", Border: 10); Visible: false; } }
+        Group #DapperMapTabColoursSlot { Anchor: (Height: 54); Background: PatchStyle(TexturePath: "DapperMapGlassPanelSoft.png", Border: 10); LayoutMode: Full;
+          Group #DapperMapTabColoursButtonSlot { Anchor: (Full: 0); LayoutMode: CenterMiddle; }
+          Group #DapperMapTabColoursActive { Anchor: (Full: 0); Background: PatchStyle(TexturePath: "DapperMapGlassActive.png", Border: 10); LayoutMode: CenterMiddle; Visible: false; Label { Anchor: (Full: 0); Text: "○  COLOURS"; Style: (FontSize: 15, TextColor: #c8b8ff, HorizontalAlignment: Center, VerticalAlignment: Center); } }
+        }
 
         Group { Anchor: (Height: 18); }
         Group { Anchor: (Height: 1); Background: #48445b(0.46); }

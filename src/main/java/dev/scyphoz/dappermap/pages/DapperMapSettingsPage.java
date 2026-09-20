@@ -123,9 +123,9 @@ public final class DapperMapSettingsPage
 
     private void bindNavigation(UICommandBuilder builder, UIEventBuilder events) {
         for (Tab tab : Tab.values()) {
-            String slot = "#DapperMapTab" + tab.label + "Slot";
+            String slot = "#DapperMapTab" + tab.label + "ButtonSlot";
             builder.append(slot, "Pages/BasicTextButton.ui");
-            events.addEventBinding(CustomUIEventBindingType.Activating, slot + "[1]",
+            events.addEventBinding(CustomUIEventBindingType.Activating, slot + "[0]",
                     EventData.of("Action", "tab_" + tab.id), false);
         }
         this.updateNavigationLabels(builder);
@@ -193,7 +193,7 @@ public final class DapperMapSettingsPage
             boolean selected = tab == this.activeTab;
             String prefix = selected ? "○  " : "   ";
             builder.set("#DapperMapTab" + tab.label + "Active.Visible", selected);
-            builder.set("#DapperMapTab" + tab.label + "Slot[1].TextSpans",
+            builder.set("#DapperMapTab" + tab.label + "ButtonSlot[0].TextSpans",
                     Message.raw(prefix + tab.label.toUpperCase()).color(selected ? VIOLET : MUTED));
         }
     }
