@@ -11,7 +11,7 @@ $C.@DecoratedContainer {
       Style: (
         ...$C.@TitleStyle,
         HorizontalAlignment: Center,
-        TextColor: #ffd66b,
+        TextColor: #b8aeff,
       );
       Padding: (Horizontal: 19);
     }
@@ -23,7 +23,7 @@ $C.@DecoratedContainer {
 
     Group #MoveMinimapHeader {
       Anchor: (Height: 82);
-      Background: #0b1822(0.96);
+      Background: #171429(0.96);
       LayoutMode: Top;
       Padding: (Horizontal: 16, Vertical: 10);
 
@@ -32,7 +32,7 @@ $C.@DecoratedContainer {
         Text: "Choose a grid position, then fine-tune below. Save to apply your changes.";
         Style: (
           FontSize: 13,
-          TextColor: #d9eefc,
+          TextColor: #f4f2ff,
           HorizontalAlignment: Center,
           VerticalAlignment: Center
         );
@@ -43,7 +43,7 @@ $C.@DecoratedContainer {
         Style: (
           FontSize: 15,
           RenderBold: true,
-          TextColor: #9ddcff,
+          TextColor: #6fe8df,
           HorizontalAlignment: Center,
           VerticalAlignment: Center
         );
@@ -53,7 +53,7 @@ $C.@DecoratedContainer {
         Anchor: (Height: 18);
         Style: (
           FontSize: 11,
-          TextColor: #cfe0ef,
+          TextColor: #8e9bb2,
           HorizontalAlignment: Center,
           VerticalAlignment: Center
         );
@@ -62,7 +62,7 @@ $C.@DecoratedContainer {
 
     Group #MovePreviewArea {
       Anchor: (Height: 360);
-      Background: #071016(0.82);
+      Background: #0e1020(0.88);
       Padding: (Horizontal: 10, Vertical: 10);
 
       Group #MovePreviewCanvas {
@@ -531,7 +531,7 @@ $C.@DecoratedContainer {
       Padding: (Left: 12, Top: 6);
       Label {
         Text: "FINE POSITION  /  1% INCREMENTS";
-        Style: (FontSize: 12, RenderBold: true, TextColor: #ffd66b, VerticalAlignment: Center);
+        Style: (FontSize: 12, RenderBold: true, TextColor: #f4c76b, VerticalAlignment: Center);
       }
     }
 

@@ -458,16 +458,7 @@ public final class DynamicMinimapSession {
 
         int bucket = this.settings.rotationMode == 1 ? rotationBucket : 0;
         double angle = DynamicMinimapRenderer.bucketAngle(bucket);
-        byte[] frame = DynamicMinimapRenderer.renderFrame(this.settings, angle);
-        if (frame == null) {
-            return;
-        }
-
-        String path = "UI/DapperMap/frame-rot-" + this.slug + "-"
-                + bucket + "-" + this.settings.colours.frameKey() + ".png";
-        if (DynamicAssetPublisher.deliver(this.playerRef, path, frame)) {
-            this.hud.setFrame(path);
-        }
+        this.hud.setFrameAngle(angle);
     }
 
     private void updateSelfArrow(double yaw) {
@@ -1043,17 +1034,17 @@ public final class DynamicMinimapSession {
     }
 
     private static String coordsText(double x, double y, double z) {
-        return String.format("X %d   Y %d   Z %d", (int)Math.floor(x), (int)Math.floor(y), (int)Math.floor(z));
+        return String.format("%d, %d, %d", (int)Math.floor(x), (int)Math.floor(y), (int)Math.floor(z));
     }
 
     private static String compassText(double yaw) {
         if (Double.isNaN(yaw)) {
-            return "?: --- deg";
+            return "—°  ?";
         } else {
             int degrees = Math.floorMod((int)Math.round(Math.toDegrees(yaw)), 360);
             String[] directions = new String[]{"N", "NE", "E", "SE", "S", "SW", "W", "NW"};
             int index = (int)Math.floor(((double)degrees + (double)22.5F) / (double)45.0F) & 7;
-            return directions[index] + " " + degrees + " deg";
+            return degrees + "°  " + directions[index];
         }
     }
 
@@ -1107,7 +1098,7 @@ public final class DynamicMinimapSession {
             body = String.format("%d:%02d %s", displayHour, minute, hour < 12 ? "AM" : "PM");
         }
 
-        return (isDay ? "Sun " : "Moon ") + body;
+        return (isDay ? "DAY  " : "NIGHT  ") + body;
     }
 
     private static String biomeText(Player player, int mapSize) {
@@ -1120,8 +1111,8 @@ public final class DynamicMinimapSession {
         } catch (RuntimeException var6) {
         }
 
-        String label = "Biome: " + prettyName(biome);
-        int maxChars = Math.max(16, mapSize / 7);
+        String label = prettyName(biome);
+        int maxChars = 22;
         if (label.length() <= maxChars) {
             return label;
         } else {

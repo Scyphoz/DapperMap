@@ -2,7 +2,6 @@ package dev.scyphoz.dappermap.dynamic;
 
 import static dev.scyphoz.dappermap.dynamic.MinimapColours.Key.*;
 
-import com.hypixel.hytale.server.core.Message;
 import com.hypixel.hytale.server.core.entity.entities.player.hud.CustomUIHud;
 import com.hypixel.hytale.server.core.ui.Anchor;
 import com.hypixel.hytale.server.core.ui.Value;
@@ -18,19 +17,14 @@ public final class DynamicMinimapHud extends CustomUIHud {
     // All constants below are logical HUD units. They are converted to display units
     // only when markup/Anchor values are produced.
     private static final int HUD_MARGIN = 10;
-    private static final int READOUT_GAP = 4;
-    private static final int READOUT_PADDING_H = 8;
-    private static final int READOUT_PADDING_V = 5;
-    private static final int BRAND_HEIGHT = 12;
-    private static final int COORDS_HEIGHT = 22;
-    private static final int META_HEIGHT = 26;
-    private static final int BIOME_HEIGHT = 18;
-    private static final int META_TOP_PADDING = 4;
-    private static final int META_INNER_PADDING = 3;
-    private static final int BRAND_FONT_SIZE = 9;
-    private static final int COORDS_FONT_SIZE = 12;
-    private static final int META_FONT_SIZE = 10;
-    private static final int BIOME_FONT_SIZE = 9;
+    private static final int SQUARE_READOUT_GAP = 16;
+    private static final int CIRCLE_READOUT_GAP = 8;
+    private static final int READOUT_WIDTH = 164;
+    private static final int READOUT_PADDING_V = 6;
+    private static final int BRAND_HEIGHT = 24;
+    private static final int COORDS_HEIGHT = 43;
+    private static final int META_HEIGHT = 43;
+    private static final int BIOME_HEIGHT = 43;
 
     private final PlayerRef ownerRef;
     private final UUID uuid;
@@ -49,7 +43,9 @@ public final class DynamicMinimapHud extends CustomUIHud {
     private final String slug;
     private String maskFile;
     private final String blankPath;
-    private String framePath;
+    private String overlayPath;
+    private int overlayRevision = 0;
+    private double frameAngle = 0.0D;
     private String selfPath;
     private String terrainPath;
     private boolean built = false;
@@ -104,10 +100,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
             DynamicAssetPublisher.deliver(this.ownerRef, this.blankPath, blank);
         }
 
-        byte[] frame = DynamicMinimapRenderer.renderFrame(this.settings);
-        if (frame != null) {
-            DynamicAssetPublisher.deliver(this.ownerRef, this.framePath, frame);
-        }
+        this.publishOverlayAsset(false);
 
         byte[] self = DynamicMinimapRenderer.renderSelfArrow(0.0D, this.settings.colours);
         if (self != null) {
@@ -160,14 +153,12 @@ public final class DynamicMinimapHud extends CustomUIHud {
     public void show() {
         UICommandBuilder builder = new UICommandBuilder();
         builder.appendInline((String)null, this.buildMarkup());
-        this.writeStatus(builder);
         this.update(true, builder);
         this.built = true;
     }
 
     protected void build(UICommandBuilder builder) {
         builder.appendInline((String)null, this.buildMarkup());
-        this.writeStatus(builder);
     }
 
     /** left/top are logical minimap coordinates supplied by DynamicMinimapSession. */
@@ -219,12 +210,10 @@ public final class DynamicMinimapHud extends CustomUIHud {
      * Swaps only the compass/frame asset. Used by player-up rotation mode so the
      * compass markings track the rotated terrain without rebuilding the HUD.
      */
-    public void setFrame(String assetPath) {
-        if (this.built && assetPath != null && !assetPath.equals(this.framePath)) {
-            this.framePath = assetPath;
-            UICommandBuilder builder = new UICommandBuilder();
-            builder.set("#WayfinderMmRoot #WayfinderMmFrame.AssetPath", assetPath);
-            this.update(false, builder);
+    public void setFrameAngle(double angle) {
+        if (this.built && Double.compare(angle, this.frameAngle) != 0) {
+            this.frameAngle = angle;
+            this.publishOverlayAsset(true);
         }
     }
 
@@ -252,19 +241,13 @@ public final class DynamicMinimapHud extends CustomUIHud {
 
         // The frame is a normal dynamic AssetImage, so it can be delivered and
         // swapped without rebuilding the common UI asset registry.
-        byte[] frame = DynamicMinimapRenderer.renderFrame(this.settings);
-        if (frame != null) {
-            DynamicAssetPublisher.deliver(this.ownerRef, this.framePath, frame);
-        }
+        this.publishOverlayAsset(false);
 
         if (!this.built) {
             return;
         }
 
-        UICommandBuilder builder = new UICommandBuilder();
-        builder.set("#WayfinderMmRoot #WayfinderMmClip.MaskTexturePath", this.maskFile);
-        builder.set("#WayfinderMmRoot #WayfinderMmFrame.AssetPath", this.framePath);
-        this.update(false, builder);
+        this.rebuildPositionLayout();
     }
 
     /**
@@ -281,18 +264,13 @@ public final class DynamicMinimapHud extends CustomUIHud {
         this.settings.normalize();
         this.updateStaticAssetPaths();
 
-        byte[] frame = DynamicMinimapRenderer.renderFrame(this.settings);
-        if (frame != null) {
-            DynamicAssetPublisher.deliver(this.ownerRef, this.framePath, frame);
-        }
-
         if (!this.built) {
             return;
         }
 
+        this.publishOverlayAsset(true);
         UICommandBuilder builder = new UICommandBuilder();
         builder.set("#WayfinderMmRoot #WayfinderMmClip.MaskTexturePath", this.maskFile);
-        builder.set("#WayfinderMmRoot #WayfinderMmFrame.AssetPath", this.framePath);
         this.update(false, builder);
     }
 
@@ -340,6 +318,8 @@ public final class DynamicMinimapHud extends CustomUIHud {
     public void setColours(MinimapColours colours) {
         this.settings.colours = colours;
         if (this.built) {
+            this.overlayRevision++;
+            this.publishOverlayAsset(false);
             this.rebuildPositionLayout();
             java.util.Arrays.fill(this.slotPath, null);
             java.util.Arrays.fill(this.slotVisible, false);
@@ -365,6 +345,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
         this.settings.showBiome = showBiome;
 
         if (this.built) {
+            this.publishOverlayAsset(false);
             this.rebuildPositionLayout();
         }
     }
@@ -373,9 +354,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
         if (coords != null && !coords.equals(this.coordsText)) {
             this.coordsText = coords;
             if (this.built) {
-                UICommandBuilder builder = new UICommandBuilder();
-                builder.set("#WayfinderMmRoot #WayfinderMmReadout #WayfinderMmCoords.TextSpans", Message.raw(this.coordsText));
-                this.update(false, builder);
+                this.publishOverlayAsset(true);
             }
         }
     }
@@ -403,9 +382,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
         }
 
         if (this.built && changed) {
-            UICommandBuilder builder = new UICommandBuilder();
-            this.writeStatus(builder);
-            this.update(false, builder);
+            this.publishOverlayAsset(true);
         }
     }
 
@@ -483,8 +460,10 @@ public final class DynamicMinimapHud extends CustomUIHud {
         this.hudPositionX = x;
         this.hudPositionY = y;
         this.infoPanelPosition = panel;
+        this.settings.infoPanelPosition = panel;
 
         if (this.built) {
+            this.publishOverlayAsset(false);
             this.rebuildPositionLayout();
         }
     }
@@ -517,11 +496,13 @@ public final class DynamicMinimapHud extends CustomUIHud {
         this.panTop = 0;
         this.terrainPath = this.blankPath;
         this.terrainShown = false;
+        this.updateStaticAssetPaths();
 
         if (!this.built) {
             return;
         }
 
+        this.publishOverlayAsset(false);
         this.rebuildPositionLayout();
     }
 
@@ -593,7 +574,8 @@ public final class DynamicMinimapHud extends CustomUIHud {
                 .append("); LayoutMode: Full; ");
 
         out.append(this.buildMapMarkup());
-        out.append(this.buildReadoutMarkup());
+        out.append("AssetImage #WayfinderMmOverlay { Anchor: (Full: 0); AssetPath: \"")
+                .append(this.overlayPath).append("\"; Visible: true; } ");
         out.append("} ");
 
         if (this.hudPositionX < 100) {
@@ -633,7 +615,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
                 .append(", Width: ").append(displayUiSize)
                 .append(", Height: ").append(displayUiSize).append("); ")
                 .append("MaskTexturePath: \"").append(this.maskFile).append("\"; ")
-                .append("Background: ").append("#0A1218").append("(0.92); ");
+                .append("Background: ").append("#0B0D18").append("(0.94); ");
 
         out.append("AssetImage #WayfinderMmTerrain { ")
                 .append("Anchor: (Left: ").append(this.displayCoordinate(this.panLeft))
@@ -666,13 +648,6 @@ public final class DynamicMinimapHud extends CustomUIHud {
 
         out.append("} } ");
 
-        out.append("AssetImage #WayfinderMmFrame { Anchor: (Left: ")
-                .append(mapLeft).append(", Top: ").append(mapTop)
-                .append(", Width: ").append(displayUiSize)
-                .append(", Height: ").append(displayUiSize)
-                .append("); AssetPath: \"").append(this.framePath)
-                .append("\"; Visible: true; } ");
-
         out.append("AssetImage #WayfinderMmSelf { Anchor: (Left: ")
                 .append(mapLeft + selfInset)
                 .append(", Top: ").append(mapTop + selfInset)
@@ -693,112 +668,36 @@ public final class DynamicMinimapHud extends CustomUIHud {
      */
     private void updateStaticAssetPaths() {
         String shape = this.settings.isCircle() ? "circle" : "square";
-        String frameId = shape + "-r" + this.settings.textureResolution + "-nautical";
-
         // The clip mask depends only on shape and texture resolution.
         this.maskFile = maskFileFor(this.settings);
-        this.framePath = "UI/DapperMap/frame-" + this.slug + "-" + frameId + "-" + this.settings.colours.frameKey() + ".png";
+        this.overlayPath = "UI/DapperMap/overlay-" + this.slug + "-" + shape
+                + "-r" + this.settings.textureResolution
+                + "-p" + this.settings.infoPanelPosition + "-s" + this.logicalUiSize
+                + "-h" + this.readoutHeight()
+                + "-" + this.settings.colours.frameKey()
+                + this.settings.colours.hex(PANEL).substring(1)
+                + "-v" + (this.overlayRevision & 15) + ".png";
+    }
+
+    private void publishOverlayAsset(boolean updateClient) {
+        if (updateClient) this.overlayRevision++;
+        this.updateStaticAssetPaths();
+        byte[] overlay = DynamicMinimapRenderer.renderHudOverlay(
+                this.settings, this.logicalUiSize, READOUT_WIDTH,
+                this.readoutHeight(), this.readoutGap(), this.frameAngle,
+                this.coordsText, this.compassText, this.clockText, this.biomeText);
+        if (overlay != null && DynamicAssetPublisher.deliver(this.ownerRef, this.overlayPath, overlay)
+                && updateClient && this.built) {
+            UICommandBuilder builder = new UICommandBuilder();
+            builder.set("#WayfinderMmRoot #WayfinderMmOverlay.AssetPath", this.overlayPath);
+            this.update(false, builder);
+        }
     }
 
     private String maskFileFor(DynamicMinimapSetting maskSettings) {
         String shape = maskSettings.isCircle() ? "circle" : "square";
         return "DapperMap-" + this.slug + "-" + shape
                 + "-r" + maskSettings.textureResolution + "-mask.png";
-    }
-
-    /**
-     * Builds just the readout subtree using the current presentation scale.
-     *
-     * Keeping this as normal UI markup means FontSize and Padding are parsed by
-     * the same client code used during the initial HUD build. On a scale change
-     * we can replace only this child group instead of recreating the Custom HUD.
-     */
-    private String buildReadoutMarkup() {
-        int readoutLeft = this.readoutOriginX();
-        int readoutTop = this.readoutOriginY();
-        int readoutWidth = this.readoutWidth();
-        int readoutHeight = this.displaySize(this.readoutHeight());
-
-        StringBuilder out = new StringBuilder(2300);
-        out.append("Group #WayfinderMmReadout { Anchor: (Left: ").append(readoutLeft)
-                .append(", Top: ").append(readoutTop)
-                .append(", Width: ").append(readoutWidth)
-                .append(", Height: ").append(readoutHeight).append("); ")
-                .append("Background: ").append(this.settings.colours.hex(PANEL)).append("(0.96); LayoutMode: Top; Padding: (Horizontal: ")
-                .append(this.displaySize(READOUT_PADDING_H)).append(", Vertical: ")
-                .append(this.displaySize(READOUT_PADDING_V)).append("); ")
-
-                .append("Label #WayfinderMmBrand { Anchor: (Height: ")
-                .append(this.displaySize(BRAND_HEIGHT)).append("); Text: \"DapperMap\"; ")
-                .append("Style: LabelStyle(FontSize: ").append(this.displaySize(BRAND_FONT_SIZE))
-                .append(", RenderBold: true, TextColor: ").append(this.settings.colours.hex(BRAND_TEXT)).append(", HorizontalAlignment: Center, VerticalAlignment: Center); } ");
-
-        if (this.settings.showCoordinates) {
-            out.append("Group #WayfinderMmCoordsBand { Anchor: (Height: ")
-                    .append(this.displaySize(COORDS_HEIGHT)).append("); Background: ").append(this.settings.colours.hex(COORDS_BACKGROUND)).append("(0.98); LayoutMode: CenterMiddle; ")
-                    .append("Label #WayfinderMmCoords { Style: LabelStyle(FontSize: ")
-                    .append(this.displaySize(COORDS_FONT_SIZE))
-                    .append(", RenderBold: true, TextColor: ").append(this.settings.colours.hex(COORDS_TEXT)).append(", HorizontalAlignment: Center, VerticalAlignment: Center); } } ");
-        }
-
-        if (this.settings.showCompass || this.settings.showClock) {
-            out.append("Group #WayfinderMmMetaBand { Anchor: (Height: ")
-                    .append(this.displaySize(META_HEIGHT)).append("); LayoutMode: Left; Padding: (Top: ")
-                    .append(this.displaySize(META_TOP_PADDING)).append("); ");
-
-            if (this.settings.showCompass) {
-                out.append("Group #WayfinderMmCompassBox { FlexWeight: 1; Background: ")
-                        .append(this.settings.colours.hex(COMPASS_BACKGROUND))
-                        .append("(0.9); LayoutMode: CenterMiddle; ");
-
-                if (this.settings.showClock) {
-                    out.append("Padding: (Right: ")
-                            .append(this.displaySize(META_INNER_PADDING))
-                            .append("); ");
-                }
-
-                out.append("Label #WayfinderMmCompass { Style: LabelStyle(FontSize: ")
-                        .append(this.displaySize(META_FONT_SIZE))
-                        .append(", RenderBold: true, TextColor: ")
-                        .append(this.settings.colours.hex(COMPASS_TEXT))
-                        .append(", HorizontalAlignment: Center, VerticalAlignment: Center); } } ");
-            }
-
-            if (this.settings.showClock) {
-                out.append("Group #WayfinderMmClockBox { FlexWeight: 1; Background: ")
-                        .append(this.settings.colours.hex(CLOCK_BACKGROUND))
-                        .append("(0.9); LayoutMode: CenterMiddle; ");
-
-                if (this.settings.showCompass) {
-                    out.append("Padding: (Left: ")
-                            .append(this.displaySize(META_INNER_PADDING))
-                            .append("); ");
-                }
-
-                out.append("Label #WayfinderMmClock { Style: LabelStyle(FontSize: ")
-                        .append(this.displaySize(META_FONT_SIZE))
-                        .append(", RenderBold: true, TextColor: ")
-                        .append(this.settings.colours.hex(CLOCK_TEXT))
-                        .append(", HorizontalAlignment: Center, VerticalAlignment: Center); } } ");
-            }
-
-            out.append("} ");
-        }
-
-        if (this.settings.showBiome) {
-            out.append("Group #WayfinderMmBiomeBand { Anchor: (Height: ")
-                    .append(this.displaySize(BIOME_HEIGHT)).append("); Background: ")
-                    .append(this.settings.colours.hex(BIOME_BACKGROUND))
-                    .append("(0.92); LayoutMode: CenterMiddle; ")
-                    .append("Label #WayfinderMmBiome { Style: LabelStyle(FontSize: ")
-                    .append(this.displaySize(BIOME_FONT_SIZE))
-                    .append(", RenderBold: true, TextColor: ")
-                    .append(this.settings.colours.hex(BIOME_TEXT))
-                    .append(", HorizontalAlignment: Center, VerticalAlignment: Center); } } ");
-        }
-
-        out.append("} ");
-        return out.toString();
     }
 
     private int readoutHeight() {
@@ -808,7 +707,11 @@ public final class DynamicMinimapHud extends CustomUIHud {
             height += COORDS_HEIGHT;
         }
 
-        if (this.settings.showCompass || this.settings.showClock) {
+        if (this.settings.showCompass) {
+            height += META_HEIGHT;
+        }
+
+        if (this.settings.showClock) {
             height += META_HEIGHT;
         }
 
@@ -827,97 +730,53 @@ public final class DynamicMinimapHud extends CustomUIHud {
         UICommandBuilder builder = new UICommandBuilder();
         builder.remove("#WayfinderMmRoot #WayfinderMmPositionLayout");
         builder.appendInline("#WayfinderMmRoot", this.buildPositionLayoutMarkup());
-        this.writeStatus(builder);
         this.update(false, builder);
     }
 
     private int widgetWidth() {
-        if (this.infoPanelPosition == DynamicMinimapSetting.INFO_LEFT
-                || this.infoPanelPosition == DynamicMinimapSetting.INFO_RIGHT) {
-            return this.displaySize(
-                    this.logicalUiSize + READOUT_GAP + this.logicalUiSize
-            );
+        if (this.isSideRail()) {
+            return this.displaySize(this.logicalUiSize + this.readoutGap() + READOUT_WIDTH);
         }
-
-        return this.displaySize(this.logicalUiSize);
+        return this.displaySize(Math.max(this.logicalUiSize, this.readoutLogicalWidth()));
     }
 
     private int widgetHeight() {
-        if (this.infoPanelPosition == DynamicMinimapSetting.INFO_LEFT
-                || this.infoPanelPosition == DynamicMinimapSetting.INFO_RIGHT) {
-            return this.displaySize(this.logicalUiSize);
+        if (this.isSideRail()) {
+            return this.displaySize(Math.max(this.logicalUiSize, this.readoutHeight()));
         }
-
-        return this.displaySize(
-                this.logicalUiSize + READOUT_GAP + this.readoutHeight()
-        );
+        return this.displaySize(this.logicalUiSize + this.readoutGap() + this.readoutHeight());
     }
 
     private int mapOriginX() {
         if (this.infoPanelPosition == DynamicMinimapSetting.INFO_LEFT) {
-            return this.displaySize(this.logicalUiSize + READOUT_GAP);
+            return this.displaySize(READOUT_WIDTH + this.readoutGap());
         }
-
-        return 0;
+        return this.isSideRail() ? 0 : this.displayCoordinate(
+                Math.max(0, (this.readoutLogicalWidth() - this.logicalUiSize) / 2));
     }
 
     private int mapOriginY() {
         if (this.infoPanelPosition == DynamicMinimapSetting.INFO_ABOVE) {
-            return this.displaySize(this.readoutHeight() + READOUT_GAP);
+            return this.displaySize(this.readoutHeight() + this.readoutGap());
         }
-
-        return 0;
-    }
-
-    private int readoutOriginX() {
-        if (this.infoPanelPosition == DynamicMinimapSetting.INFO_RIGHT) {
-            return this.displaySize(this.logicalUiSize + READOUT_GAP);
-        }
-
-        return 0;
-    }
-
-    private int readoutOriginY() {
         if (this.infoPanelPosition == DynamicMinimapSetting.INFO_BELOW) {
-            return this.displaySize(this.logicalUiSize + READOUT_GAP);
+            return 0;
         }
-
-        if (this.infoPanelPosition == DynamicMinimapSetting.INFO_LEFT
-                || this.infoPanelPosition == DynamicMinimapSetting.INFO_RIGHT) {
-            int logicalTop = Math.max(
-                    0,
-                    (this.logicalUiSize - this.readoutHeight()) / 2
-            );
-            return this.displayCoordinate(logicalTop);
-        }
-
-        return 0;
+        return this.displayCoordinate(Math.max(0, (this.readoutHeight() - this.logicalUiSize) / 2));
     }
 
-    private int readoutWidth() {
-        return this.displaySize(this.logicalUiSize);
+    private int readoutLogicalWidth() {
+        return this.isSideRail() ? READOUT_WIDTH : this.logicalUiSize;
     }
 
-    private void writeStatus(UICommandBuilder builder) {
-        if (this.settings.showCoordinates) {
-            builder.set("#WayfinderMmRoot #WayfinderMmReadout #WayfinderMmCoords.TextSpans", Message.raw(this.coordsText));
-        }
-
-        if (this.settings.showCompass) {
-            builder.set("#WayfinderMmRoot #WayfinderMmReadout #WayfinderMmCompass.TextSpans", Message.raw(this.compassText));
-        }
-
-        if (this.settings.showClock) {
-            builder.set("#WayfinderMmRoot #WayfinderMmReadout #WayfinderMmClock.TextSpans", Message.raw(this.clockText));
-        }
-
-        if (this.settings.showBiome) {
-            builder.set("#WayfinderMmRoot #WayfinderMmReadout #WayfinderMmBiome.TextSpans", Message.raw(this.biomeText));
-        }
+    private boolean isSideRail() {
+        return this.infoPanelPosition == DynamicMinimapSetting.INFO_LEFT
+                || this.infoPanelPosition == DynamicMinimapSetting.INFO_RIGHT;
     }
 
-
-
+    private int readoutGap() {
+        return this.settings.isCircle() ? CIRCLE_READOUT_GAP : SQUARE_READOUT_GAP;
+    }
 
     private Anchor fullAnchor(int logicalLeft, int logicalTop) {
         return anchor(

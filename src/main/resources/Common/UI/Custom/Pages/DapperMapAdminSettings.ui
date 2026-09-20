@@ -3,14 +3,14 @@ $C = "../Common.ui";
 $C.@PageOverlay {}
 
 $C.@DecoratedContainer {
-  Anchor: (Width: 700, Height: 760);
+  Anchor: (Width: 760, Height: 760);
 
   #Title {
     Label #PageTitle {
       Style: (
         ...$C.@TitleStyle,
         HorizontalAlignment: Center,
-        TextColor: #ffd66b,
+        TextColor: #ff9566,
       );
       Padding: (Horizontal: 19);
     }
@@ -18,17 +18,24 @@ $C.@DecoratedContainer {
 
   #Content {
     LayoutMode: Top;
-    Padding: (Horizontal: 14);
+    Padding: (Horizontal: 18);
 
     Group #DapperMapHeader {
-      Anchor: (Height: 60);
-      Background: #244f38(0.96);
-      Padding: (Horizontal: 16, Vertical: 10);
+      Anchor: (Height: 76);
+      Background: #2b1828(0.96);
+      LayoutMode: Top;
+      Padding: (Horizontal: 18, Vertical: 10);
+
+      Label {
+        Anchor: (Height: 18);
+        Text: "SERVER CONTROL / DEFAULT PROFILE";
+        Style: (FontSize: 10, RenderBold: true, TextColor: #ff9566, HorizontalAlignment: Start, VerticalAlignment: Center);
+      }
 
       Label #DapperMapTagline {
-        Anchor: (Height: 40);
-        Text: "A lightweight and sophisticated Minimap mod";
-        Style: (FontSize: 15, TextColor: #d9eefc, HorizontalAlignment: Center, VerticalAlignment: Center);
+        Anchor: (Height: 34);
+        Text: "Defaults applied to players without a saved profile.";
+        Style: (FontSize: 15, TextColor: #fff0ea, HorizontalAlignment: Start, VerticalAlignment: Center);
       }
     }
 
@@ -36,7 +43,7 @@ $C.@DecoratedContainer {
       FlexWeight: 1;
       LayoutMode: TopScrolling;
       ScrollbarStyle: $C.@DefaultScrollbarStyle;
-      Padding: (Top: 10, Left: 8, Right: 8);
+      Padding: (Top: 12, Left: 4, Right: 4);
 
       Group #DapperMapSettingsList {
         LayoutMode: Top;

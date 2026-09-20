@@ -7,26 +7,26 @@ import java.util.Locale;
 /** Immutable per-player RGB palette. Existing opacity and terrain colours are retained. */
 public final class MinimapColours {
     public enum Key {
-        EDGE("edge", "Frame", "Outside Edge", "The outer rim and large frame ticks.", 0xe0ae52),
-        TICKS("ticks", "Frame", "Small Frame Ticks", "The small marks around the frame.", 0xced6e2),
-        CARDINALS("cardinals", "Frame", "Compass Letters", "The N, E, S and W letters and north pointer.", 0xffdc50),
-        PANEL("panel", "Panel", "Panel Background", "The background around the information rows.", 0x071016),
-        COORDS_BACKGROUND("coords-background", "Panel", "Coordinates Background", "The background behind your coordinates.", 0x102232),
-        COMPASS_BACKGROUND("compass-background", "Panel", "Direction Background", "The background behind your facing direction.", 0x132733),
-        CLOCK_BACKGROUND("clock-background", "Panel", "Clock Background", "The background behind the world clock.", 0x183040),
-        BIOME_BACKGROUND("biome-background", "Panel", "Biome Background", "The background behind the biome name.", 0x0f1f29),
-        BRAND_TEXT("brand-text", "Text", "Mod Name Text", "The DapperMap name above the information.", 0xffd66b),
-        COORDS_TEXT("coords-text", "Text", "Coordinates Text", "The text showing your world coordinates.", 0xf5f7fb),
-        COMPASS_TEXT("compass-text", "Text", "Direction Text", "The text showing where you are facing.", 0xffd66b),
-        CLOCK_TEXT("clock-text", "Text", "Clock Text", "The text showing the Hytale world time.", 0x9ddcff),
-        BIOME_TEXT("biome-text", "Text", "Biome Text", "The text showing your current biome.", 0xcfe0ef),
-        SELF("self", "Markers", "Your Arrow", "The arrow marking your position.", 0x28ff64),
-        PLAYERS("players", "Markers", "Other Players", "The dots marking nearby players.", 0x508cff),
-        DEATH("death", "Markers", "Death Marker", "The cross marking your last death.", 0xffffff),
-        HOSTILE_ACTIVE("hostile-active", "Markers", "Attacking Creatures", "Hostile creatures targeting you.", 0xdc2828),
-        HOSTILE("hostile", "Markers", "Hostile Creatures", "Hostile creatures not targeting you.", 0xff8c00),
-        NEUTRAL("neutral", "Markers", "Neutral Creatures", "Neutral or retreating creatures.", 0xe6c828),
-        FRIENDLY("friendly", "Markers", "Friendly Creatures", "Creatures friendly towards you.", 0x3cd25a);
+        EDGE("edge", "Frame", "Aperture Edge", "The main edge of the DapperMap aperture.", 0x7B6CFF),
+        TICKS("ticks", "Frame", "Survey Marks", "The fine marks around the map aperture.", 0x57D8D0),
+        CARDINALS("cardinals", "Frame", "Bearing Labels", "The cardinal labels around the aperture.", 0x6FE8DF),
+        PANEL("panel", "Panel", "Telemetry Rail", "The translucent rail holding map telemetry.", 0x111426),
+        COORDS_BACKGROUND("coords-background", "Panel", "Coordinate Chip", "The coordinate readout chip.", 0x24203D),
+        COMPASS_BACKGROUND("compass-background", "Panel", "Bearing Chip", "The facing-direction chip.", 0x1C2F3D),
+        CLOCK_BACKGROUND("clock-background", "Panel", "Time Chip", "The world-time chip.", 0x18283A),
+        BIOME_BACKGROUND("biome-background", "Panel", "Region Chip", "The current biome chip.", 0x1A2432),
+        BRAND_TEXT("brand-text", "Text", "DapperMap Label", "The DapperMap instrument label.", 0xB8AEFF),
+        COORDS_TEXT("coords-text", "Text", "Coordinates", "The world-coordinate text.", 0xF4F2FF),
+        COMPASS_TEXT("compass-text", "Text", "Bearing", "The facing-direction text.", 0x6FE8DF),
+        CLOCK_TEXT("clock-text", "Text", "World Time", "The Hytale world-time text.", 0x8FCBFF),
+        BIOME_TEXT("biome-text", "Text", "Region", "The current-biome text.", 0xC7D3E2),
+        SELF("self", "Markers", "Your Locator", "The locator marking your position.", 0xF4C76B),
+        PLAYERS("players", "Markers", "Other Players", "Nearby player markers.", 0x74A7FF),
+        DEATH("death", "Markers", "Death Marker", "Your last-death marker.", 0xF2F0FF),
+        HOSTILE_ACTIVE("hostile-active", "Markers", "Attacking Creatures", "Hostiles currently targeting you.", 0xFF526B),
+        HOSTILE("hostile", "Markers", "Hostile Creatures", "Nearby hostile creatures.", 0xFF9566),
+        NEUTRAL("neutral", "Markers", "Neutral Creatures", "Neutral or retreating creatures.", 0xE9CA68),
+        FRIENDLY("friendly", "Markers", "Friendly Creatures", "Nearby friendly creatures.", 0x69D69A);
         public final String id, group, label, description;
         public final int defaultRgb;
         Key(String id, String group, String label, String description, int defaultRgb) {

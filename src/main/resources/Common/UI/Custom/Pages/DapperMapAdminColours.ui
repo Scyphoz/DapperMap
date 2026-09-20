@@ -7,7 +7,7 @@ $C.@DecoratedContainer {
   #Title {
     Label {
       Text: "DapperMap Colours";
-      Style: (...$C.@TitleStyle, HorizontalAlignment: Center, TextColor: #ffd66b);
+      Style: (...$C.@TitleStyle, HorizontalAlignment: Center, TextColor: #b8aeff);
       Padding: (Horizontal: 19);
     }
   }
@@ -18,7 +18,7 @@ $C.@DecoratedContainer {
 
     Group {
       Anchor: (Height: 42);
-      Background: #244f38(0.96);
+      Background: #171429(0.96);
       Padding: (Horizontal: 12);
       Label {
         Text: "Choose a HUD element, then click the colour swatch. Changes are previewed here before you save.";
@@ -52,7 +52,7 @@ $C.@DecoratedContainer {
     // can update it immediately and colour-pulse only the currently selected target.
     Group #HudPreview {
       Anchor: (Height: 330);
-      Background: #183526(0.82);
+      Background: #111426(0.88);
       LayoutMode: Left;
       Padding: (Horizontal: 18, Vertical: 14);
 
@@ -62,12 +62,12 @@ $C.@DecoratedContainer {
 
         Group #PreviewShadow {
           Anchor: (Width: 264, Height: 264);
-          Background: #03080c;
+          Background: #080914;
           Padding: (Full: 3);
 
           Group #PreviewOuterEdge {
             Anchor: (Full: 0);
-            Background: #e0ae52;
+            Background: #7b6cff;
             Padding: (Full: 3);
 
             Group #PreviewMap {
@@ -91,7 +91,7 @@ $C.@DecoratedContainer {
                   Label #PreviewWest { Anchor: (Left: 7, Top: 111, Width: 22, Height: 22); Text: "W"; Style: (FontSize: 13, RenderBold: true, TextColor: #ffdc50, HorizontalAlignment: Center, VerticalAlignment: Center); }
 
                   Group #PreviewSelfOutline { Anchor: (Left: 115, Top: 112, Width: 24, Height: 24); Background: #000000; Padding: (Full: 3); LayoutMode: CenterMiddle;
-                    Label #PreviewSelf { Anchor: (Full: 0); Text: "▲"; Style: (FontSize: 17, RenderBold: true, TextColor: #28ff64, HorizontalAlignment: Center, VerticalAlignment: Center); }
+                    Label #PreviewSelf { Anchor: (Full: 0); Text: "^"; Style: (FontSize: 17, RenderBold: true, TextColor: #28ff64, HorizontalAlignment: Center, VerticalAlignment: Center); }
                   }
 
                   Group #PreviewPlayerOutline { Anchor: (Left: 72, Top: 77, Width: 16, Height: 16); Background: #000000; Padding: (Full: 3); }
@@ -118,19 +118,19 @@ $C.@DecoratedContainer {
 
       Group #PreviewPanel {
         Anchor: (Width: 370, Height: 300);
-        Background: #071016;
+        Background: #111426;
         LayoutMode: Top;
         Padding: (Full: 12);
 
         Label #PreviewBrand {
           Anchor: (Height: 38);
           Text: "DapperMap";
-          Style: (FontSize: 19, RenderBold: true, TextColor: #ffd66b, HorizontalAlignment: Center, VerticalAlignment: Center);
+          Style: (FontSize: 16, RenderBold: true, TextColor: #b8aeff, HorizontalAlignment: Start, VerticalAlignment: Center);
         }
 
         Group #PreviewCoords {
           Anchor: (Height: 48);
-          Background: #102232;
+          Background: #24203d;
           LayoutMode: CenterMiddle;
           Label #PreviewCoordsText { Text: "X 124  Y 67  Z -302"; Style: (FontSize: 14, RenderBold: true, TextColor: #f5f7fb, HorizontalAlignment: Center, VerticalAlignment: Center); }
         }
@@ -140,14 +140,14 @@ $C.@DecoratedContainer {
           LayoutMode: Left;
           Group #PreviewCompass {
             FlexWeight: 1;
-            Background: #132733;
+            Background: #1c2f3d;
             LayoutMode: CenterMiddle;
             Label #PreviewCompassText { Text: "NW 315°"; Style: (FontSize: 14, RenderBold: true, TextColor: #ffd66b, HorizontalAlignment: Center, VerticalAlignment: Center); }
           }
           Group { Anchor: (Width: 4); }
           Group #PreviewClock {
             FlexWeight: 1;
-            Background: #183040;
+            Background: #18283a;
             LayoutMode: CenterMiddle;
             Label #PreviewClockText { Text: "18:42"; Style: (FontSize: 14, RenderBold: true, TextColor: #9ddcff, HorizontalAlignment: Center, VerticalAlignment: Center); }
           }
@@ -155,7 +155,7 @@ $C.@DecoratedContainer {
 
         Group #PreviewBiome {
           Anchor: (Height: 48);
-          Background: #0f1f29;
+          Background: #1a2432;
           LayoutMode: CenterMiddle;
           Label #PreviewBiomeText { Text: "Emerald Grove"; Style: (FontSize: 14, RenderBold: true, TextColor: #cfe0ef, HorizontalAlignment: Center, VerticalAlignment: Center); }
         }

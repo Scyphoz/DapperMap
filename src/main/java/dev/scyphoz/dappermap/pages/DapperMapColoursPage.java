@@ -188,7 +188,7 @@ public final class DapperMapColoursPage extends InteractiveCustomUIPage<DapperMa
         ui.set("#PreviewNeutralOutline.Background", "#000000");
         ui.set("#PreviewFriendlyOutline.Background", "#000000");
 
-        ui.set("#PreviewSelf.TextSpans", Message.raw("▲").color(new java.awt.Color(draft.rgb(Key.SELF))));
+        ui.set("#PreviewSelf.TextSpans", Message.raw("^").color(new java.awt.Color(draft.rgb(Key.SELF))));
         ui.set("#PreviewPlayer.Background", draft.hex(Key.PLAYERS));
         ui.set("#PreviewDeath.TextSpans", Message.raw("✕").color(new java.awt.Color(draft.rgb(Key.DEATH))));
         ui.set("#PreviewHostileActive.Background", draft.hex(Key.HOSTILE_ACTIVE));
@@ -282,7 +282,7 @@ public final class DapperMapColoursPage extends InteractiveCustomUIPage<DapperMa
             case COMPASS_TEXT -> ui.set("#PreviewCompassText.TextSpans", coloured("NW 315°", rgb));
             case CLOCK_TEXT -> ui.set("#PreviewClockText.TextSpans", coloured("18:42", rgb));
             case BIOME_TEXT -> ui.set("#PreviewBiomeText.TextSpans", coloured("Emerald Grove", rgb));
-            case SELF -> ui.set("#PreviewSelf.TextSpans", coloured("▲", rgb));
+            case SELF -> ui.set("#PreviewSelf.TextSpans", coloured("^", rgb));
             case PLAYERS -> ui.set("#PreviewPlayer.Background", colour);
             case DEATH -> ui.set("#PreviewDeath.TextSpans", coloured("✕", rgb));
             case HOSTILE_ACTIVE -> ui.set("#PreviewHostileActive.Background", colour);

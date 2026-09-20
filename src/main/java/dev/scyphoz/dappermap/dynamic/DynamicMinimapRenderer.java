@@ -12,8 +12,10 @@ import java.awt.FontMetrics;
 import java.awt.Graphics2D;
 import java.awt.RenderingHints;
 import java.awt.geom.AffineTransform;
+import java.awt.geom.Arc2D;
 import java.awt.geom.Ellipse2D;
 import java.awt.geom.Path2D;
+import java.awt.geom.RoundRectangle2D;
 import java.awt.image.BufferedImage;
 import java.awt.image.ImageObserver;
 import java.io.ByteArrayInputStream;
@@ -37,7 +39,6 @@ public final class DynamicMinimapRenderer {
     private static final int STATIC_ASSET_LOGICAL_SIZE = 220;
     public static final int ROTATION_BUCKETS = 360;
     private static final Font CARDINAL_FONT = new Font("SansSerif", 1, 15);
-    private static final Font SMALL_CARDINAL_FONT = new Font("SansSerif", 1, 10);
     private static final Map<String, byte[]> MASK_CACHE = new ConcurrentHashMap();
     private static final Map<String, byte[]> FRAME_CACHE = new ConcurrentHashMap();
 
@@ -237,9 +238,9 @@ public final class DynamicMinimapRenderer {
         graphics.scale(scale, scale);
 
         if (settings.isCircle()) {
-            drawNauticalCircleFrame(graphics, logicalSize, colours);
+            drawApertureCircleFrame(graphics, logicalSize, colours);
         } else {
-            drawNauticalSquareFrame(graphics, logicalSize, colours);
+            drawApertureSquareFrame(graphics, logicalSize, colours);
         }
 
         if (settings.isCircle()) {
@@ -265,6 +266,294 @@ public final class DynamicMinimapRenderer {
         }
 
         return png;
+    }
+
+    /**
+     * Renders the shared instrument body behind the map and telemetry content.
+     * Terrain and marker assets remain separate; this image supplies only the
+     * contoured telemetry shell and the independent shape-aware divider.
+     */
+    public static byte[] renderHudChrome(DynamicMinimapSetting settings, int mapSize,
+                                         int sidePanelWidth, int panelHeight, int gap) {
+        boolean side = settings.infoPanelPosition == DynamicMinimapSetting.INFO_LEFT
+                || settings.infoPanelPosition == DynamicMinimapSetting.INFO_RIGHT;
+        int panelWidth = side ? sidePanelWidth : mapSize;
+        int width = side ? mapSize + gap + panelWidth : Math.max(mapSize, panelWidth);
+        int height = side ? Math.max(mapSize, panelHeight) : mapSize + gap + panelHeight;
+
+        int mapX = settings.infoPanelPosition == DynamicMinimapSetting.INFO_LEFT
+                ? panelWidth + gap : (side ? 0 : Math.max(0, (width - mapSize) / 2));
+        int mapY = settings.infoPanelPosition == DynamicMinimapSetting.INFO_ABOVE
+                ? panelHeight + gap : Math.max(0, (height - mapSize) / 2);
+        if (settings.infoPanelPosition == DynamicMinimapSetting.INFO_BELOW) mapY = 0;
+
+        int panelX = settings.infoPanelPosition == DynamicMinimapSetting.INFO_RIGHT
+                ? mapSize + gap : (side ? 0 : Math.max(0, (width - panelWidth) / 2));
+        int panelY = settings.infoPanelPosition == DynamicMinimapSetting.INFO_BELOW
+                ? mapSize + gap : (settings.infoPanelPosition == DynamicMinimapSetting.INFO_ABOVE
+                ? 0 : Math.max(0, (height - panelHeight) / 2));
+
+        BufferedImage image = new BufferedImage(Math.max(1, width), Math.max(1, height), BufferedImage.TYPE_INT_ARGB);
+        Graphics2D graphics = image.createGraphics();
+        graphics.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+
+        Color panel = settings.colours.awt(PANEL, 232);
+        Color edge = settings.colours.awt(EDGE, 235);
+        Color survey = settings.colours.awt(TICKS, 245);
+
+        Path2D.Double shell = panelShellPath(settings, panelX, panelY, panelWidth, panelHeight);
+        graphics.setColor(panel);
+        graphics.fill(shell);
+
+        graphics.setStroke(new BasicStroke(1.6F, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+        graphics.setColor(edge);
+        graphics.draw(shell);
+
+        drawConnectorDivider(graphics, settings, mapX, mapY, mapSize, gap, survey, edge);
+        graphics.dispose();
+        return toPng(image);
+    }
+
+    /**
+     * Renders every foreground HUD element into one coordinate space. The live
+     * terrain, markers, and player arrow remain independent layers underneath
+     * this overlay, while the frame, divider, panel, and telemetry can no longer
+     * drift apart through separate UI layout/scaling rules.
+     */
+    public static byte[] renderHudOverlay(DynamicMinimapSetting settings, int mapSize,
+                                          int sidePanelWidth, int panelHeight, int gap,
+                                          double frameAngle, String coords, String compass,
+                                          String clock, String biome) {
+        byte[] chromePng = renderHudChrome(settings, mapSize, sidePanelWidth, panelHeight, gap);
+        if (chromePng == null) return null;
+
+        try {
+            BufferedImage overlay = ImageIO.read(new ByteArrayInputStream(chromePng));
+            Graphics2D graphics = overlay.createGraphics();
+            graphics.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            graphics.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+
+            boolean side = settings.infoPanelPosition == DynamicMinimapSetting.INFO_LEFT
+                    || settings.infoPanelPosition == DynamicMinimapSetting.INFO_RIGHT;
+            int panelWidth = side ? sidePanelWidth : mapSize;
+            int mapX = settings.infoPanelPosition == DynamicMinimapSetting.INFO_LEFT
+                    ? panelWidth + gap : (side ? 0
+                    : Math.max(0, (overlay.getWidth() - mapSize) / 2));
+            int mapY = settings.infoPanelPosition == DynamicMinimapSetting.INFO_ABOVE
+                    ? panelHeight + gap : Math.max(0, (overlay.getHeight() - mapSize) / 2);
+            if (settings.infoPanelPosition == DynamicMinimapSetting.INFO_BELOW) mapY = 0;
+            int panelX = settings.infoPanelPosition == DynamicMinimapSetting.INFO_RIGHT
+                    ? mapSize + gap : (side ? 0 : Math.max(0, (overlay.getWidth() - panelWidth) / 2));
+            int panelY = settings.infoPanelPosition == DynamicMinimapSetting.INFO_BELOW
+                    ? mapSize + gap : (settings.infoPanelPosition == DynamicMinimapSetting.INFO_ABOVE
+                    ? 0 : Math.max(0, (overlay.getHeight() - panelHeight) / 2));
+
+            byte[] framePng = renderFrame(settings, frameAngle);
+            BufferedImage frame = framePng == null ? null
+                    : ImageIO.read(new ByteArrayInputStream(framePng));
+            if (frame != null) {
+                graphics.drawImage(frame, mapX, mapY, mapSize, mapSize, null);
+            }
+
+            drawTelemetry(graphics, settings, panelX, panelY, panelWidth,
+                    coords, compass, clock, biome);
+            graphics.dispose();
+            return toPng(overlay);
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private static void drawTelemetry(Graphics2D graphics, DynamicMinimapSetting settings,
+                                      int x, int y, int width, String coords,
+                                      String compass, String clock, String biome) {
+        int cursor = y + 6;
+        int brandHeight = 24;
+        int rowHeight = 43;
+        int baseInset = 8;
+        Color caption = settings.colours.awt(TICKS, 255);
+
+        graphics.setColor(caption);
+        int barX = settings.infoPanelPosition == DynamicMinimapSetting.INFO_LEFT
+                ? x + width - 9 : x + 6;
+        graphics.fillRoundRect(barX, cursor + 3, 3, brandHeight - 6, 2, 2);
+        drawHudText(graphics, "DapperMap", x + telemetryInset(settings, width, 14),
+                cursor + 16, 9, settings.colours.awt(BRAND_TEXT, 255), true);
+        cursor += brandHeight;
+
+        if (settings.showCoordinates) {
+            drawTelemetryRow(graphics, settings, x, width, cursor, baseInset, 12,
+                    "COORDINATES", coords, settings.colours.awt(COORDS_TEXT, 255));
+            cursor += rowHeight;
+        }
+        if (settings.showCompass) {
+            drawTelemetryRow(graphics, settings, x, width, cursor, baseInset, 22,
+                    "BEARING", compass, settings.colours.awt(COMPASS_TEXT, 255));
+            cursor += rowHeight;
+        }
+        if (settings.showClock) {
+            drawTelemetryRow(graphics, settings, x, width, cursor, baseInset, 22,
+                    "WORLD TIME", clock, settings.colours.awt(CLOCK_TEXT, 255));
+            cursor += rowHeight;
+        }
+        if (settings.showBiome) {
+            drawTelemetryRow(graphics, settings, x, width, cursor, baseInset, 12,
+                    "REGION", biome, settings.colours.awt(BIOME_TEXT, 255));
+        }
+    }
+
+    private static void drawTelemetryRow(Graphics2D graphics, DynamicMinimapSetting settings,
+                                         int x, int width, int y, int baseInset,
+                                         int curveInset, String caption, String value,
+                                         Color valueColor) {
+        boolean curvedSide = settings.isCircle()
+                && (settings.infoPanelPosition == DynamicMinimapSetting.INFO_LEFT
+                || settings.infoPanelPosition == DynamicMinimapSetting.INFO_RIGHT);
+        int textX = x + telemetryInset(settings, width,
+                baseInset + (curvedSide ? curveInset : 0));
+        drawHudText(graphics, caption, textX, y + 14, 7,
+                settings.colours.awt(TICKS, 255), true);
+        drawHudText(graphics, value == null ? "" : value, textX, y + 31, 10,
+                valueColor, true);
+    }
+
+    private static int telemetryInset(DynamicMinimapSetting settings, int width, int inset) {
+        if (settings.infoPanelPosition == DynamicMinimapSetting.INFO_LEFT) {
+            return 8;
+        }
+        return inset;
+    }
+
+    private static void drawHudText(Graphics2D graphics, String value, int x, int baseline,
+                                    int size, Color color, boolean bold) {
+        graphics.setFont(new Font("SansSerif", bold ? Font.BOLD : Font.PLAIN, size));
+        graphics.setColor(new Color(0, 0, 0, 150));
+        graphics.drawString(value, x + 1, baseline + 1);
+        graphics.setColor(color);
+        graphics.drawString(value, x, baseline);
+    }
+
+    private static Path2D.Double panelShellPath(DynamicMinimapSetting settings,
+                                                int panelX, int panelY,
+                                                int panelWidth, int panelHeight) {
+        Path2D.Double path = new Path2D.Double();
+        boolean side = settings.infoPanelPosition == DynamicMinimapSetting.INFO_LEFT
+                || settings.infoPanelPosition == DynamicMinimapSetting.INFO_RIGHT;
+        if (!settings.isCircle() || !side) {
+            path.append(new RoundRectangle2D.Double(panelX + 1, panelY + 1,
+                    panelWidth - 2, panelHeight - 2, 12, 12), false);
+            return path;
+        }
+
+        double x0 = panelX + 1.0D;
+        double y0 = panelY + 1.0D;
+        double x1 = panelX + panelWidth - 1.0D;
+        double y1 = panelY + panelHeight - 1.0D;
+        double cx = (x0 + x1) / 2.0D;
+        double cy = (y0 + y1) / 2.0D;
+        double corner = 10.0D;
+        double inset = Math.min(10.0D, Math.min(panelWidth, panelHeight) * 0.07D);
+        double spread = Math.min(60.0D, (settings.infoPanelPosition == DynamicMinimapSetting.INFO_LEFT
+                || settings.infoPanelPosition == DynamicMinimapSetting.INFO_RIGHT
+                ? panelHeight : panelWidth) * 0.34D);
+
+        if (settings.infoPanelPosition == DynamicMinimapSetting.INFO_RIGHT) {
+            path.moveTo(x0 + corner, y0);
+            path.lineTo(x1 - corner, y0); path.quadTo(x1, y0, x1, y0 + corner);
+            path.lineTo(x1, y1 - corner); path.quadTo(x1, y1, x1 - corner, y1);
+            path.lineTo(x0 + corner, y1); path.quadTo(x0, y1, x0, y1 - corner);
+            path.lineTo(x0, cy + spread);
+            path.curveTo(x0 + inset * 0.35D, cy + spread * 0.55D,
+                    x0 + inset, cy + spread * 0.35D, x0 + inset, cy);
+            path.curveTo(x0 + inset, cy - spread * 0.35D,
+                    x0 + inset * 0.35D, cy - spread * 0.55D, x0, cy - spread);
+            path.lineTo(x0, y0 + corner); path.quadTo(x0, y0, x0 + corner, y0);
+        } else if (settings.infoPanelPosition == DynamicMinimapSetting.INFO_LEFT) {
+            path.moveTo(x0 + corner, y0);
+            path.lineTo(x1 - corner, y0); path.quadTo(x1, y0, x1, y0 + corner);
+            path.lineTo(x1, cy - spread);
+            path.curveTo(x1 - inset * 0.35D, cy - spread * 0.55D,
+                    x1 - inset, cy - spread * 0.35D, x1 - inset, cy);
+            path.curveTo(x1 - inset, cy + spread * 0.35D,
+                    x1 - inset * 0.35D, cy + spread * 0.55D, x1, cy + spread);
+            path.lineTo(x1, y1 - corner); path.quadTo(x1, y1, x1 - corner, y1);
+            path.lineTo(x0 + corner, y1); path.quadTo(x0, y1, x0, y1 - corner);
+            path.lineTo(x0, y0 + corner); path.quadTo(x0, y0, x0 + corner, y0);
+        } else if (settings.infoPanelPosition == DynamicMinimapSetting.INFO_BELOW) {
+            path.moveTo(x0 + corner, y0);
+            path.lineTo(cx - spread, y0);
+            path.curveTo(cx - spread * 0.55D, y0 + inset * 0.35D,
+                    cx - spread * 0.35D, y0 + inset, cx, y0 + inset);
+            path.curveTo(cx + spread * 0.35D, y0 + inset,
+                    cx + spread * 0.55D, y0 + inset * 0.35D, cx + spread, y0);
+            path.lineTo(x1 - corner, y0); path.quadTo(x1, y0, x1, y0 + corner);
+            path.lineTo(x1, y1 - corner); path.quadTo(x1, y1, x1 - corner, y1);
+            path.lineTo(x0 + corner, y1); path.quadTo(x0, y1, x0, y1 - corner);
+            path.lineTo(x0, y0 + corner); path.quadTo(x0, y0, x0 + corner, y0);
+        } else {
+            path.moveTo(x0 + corner, y0);
+            path.lineTo(x1 - corner, y0); path.quadTo(x1, y0, x1, y0 + corner);
+            path.lineTo(x1, y1 - corner); path.quadTo(x1, y1, x1 - corner, y1);
+            path.lineTo(cx + spread, y1);
+            path.curveTo(cx + spread * 0.55D, y1 - inset * 0.35D,
+                    cx + spread * 0.35D, y1 - inset, cx, y1 - inset);
+            path.curveTo(cx - spread * 0.35D, y1 - inset,
+                    cx - spread * 0.55D, y1 - inset * 0.35D, cx - spread, y1);
+            path.lineTo(x0 + corner, y1); path.quadTo(x0, y1, x0, y1 - corner);
+            path.lineTo(x0, y0 + corner); path.quadTo(x0, y0, x0 + corner, y0);
+        }
+        path.closePath();
+        return path;
+    }
+
+    private static void drawConnectorDivider(Graphics2D graphics, DynamicMinimapSetting settings,
+                                             int mapX, int mapY, int mapSize, int gap,
+                                             Color survey, Color edge) {
+        graphics.setStroke(new BasicStroke(2.2F, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+        graphics.setColor(edge);
+        int position = settings.infoPanelPosition;
+        if (settings.isCircle()) {
+            double start = switch (position) {
+                case DynamicMinimapSetting.INFO_LEFT -> 125.0D;
+                case DynamicMinimapSetting.INFO_BELOW -> 215.0D;
+                case DynamicMinimapSetting.INFO_ABOVE -> 35.0D;
+                default -> -55.0D;
+            };
+            // The frame arc itself is inset four pixels from the map bounds.
+            // Compensate for that inset before moving it into the transparent
+            // gap, otherwise an eight-pixel circle gap hides the arc in-frame.
+            double dividerOffset = gap / 2.0D + 4.0D;
+            double offsetX = position == DynamicMinimapSetting.INFO_LEFT ? -dividerOffset
+                    : position == DynamicMinimapSetting.INFO_RIGHT ? dividerOffset : 0.0D;
+            double offsetY = position == DynamicMinimapSetting.INFO_ABOVE ? -dividerOffset
+                    : position == DynamicMinimapSetting.INFO_BELOW ? dividerOffset : 0.0D;
+            graphics.draw(new Arc2D.Double(mapX + 3 + offsetX, mapY + 3 + offsetY,
+                    mapSize - 7, mapSize - 7,
+                    start, 110.0D, Arc2D.OPEN));
+        } else {
+            int inset = Math.max(24, mapSize / 5);
+            if (position == DynamicMinimapSetting.INFO_LEFT || position == DynamicMinimapSetting.INFO_RIGHT) {
+                int x = position == DynamicMinimapSetting.INFO_LEFT
+                        ? mapX - gap / 2 : mapX + mapSize + gap / 2;
+                graphics.drawLine(x, mapY + inset, x, mapY + mapSize - inset);
+            } else {
+                int y = position == DynamicMinimapSetting.INFO_ABOVE
+                        ? mapY - gap / 2 : mapY + mapSize + gap / 2;
+                graphics.drawLine(mapX + inset, y, mapX + mapSize - inset, y);
+            }
+        }
+
+        graphics.setColor(survey);
+        int node = 5;
+        if (position == DynamicMinimapSetting.INFO_LEFT || position == DynamicMinimapSetting.INFO_RIGHT) {
+            int x = position == DynamicMinimapSetting.INFO_LEFT
+                    ? mapX - gap / 2 - node / 2 : mapX + mapSize + gap / 2 - node / 2;
+            graphics.fillOval(x, mapY + mapSize / 2 - node / 2, node, node);
+        } else {
+            int y = position == DynamicMinimapSetting.INFO_ABOVE
+                    ? mapY - gap / 2 - node / 2 : mapY + mapSize + gap / 2 - node / 2;
+            graphics.fillOval(mapX + mapSize / 2 - node / 2, y, node, node);
+        }
     }
 
     public static byte[] renderDot(int rgb) { return renderDot(rgb, new MinimapColours()); }
@@ -439,42 +728,43 @@ public final class DynamicMinimapRenderer {
         }
     }
 
-    private static void drawNauticalCircleFrame(Graphics2D graphics, int size, MinimapColours colours) {
+    private static void drawApertureCircleFrame(Graphics2D graphics, int size, MinimapColours colours) {
         int center = size / 2;
         int outer = size - 5;
-        graphics.setStroke(new BasicStroke(5.0F));
-        graphics.setColor(withAlpha(FIXED_FRAME_SHADOW, 190));
+        graphics.setStroke(new BasicStroke(9.0F));
+        graphics.setColor(withAlpha(FIXED_FRAME_SHADOW, 220));
         graphics.draw(new Ellipse2D.Double((double)2.0F, (double)2.0F, (double)outer, (double)outer));
-        graphics.setStroke(new BasicStroke(2.4F));
-        graphics.setColor(colours.awt(EDGE, 235));
-        graphics.draw(new Ellipse2D.Double((double)3.0F, (double)3.0F, (double)(size - 7), (double)(size - 7)));
-        for(int i = 0; i < 64; ++i) {
-            boolean cardinal = i % 16 == 0;
-            boolean ordinal = i % 8 == 0;
-            boolean longTick = i % 4 == 0;
-            double angle = (-Math.PI / 2D) + (double)i * Math.PI * (double)2.0F / (double)64.0F;
-            int tick = cardinal ? 15 : (ordinal ? 12 : (longTick ? 9 : 5));
-            float width = cardinal ? 2.2F : (ordinal ? 1.7F : 1.0F);
-            Color color = !cardinal && !ordinal ? colours.awt(TICKS, 225) : colours.awt(EDGE, 235);
-            drawRadialTick(graphics, center, center, (double)size / (double)2.0F - (double)8.0F, (double)size / (double)2.0F - (double)8.0F - (double)tick, angle, width, color);
+        graphics.setStroke(new BasicStroke(2.2F, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+        graphics.setColor(colours.awt(EDGE, 245));
+        for (int start : new int[]{12, 102, 192, 282}) {
+            graphics.draw(new Arc2D.Double(4, 4, size - 9, size - 9, start, 60, Arc2D.OPEN));
         }
 
+        // Four short survey bars replace the dense nautical ruler used by
+        // Cartographer. Their asymmetry is the signature of the aperture style.
+        graphics.setStroke(new BasicStroke(4.0F, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+        graphics.setColor(colours.awt(TICKS, 255));
+        for (int i = 0; i < 4; i++) {
+            double angle = -Math.PI / 2D + i * Math.PI / 2D;
+            drawRadialTick(graphics, center, center, size / 2.0D - 5.0D,
+                    size / 2.0D - 17.0D, angle, 4.0F, colours.awt(TICKS, 255));
+        }
     }
 
-    private static void drawNauticalSquareFrame(Graphics2D graphics, int size, MinimapColours colours) {
-        graphics.setStroke(new BasicStroke(4.0F));
+    private static void drawApertureSquareFrame(Graphics2D graphics, int size, MinimapColours colours) {
+        graphics.setStroke(new BasicStroke(7.0F));
         graphics.setColor(withAlpha(FIXED_FRAME_SHADOW, 190));
         graphics.drawRect(2, 2, size - 5, size - 5);
-        graphics.setStroke(new BasicStroke(2.0F));
+        graphics.setStroke(new BasicStroke(1.5F));
         graphics.setColor(colours.awt(EDGE, 235));
         graphics.drawRect(4, 4, size - 9, size - 9);
-        int start = 24;
-        int end = size - 24;
+        int start = 34;
+        int end = size - 34;
 
-        for(int i = 0; i <= 16; ++i) {
-            int pos = start + (end - start) * i / 16;
+        for(int i = 0; i <= 8; ++i) {
+            int pos = start + (end - start) * i / 8;
             boolean major = i % 4 == 0;
-            int tick = major ? 13 : 7;
+            int tick = major ? 16 : 6;
             graphics.setStroke(new BasicStroke(major ? 1.8F : 1.0F));
             graphics.setColor(major ? colours.awt(EDGE, 235) : colours.awt(TICKS, 225));
             graphics.drawLine(pos, 8, pos, 8 + tick);
@@ -510,15 +800,19 @@ public final class DynamicMinimapRenderer {
         graphics.translate(1, 1);
         graphics.fill(needle);
         graphics.translate(-1, -1);
-        graphics.setColor(colours.awt(CARDINALS, 255));
+        graphics.setColor(colours.awt(EDGE, 255));
         graphics.fill(needle);
     }
 
     private static void drawCornerBracket(Graphics2D graphics, int x, int y, int xDir, int yDir, MinimapColours colours) {
         graphics.setStroke(new BasicStroke(2.0F, 1, 1));
         graphics.setColor(colours.awt(EDGE, 235));
-        graphics.drawLine(x, y, x + xDir * 20, y);
-        graphics.drawLine(x, y, x, y + yDir * 20);
+        graphics.drawLine(x, y, x + xDir * 28, y);
+        graphics.drawLine(x, y, x, y + yDir * 28);
+        graphics.setStroke(new BasicStroke(1.0F, 1, 1));
+        graphics.setColor(colours.awt(TICKS, 210));
+        graphics.drawLine(x + xDir * 7, y + yDir * 7, x + xDir * 18, y + yDir * 7);
+        graphics.drawLine(x + xDir * 7, y + yDir * 7, x + xDir * 7, y + yDir * 18);
     }
 
     /**
@@ -574,15 +868,6 @@ public final class DynamicMinimapRenderer {
         drawCardinal(graphics, "S", size / 2, size - margin, colours);
         drawCardinal(graphics, "E", size - margin, size / 2, colours);
         drawCardinal(graphics, "W", margin, size / 2, colours);
-        if (circle && size >= 180) {
-            graphics.setFont(SMALL_CARDINAL_FONT);
-            int inset = Math.max(30, size / 7);
-            drawCardinal(graphics, "NE", size - inset, inset, colours);
-            drawCardinal(graphics, "SE", size - inset, size - inset, colours);
-            drawCardinal(graphics, "SW", inset, size - inset, colours);
-            drawCardinal(graphics, "NW", inset, inset, colours);
-        }
-
     }
 
     private static void drawCardinal(Graphics2D graphics, String label, int centerX, int centerY, MinimapColours colours) {
@@ -591,7 +876,7 @@ public final class DynamicMinimapRenderer {
         int baseline = centerY + metrics.getAscent() / 2 - 1;
         graphics.setColor(new Color(0, 0, 0, 170));
         graphics.drawString(label, left + 1, baseline + 1);
-        graphics.setColor(colours.awt(CARDINALS, 255));
+        graphics.setColor(colours.awt(TICKS, 255));
         graphics.drawString(label, left, baseline);
     }
 

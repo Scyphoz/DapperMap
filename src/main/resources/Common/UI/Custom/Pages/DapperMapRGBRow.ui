@@ -2,11 +2,11 @@ $C = "../Common.ui";
 Group {
   Anchor: (Height: 50);
   LayoutMode: Left;
-  Background: #132331(0.96);
+  Background: #16182b(0.94);
   Padding: (Horizontal: 12, Vertical: 6);
   Label #RowLabel {
     FlexWeight: 1;
-    Style: (FontSize: 15, RenderBold: true, TextColor: #f4f7fb, HorizontalAlignment: Start, VerticalAlignment: Center);
+    Style: (FontSize: 15, RenderBold: true, TextColor: #f4f2ff, HorizontalAlignment: Start, VerticalAlignment: Center);
   }
   $C.@Slider #ValueSlider {
     @Anchor = (Width: 400, Height: 38);
@@ -14,6 +14,6 @@ Group {
   }
   Label #ValueLabel {
     Anchor: (Width: 55, Height: 38);
-    Style: (FontSize: 14, RenderBold: true, TextColor: #9ddcff, HorizontalAlignment: Center, VerticalAlignment: Center);
+    Style: (FontSize: 14, RenderBold: true, TextColor: #6fe8df, HorizontalAlignment: Center, VerticalAlignment: Center);
   }
 }

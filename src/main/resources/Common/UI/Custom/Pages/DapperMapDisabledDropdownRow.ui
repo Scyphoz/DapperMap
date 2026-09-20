@@ -1,12 +1,12 @@
 Group {
-  Anchor: (Height: 58);
-  Background: #101c27(0.96);
+  Anchor: (Height: 64);
+  Background: #141625(0.82);
   LayoutMode: Left;
   Padding: (Horizontal: 12, Vertical: 7);
 
   Group #Accent {
-    Anchor: (Width: 4, Height: 42);
-    Background: #526171;
+    Anchor: (Width: 7, Height: 7);
+    Background: #596174;
   }
 
   Group #Info {

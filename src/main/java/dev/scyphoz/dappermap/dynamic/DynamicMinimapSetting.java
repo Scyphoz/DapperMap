@@ -52,7 +52,7 @@ public final class DynamicMinimapSetting {
     public int hudPositionY = 0;
 
     /** Position of the information panel relative to the map image. */
-    public int infoPanelPosition = INFO_BELOW;
+    public int infoPanelPosition = INFO_RIGHT;
 
     public int updateSpeed = 2;
     public boolean clock24Hour = true;

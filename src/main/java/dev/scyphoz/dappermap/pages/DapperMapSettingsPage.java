@@ -37,6 +37,8 @@ public final class DapperMapSettingsPage
     private static final Color BLUE = new Color(10345727);
     private static final Color GREEN = new Color(5757323);
     private static final Color GRAY = new Color(8491684);
+    private static final Color VIOLET = new Color(0xB8AEFF);
+    private static final Color MUTED = new Color(0x7F89A3);
 
     private static final Row[] ROWS;
 
@@ -44,6 +46,7 @@ public final class DapperMapSettingsPage
     private final MinimapSessionManager sessions;
     private final MinimapConfig config;
     private final boolean adminMode;
+    private Tab activeTab = Tab.DISPLAY;
     /**
      * Retained for source compatibility. The authoritative definition now lives in
      * {@link dev.scyphoz.dappermap.permissions.DapperMapPermissions#ADMIN}, a node kept
@@ -88,14 +91,33 @@ public final class DapperMapSettingsPage
                 ? this.sessions.getAdminDefaults(this.config)
                 : this.sessions.getSettings(this.playerRef.getUuid(), this.config);
 
-        builder.append(this.adminMode ? "Pages/DapperMapAdminSettings.ui" : "Pages/DapperMapSettings.ui");
+        builder.append("Pages/DapperMapSettings.ui");
         builder.set("#PageTitle.Text", this.adminMode ? "DapperMap - Admin Settings" : "DapperMap");
         if (this.adminMode) {
             builder.set("#DapperMapTagline.Text", "Server defaults for new DapperMap players");
         }
 
         this.renderList(builder, events, settings);
+        this.bindNavigation(builder, events);
         this.bindFooterButtons(builder, events);
+    }
+
+    private void bindNavigation(UICommandBuilder builder, UIEventBuilder events) {
+        for (Tab tab : Tab.values()) {
+            String slot = "#DapperMapTab" + tab.label + "Slot";
+            builder.append(slot, "Pages/BasicTextButton.ui");
+            events.addEventBinding(CustomUIEventBindingType.Activating, slot + "[0]",
+                    EventData.of("Action", "tab_" + tab.id), false);
+        }
+        this.updateNavigationLabels(builder);
+    }
+
+    private void updateNavigationLabels(UICommandBuilder builder) {
+        for (Tab tab : Tab.values()) {
+            String prefix = tab == this.activeTab ? ">  " : "   ";
+            builder.set("#DapperMapTab" + tab.label + "Slot[0].TextSpans",
+                    Message.raw(prefix + tab.label.toUpperCase()).color(tab == this.activeTab ? VIOLET : MUTED));
+        }
     }
 
     private void bindFooterButtons(
@@ -143,8 +165,10 @@ public final class DapperMapSettingsPage
     ) {
         builder.clear("#DapperMapSettingsList");
 
-        for (int index = 0; index < ROWS.length; ++index) {
-            Row row = ROWS[index];
+        int renderedIndex = 0;
+        for (Row row : ROWS) {
+            if (tabFor(row.id) != this.activeTab) continue;
+            int index = renderedIndex++;
 
             if (row.kind == Kind.HEADER) {
                 builder.append("#DapperMapSettingsList", "Pages/DapperMapSectionRow.ui");
@@ -304,6 +328,21 @@ public final class DapperMapSettingsPage
         }
 
         if (action == null || action.isEmpty()) {
+            return;
+        }
+
+        if (action.startsWith("tab_")) {
+            Tab requested = Tab.find(action.substring("tab_".length()));
+            if (requested == null || requested == this.activeTab) return;
+            this.activeTab = requested;
+            DynamicMinimapSetting current = this.adminMode
+                    ? this.sessions.getAdminDefaults(this.config)
+                    : this.sessions.getSettings(this.playerRef.getUuid(), this.config);
+            UICommandBuilder navBuilder = new UICommandBuilder();
+            UIEventBuilder navEvents = new UIEventBuilder();
+            this.renderList(navBuilder, navEvents, current);
+            this.updateNavigationLabels(navBuilder);
+            this.sendUpdate(navBuilder, navEvents, false);
             return;
         }
 
@@ -490,7 +529,10 @@ public final class DapperMapSettingsPage
                 for (int value = 0; value <= 3; value++) entries.add(entry(displaySpeed(value), Integer.toString(value)));
             }
             case "panel_position" -> {
-                for (int value = 0; value <= 3; value++) entries.add(entry(displayPanelPosition(value), Integer.toString(value)));
+                entries.add(entry("Telemetry rail — Right", Integer.toString(DynamicMinimapSetting.INFO_RIGHT)));
+                entries.add(entry("Telemetry rail — Left", Integer.toString(DynamicMinimapSetting.INFO_LEFT)));
+                entries.add(entry("Telemetry rail — Above", Integer.toString(DynamicMinimapSetting.INFO_ABOVE)));
+                entries.add(entry("Telemetry rail — Below", Integer.toString(DynamicMinimapSetting.INFO_BELOW)));
             }
             case "shape" -> {
                 entries.add(entry("Circle", "1"));
@@ -560,11 +602,11 @@ public final class DapperMapSettingsPage
 
     private static String displayPanelPosition(int panelPosition) {
         return switch (panelPosition) {
-            case DynamicMinimapSetting.INFO_ABOVE -> "Above";
-            case DynamicMinimapSetting.INFO_LEFT -> "Left";
-            case DynamicMinimapSetting.INFO_RIGHT -> "Right";
-            case DynamicMinimapSetting.INFO_BELOW -> "Below";
-            default -> "Below";
+            case DynamicMinimapSetting.INFO_LEFT -> "Telemetry rail — Left";
+            case DynamicMinimapSetting.INFO_RIGHT -> "Telemetry rail — Right";
+            case DynamicMinimapSetting.INFO_ABOVE -> "Telemetry rail — Above";
+            case DynamicMinimapSetting.INFO_BELOW -> "Telemetry rail — Below";
+            default -> "Telemetry rail — Right";
         };
     }
 
@@ -575,6 +617,16 @@ public final class DapperMapSettingsPage
             case 3 -> "Slow";
             case 2 -> "Normal";
             default -> "Normal";
+        };
+    }
+
+    private static Tab tabFor(String id) {
+        return switch (id) {
+            case "section_2", "players", "death", "entities", "height", "vrange",
+                 "section_4", "worldmap", "bettermap" -> Tab.MARKERS;
+            case "section_1", "move_minimap", "panel_position", "section_3",
+                 "coordinates", "clock", "clock_format", "compass", "biome" -> Tab.INTERFACE;
+            default -> Tab.DISPLAY;
         };
     }
 
@@ -656,6 +708,25 @@ public final class DapperMapSettingsPage
         HEADER,
         DROPDOWN,
         ACTION
+    }
+
+    private enum Tab {
+        DISPLAY("display", "Display"),
+        MARKERS("markers", "Markers"),
+        INTERFACE("interface", "Interface");
+
+        final String id;
+        final String label;
+
+        Tab(String id, String label) {
+            this.id = id;
+            this.label = label;
+        }
+
+        static Tab find(String id) {
+            for (Tab tab : values()) if (tab.id.equals(id)) return tab;
+            return null;
+        }
     }
 
     private static final class Row {
