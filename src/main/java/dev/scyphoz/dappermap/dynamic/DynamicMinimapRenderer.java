@@ -17,6 +17,7 @@ import java.awt.geom.Arc2D;
 import java.awt.geom.Ellipse2D;
 import java.awt.geom.Path2D;
 import java.awt.geom.RoundRectangle2D;
+import java.awt.font.TextAttribute;
 import java.awt.image.BufferedImage;
 import java.awt.image.ImageObserver;
 import java.awt.Shape;
@@ -340,6 +341,8 @@ public final class DynamicMinimapRenderer {
             Graphics2D graphics = overlay.createGraphics();
             graphics.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
             graphics.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+            graphics.setRenderingHint(RenderingHints.KEY_FRACTIONALMETRICS, RenderingHints.VALUE_FRACTIONALMETRICS_ON);
+            graphics.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
 
             boolean side = settings.infoPanelPosition == DynamicMinimapSetting.INFO_LEFT
                     || settings.infoPanelPosition == DynamicMinimapSetting.INFO_RIGHT;
@@ -528,7 +531,7 @@ public final class DynamicMinimapRenderer {
 
         graphics.setColor(caption);
         drawHudText(graphics, "DapperMap", x + telemetryInset(settings, width, 14),
-                cursor + 16, 9, settings.colours.awt(BRAND_TEXT, 255), true);
+                cursor + 17, 10, settings.colours.awt(BRAND_TEXT, 255), true, 0.035F);
         cursor += brandHeight;
 
         if (settings.showCoordinates) {
@@ -641,10 +644,10 @@ public final class DynamicMinimapRenderer {
                 || settings.infoPanelPosition == DynamicMinimapSetting.INFO_RIGHT);
         int textX = x + telemetryInset(settings, width,
                 baseInset + (curvedSide ? curveInset : 0));
-        drawHudText(graphics, caption, textX, y + 14, 8,
-                settings.colours.awt(TICKS, 255), true);
-        drawHudText(graphics, value == null ? "" : value, textX, y + 31, 10,
-                valueColor, true);
+        drawHudText(graphics, caption, textX, y + 14, 9,
+                settings.colours.awt(TICKS, 255), false, 0.105F);
+        drawHudText(graphics, value == null ? "" : value, textX, y + 32, 11,
+                valueColor, false, 0.015F);
     }
 
     private static int telemetryInset(DynamicMinimapSetting settings, int width, int inset) {
@@ -655,9 +658,10 @@ public final class DynamicMinimapRenderer {
     }
 
     private static void drawHudText(Graphics2D graphics, String value, int x, int baseline,
-                                    int size, Color color, boolean bold) {
-        graphics.setFont(new Font("SansSerif", bold ? Font.BOLD : Font.PLAIN, size));
-        graphics.setColor(new Color(0, 0, 0, 150));
+                                    int size, Color color, boolean bold, float tracking) {
+        Font font = new Font("SansSerif", bold ? Font.BOLD : Font.PLAIN, size);
+        graphics.setFont(font.deriveFont(Map.of(TextAttribute.TRACKING, tracking)));
+        graphics.setColor(new Color(0, 0, 0, 105));
         graphics.drawString(value, x + 1, baseline + 1);
         graphics.setColor(color);
         graphics.drawString(value, x, baseline);
