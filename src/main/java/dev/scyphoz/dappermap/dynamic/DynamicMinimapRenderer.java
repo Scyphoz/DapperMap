@@ -530,7 +530,11 @@ public final class DynamicMinimapRenderer {
         Color caption = settings.colours.awt(TICKS, 255);
 
         graphics.setColor(caption);
-        drawHudText(graphics, "DapperMap", x + telemetryInset(settings, width, 14),
+        int brandLeftInset = 8;
+        int brandRightInset = 8;
+        if (settings.isCircle() && settings.infoPanelPosition == DynamicMinimapSetting.INFO_RIGHT) brandLeftInset += 6;
+        if (settings.isCircle() && settings.infoPanelPosition == DynamicMinimapSetting.INFO_LEFT) brandRightInset += 6;
+        drawAlignedHudText(graphics, settings, "DapperMap", x, width, brandLeftInset, brandRightInset,
                 cursor + 17, 10, settings.colours.awt(BRAND_TEXT, 255), true, 0.035F);
         cursor += brandHeight;
 
@@ -642,19 +646,37 @@ public final class DynamicMinimapRenderer {
         boolean curvedSide = settings.isCircle()
                 && (settings.infoPanelPosition == DynamicMinimapSetting.INFO_LEFT
                 || settings.infoPanelPosition == DynamicMinimapSetting.INFO_RIGHT);
-        int textX = x + telemetryInset(settings, width,
-                baseInset + (curvedSide ? curveInset : 0));
-        drawHudText(graphics, caption, textX, y + 14, 9,
+        int leftInset = baseInset;
+        int rightInset = baseInset;
+        // The extra inset belongs only to the edge facing the circular minimap. Keeping
+        // the outer edge compact preserves the rounded glass silhouette for combinations
+        // such as LEFT panel + RIGHT-aligned text.
+        if (curvedSide && settings.infoPanelPosition == DynamicMinimapSetting.INFO_RIGHT) {
+            leftInset += curveInset;
+        } else if (curvedSide && settings.infoPanelPosition == DynamicMinimapSetting.INFO_LEFT) {
+            rightInset += curveInset;
+        }
+        drawAlignedHudText(graphics, settings, caption, x, width, leftInset, rightInset, y + 14, 9,
                 settings.colours.awt(TICKS, 255), false, 0.105F);
-        drawHudText(graphics, value == null ? "" : value, textX, y + 32, 11,
-                valueColor, false, 0.015F);
+        drawAlignedHudText(graphics, settings, value == null ? "" : value, x, width,
+                leftInset, rightInset, y + 32, 11, valueColor, false, 0.015F);
     }
 
-    private static int telemetryInset(DynamicMinimapSetting settings, int width, int inset) {
-        if (settings.infoPanelPosition == DynamicMinimapSetting.INFO_LEFT) {
-            return 8;
-        }
-        return inset;
+    private static void drawAlignedHudText(Graphics2D graphics, DynamicMinimapSetting settings,
+                                           String value, int panelX, int panelWidth,
+                                           int leftInset, int rightInset, int baseline,
+                                           int size, Color color, boolean bold, float tracking) {
+        Font font = new Font("SansSerif", bold ? Font.BOLD : Font.PLAIN, size);
+        graphics.setFont(font.deriveFont(Map.of(TextAttribute.TRACKING, tracking)));
+        int textWidth = graphics.getFontMetrics().stringWidth(value);
+        int left = panelX + leftInset;
+        int right = panelX + panelWidth - rightInset;
+        int textX = switch (settings.infoPanelTextAlignment) {
+            case DynamicMinimapSetting.INFO_ALIGN_CENTER -> left + Math.max(0, (right - left - textWidth) / 2);
+            case DynamicMinimapSetting.INFO_ALIGN_RIGHT -> Math.max(left, right - textWidth);
+            default -> left;
+        };
+        drawHudText(graphics, value, textX, baseline, size, color, bold, tracking);
     }
 
     private static void drawHudText(Graphics2D graphics, String value, int x, int baseline,

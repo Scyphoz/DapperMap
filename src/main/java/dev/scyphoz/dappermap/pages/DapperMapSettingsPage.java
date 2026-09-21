@@ -717,6 +717,7 @@ public final class DapperMapSettingsPage
             case "speed" -> "Choose how often the minimap refreshes.";
             case "move_minimap" -> "Choose where the minimap sits on your screen.";
             case "panel_position" -> "Choose which side shows the map information.";
+            case "panel_alignment" -> "Align the information panel text left, centre or right.";
             case "players" -> "Show nearby players on your minimap.";
             case "entities" -> "Show nearby creatures on your minimap.";
             case "death" -> "Mark the location of your last death.";
@@ -747,6 +748,7 @@ public final class DapperMapSettingsPage
             case "texture_resolution" -> settings.textureResolution + " px";
             case "speed" -> displaySpeed(settings.updateSpeed);
             case "panel_position" -> displayPanelPosition(settings.infoPanelPosition);
+            case "panel_alignment" -> displayPanelAlignment(settings.infoPanelTextAlignment);
             case "shape" -> settings.isCircle() ? "Circle" : "Square";
             case "rotation" -> settings.rotationMode == 0 ? "Disabled" : "Enabled";
             case "vrange" -> settings.mobVerticalRange + " blocks";
@@ -779,6 +781,7 @@ public final class DapperMapSettingsPage
             case "texture_resolution" -> settings.textureResolution = Integer.parseInt(value);
             case "speed" -> settings.updateSpeed = Integer.parseInt(value);
             case "panel_position" -> settings.infoPanelPosition = Integer.parseInt(value);
+            case "panel_alignment" -> settings.infoPanelTextAlignment = Integer.parseInt(value);
             case "shape" -> settings.shape = Integer.parseInt(value);
             case "rotation" -> settings.rotationMode = Integer.parseInt(value);
             case "vrange" -> settings.mobVerticalRange = Integer.parseInt(value);
@@ -827,6 +830,11 @@ public final class DapperMapSettingsPage
                 entries.add(entry("Above", Integer.toString(DynamicMinimapSetting.INFO_ABOVE)));
                 entries.add(entry("Below", Integer.toString(DynamicMinimapSetting.INFO_BELOW)));
             }
+            case "panel_alignment" -> {
+                entries.add(entry("Left", Integer.toString(DynamicMinimapSetting.INFO_ALIGN_LEFT)));
+                entries.add(entry("Centre", Integer.toString(DynamicMinimapSetting.INFO_ALIGN_CENTER)));
+                entries.add(entry("Right", Integer.toString(DynamicMinimapSetting.INFO_ALIGN_RIGHT)));
+            }
             case "shape" -> {
                 entries.add(entry("Circle", "1"));
                 entries.add(entry("Square", "0"));
@@ -874,6 +882,7 @@ public final class DapperMapSettingsPage
             case "texture_resolution" -> Integer.toString(settings.textureResolution);
             case "speed" -> Integer.toString(settings.updateSpeed);
             case "panel_position" -> Integer.toString(settings.infoPanelPosition);
+            case "panel_alignment" -> Integer.toString(settings.infoPanelTextAlignment);
             case "shape" -> Integer.toString(settings.shape);
             case "rotation" -> Integer.toString(settings.rotationMode);
             case "vrange" -> Integer.toString(settings.mobVerticalRange);
@@ -899,6 +908,15 @@ public final class DapperMapSettingsPage
             case DynamicMinimapSetting.INFO_ABOVE -> "Above";
             case DynamicMinimapSetting.INFO_BELOW -> "Below";
             default -> "Right";
+        };
+    }
+
+    private static String displayPanelAlignment(int alignment) {
+        return switch (alignment) {
+            case DynamicMinimapSetting.INFO_ALIGN_CENTER -> "Centre";
+            case DynamicMinimapSetting.INFO_ALIGN_RIGHT -> "Right";
+            case DynamicMinimapSetting.INFO_ALIGN_LEFT -> "Left";
+            default -> "Left";
         };
     }
 
@@ -939,7 +957,7 @@ public final class DapperMapSettingsPage
         return switch (id) {
             case "section_2", "players", "death", "entities", "height", "vrange",
                  "section_4", "worldmap", "bettermap" -> Tab.MARKERS;
-            case "panel_position", "section_3",
+            case "panel_position", "panel_alignment", "section_3",
                  "coordinates", "clock", "clock_format", "compass", "biome" -> Tab.INTERFACE;
             default -> Tab.DISPLAY;
         };
@@ -957,6 +975,7 @@ public final class DapperMapSettingsPage
                 new Row("speed", "Update Speed", Kind.DROPDOWN),
                 new Row("texture_resolution", "Texture Resolution", Kind.DROPDOWN),
                 new Row("panel_position", "Information Panel", Kind.DROPDOWN),
+                new Row("panel_alignment", "Panel Text Alignment", Kind.DROPDOWN),
                 new Row("section_2", "MARKERS", Kind.HEADER),
                 new Row("players", "Player Markers", Kind.DROPDOWN),
                 new Row("death", "Death Marker", Kind.DROPDOWN),

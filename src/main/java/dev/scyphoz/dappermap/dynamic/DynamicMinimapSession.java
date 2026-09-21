@@ -58,6 +58,7 @@ public final class DynamicMinimapSession {
     private int builtHudPositionX = -1;
     private int builtHudPositionY = -1;
     private int builtInfoPanelPosition = -1;
+    private int builtInfoPanelTextAlignment = -1;
     private int builtInterfaceScale = -1;
     private int builtTextureResolution = -1;
     private int builtRotationMode = -1;
@@ -256,6 +257,11 @@ public final class DynamicMinimapSession {
                 );
             }
 
+            if (this.settings.infoPanelTextAlignment != this.builtInfoPanelTextAlignment) {
+                this.builtInfoPanelTextAlignment = this.settings.infoPanelTextAlignment;
+                this.hud.setInfoTextAlignment(this.settings.infoPanelTextAlignment);
+            }
+
             if (this.settings.showCoordinates != this.builtShowCoordinates
                     || this.settings.showCompass != this.builtShowCompass
                     || this.settings.showClock != this.builtShowClock
@@ -433,6 +439,7 @@ public final class DynamicMinimapSession {
             this.builtHudPositionX = this.settings.hudPositionX;
             this.builtHudPositionY = this.settings.hudPositionY;
             this.builtInfoPanelPosition = this.settings.infoPanelPosition;
+            this.builtInfoPanelTextAlignment = this.settings.infoPanelTextAlignment;
             this.builtInterfaceScale = this.settings.interfaceScalePercent;
             this.builtTextureResolution = this.settings.textureResolution;
             this.builtRotationMode = -1;

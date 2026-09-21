@@ -78,6 +78,7 @@ public final class DynamicMinimapSettingsStore {
                                 + "  \"hudPositionX\": %d,\n"
                                 + "  \"hudPositionY\": %d,\n"
                                 + "  \"infoPanelPosition\": %d,\n"
+                                + "  \"infoPanelTextAlignment\": %d,\n"
                                 + "  \"updateSpeed\": %d,\n"
                                 + "  \"clock24Hour\": %s,\n"
                                 + "  \"showCoordinates\": %s,\n"
@@ -103,6 +104,7 @@ public final class DynamicMinimapSettingsStore {
                                 settings.hudPositionX,
                                 settings.hudPositionY,
                                 settings.infoPanelPosition,
+                                settings.infoPanelTextAlignment,
                                 settings.updateSpeed,
                                 settings.clock24Hour,
                                 settings.showCoordinates,
@@ -149,6 +151,7 @@ public final class DynamicMinimapSettingsStore {
                     Integer hudPositionX = extractInt(json, "hudPositionX");
                     Integer hudPositionY = extractInt(json, "hudPositionY");
                     Integer infoPanelPosition = extractInt(json, "infoPanelPosition");
+                    Integer infoPanelTextAlignment = extractInt(json, "infoPanelTextAlignment");
                     Integer updateSpeed = extractInt(json, "updateSpeed");
                     Boolean clock24Hour = extractBool(json, "clock24Hour");
                     Boolean showCoordinates = extractBool(json, "showCoordinates");
@@ -232,6 +235,10 @@ public final class DynamicMinimapSettingsStore {
 
                     if (infoPanelPosition != null) {
                         settings.infoPanelPosition = infoPanelPosition;
+                    }
+
+                    if (infoPanelTextAlignment != null) {
+                        settings.infoPanelTextAlignment = infoPanelTextAlignment;
                     }
 
                     if (updateSpeed != null) {

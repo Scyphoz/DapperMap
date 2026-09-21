@@ -16,6 +16,10 @@ public final class DynamicMinimapSetting {
     public static final int INFO_ABOVE = 1;
     public static final int INFO_LEFT = 2;
     public static final int INFO_RIGHT = 3;
+
+    public static final int INFO_ALIGN_LEFT = 0;
+    public static final int INFO_ALIGN_CENTER = 1;
+    public static final int INFO_ALIGN_RIGHT = 2;
     public volatile MinimapColours colours = new MinimapColours();
     public boolean enabled = true;
     public int rotationMode = 0;
@@ -53,6 +57,9 @@ public final class DynamicMinimapSetting {
 
     /** Position of the information panel relative to the map image. */
     public int infoPanelPosition = INFO_RIGHT;
+
+    /** Horizontal alignment of all information-panel text. */
+    public int infoPanelTextAlignment = INFO_ALIGN_LEFT;
 
     public int updateSpeed = 2;
     public boolean clock24Hour = true;
@@ -103,6 +110,7 @@ public final class DynamicMinimapSetting {
         copy.hudPositionX = this.hudPositionX;
         copy.hudPositionY = this.hudPositionY;
         copy.infoPanelPosition = this.infoPanelPosition;
+        copy.infoPanelTextAlignment = this.infoPanelTextAlignment;
         copy.updateSpeed = this.updateSpeed;
         copy.clock24Hour = this.clock24Hour;
         copy.showCoordinates = this.showCoordinates;
@@ -135,6 +143,7 @@ public final class DynamicMinimapSetting {
         this.hudPositionX = clamp(this.hudPositionX, 0, 100);
         this.hudPositionY = clamp(this.hudPositionY, 0, 100);
         this.infoPanelPosition = clamp(this.infoPanelPosition, INFO_BELOW, INFO_RIGHT);
+        this.infoPanelTextAlignment = clamp(this.infoPanelTextAlignment, INFO_ALIGN_LEFT, INFO_ALIGN_RIGHT);
 
         this.updateSpeed = clamp(this.updateSpeed, 0, 3);
     }

@@ -351,6 +351,21 @@ public final class DynamicMinimapHud extends CustomUIHud {
         }
     }
 
+    public void setInfoTextAlignment(int alignment) {
+        int normalized = Math.max(DynamicMinimapSetting.INFO_ALIGN_LEFT,
+                Math.min(DynamicMinimapSetting.INFO_ALIGN_RIGHT, alignment));
+
+        // DynamicMinimapSession and this HUD intentionally share the same settings
+        // instance. By the time the session detects an alignment change, the value in
+        // this.settings has therefore already been updated. Do not short-circuit by
+        // comparing against this.settings here: doing so prevents the live HUD overlay
+        // from being republished even though the Settings preview is correct.
+        this.settings.infoPanelTextAlignment = normalized;
+        if (this.built) {
+            this.publishOverlayAsset(true);
+        }
+    }
+
     public void setCoords(String coords) {
         if (coords != null && !coords.equals(this.coordsText)) {
             this.coordsText = coords;
@@ -673,7 +688,8 @@ public final class DynamicMinimapHud extends CustomUIHud {
         this.maskFile = maskFileFor(this.settings);
         this.overlayPath = "UI/DapperMap/overlay-" + this.slug + "-" + shape
                 + "-r" + this.settings.textureResolution
-                + "-p" + this.settings.infoPanelPosition + "-s" + this.logicalUiSize
+                + "-p" + this.settings.infoPanelPosition + "-a" + this.settings.infoPanelTextAlignment
+                + "-s" + this.logicalUiSize
                 + "-h" + this.readoutHeight()
                 + "-" + this.settings.colours.frameKey()
                 + this.settings.colours.hex(PANEL).substring(1)
