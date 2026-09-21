@@ -30,7 +30,6 @@ import dev.scyphoz.dappermap.service.MinimapSessionManager;
 
 import java.awt.Color;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 import java.util.TreeSet;
 import com.hypixel.hytale.server.core.ui.DropdownEntryInfo;
@@ -45,6 +44,14 @@ public final class DapperMapSettingsPage
     private static final Color GRAY = new Color(8491684);
     private static final Color VIOLET = new Color(0xB8AEFF);
     private static final Color MUTED = new Color(0x7F89A3);
+
+    private static final int[] POSITION_STOPS = {0, 50, 100};
+    /** Only colours consumed by the current live HUD renderer are user-facing. */
+    private static final List<Key> VISIBLE_COLOUR_KEYS = List.of(
+            Key.EDGE, Key.TICKS, Key.PANEL,
+            Key.BRAND_TEXT, Key.COORDS_TEXT, Key.COMPASS_TEXT, Key.CLOCK_TEXT, Key.BIOME_TEXT,
+            Key.SELF, Key.PLAYERS, Key.DEATH, Key.HOSTILE_ACTIVE, Key.HOSTILE, Key.NEUTRAL, Key.FRIENDLY
+    );
 
     private static final Row[] ROWS;
 
@@ -109,14 +116,18 @@ public final class DapperMapSettingsPage
         builder.append("Pages/DapperMapSettings.ui");
         builder.set("#PlayerTopAccent.Visible", !this.adminMode);
         builder.set("#AdminTopAccent.Visible", this.adminMode);
+        builder.set("#DapperMapAdminButtonFrame.Visible",
+                !this.adminMode && this.playerRef.hasPermission(ADMIN_PERMISSION));
         if (this.adminMode) {
             builder.set("#DapperMapTagline.Text", "Server defaults for new DapperMap players");
         }
 
         this.renderList(builder, events, settings);
         this.bindColourEditor(builder, events, settings);
+        this.bindPositionEditor(builder, events, settings);
         this.updatePreview(builder, settings);
         this.updateTabVisibility(builder);
+        this.updateEditorAvailability(builder, settings);
         this.bindNavigation(builder, events);
         this.bindFooterButtons(builder, events);
     }
@@ -125,6 +136,7 @@ public final class DapperMapSettingsPage
         for (Tab tab : Tab.values()) {
             String slot = "#DapperMapTab" + tab.label + "ButtonSlot";
             builder.append(slot, "Pages/BasicTextButton.ui");
+            builder.set(slot + "[0].TextSpans", Message.raw(""));
             events.addEventBinding(CustomUIEventBindingType.Activating, slot + "[0]",
                     EventData.of("Action", "tab_" + tab.id), false);
         }
@@ -132,20 +144,32 @@ public final class DapperMapSettingsPage
     }
 
     private void updateTabVisibility(UICommandBuilder builder) {
-        builder.set("#DapperMapSettingsListContainer.Visible", this.activeTab != Tab.COLOURS);
+        builder.set("#DapperMapSettingsListContainer.Visible",
+                this.activeTab != Tab.COLOURS && this.activeTab != Tab.POSITION);
         builder.set("#DapperMapColourEditor.Visible", this.activeTab == Tab.COLOURS);
+        builder.set("#DapperMapPositionEditor.Visible", this.activeTab == Tab.POSITION);
         builder.set("#PageSectionTitle.Text", this.activeTab.label.toUpperCase());
         String sectionDescription = switch (this.activeTab) {
             case DISPLAY -> "Customize how DapperMap appears in-game.";
             case MARKERS -> "Choose the navigation markers shown on your instrument.";
             case INTERFACE -> "Tune the information, compass and HUD presentation.";
+            case POSITION -> "Place the minimap on-screen and fine-tune its position.";
             case COLOURS -> "Tune the DapperMap palette and preview every change live.";
         };
         builder.set("#PageSectionDescription.Text", sectionDescription);
     }
 
+    private void updateEditorAvailability(UICommandBuilder builder, DynamicMinimapSetting settings) {
+        boolean colours = this.activeTab == Tab.COLOURS;
+        boolean position = this.activeTab == Tab.POSITION;
+        builder.set("#DapperMapColourEditor.Visible", colours && settings.enabled);
+        builder.set("#ColourDisabledNotice.Visible", colours && !settings.enabled);
+        builder.set("#DapperMapPositionEditor.Visible", position && settings.enabled);
+        builder.set("#PositionDisabledNotice.Visible", position && !settings.enabled);
+    }
+
     private void bindColourEditor(UICommandBuilder builder, UIEventBuilder events, DynamicMinimapSetting settings) {
-        builder.set("#ColourTarget.Entries", Arrays.stream(Key.values())
+        builder.set("#ColourTarget.Entries", VISIBLE_COLOUR_KEYS.stream()
                 .map(key -> new DropdownEntryInfo(LocalizableString.fromString(key.group + " / " + key.label), key.id))
                 .toList());
         builder.set("#ColourTarget.Value", this.selectedColour.id);
@@ -156,12 +180,12 @@ public final class DapperMapSettingsPage
                 EventData.of("Action", "colour_target").append("@Target", "#ColourTarget.Value"), false);
         events.addEventBinding(CustomUIEventBindingType.ValueChanged, "#ColourPicker",
                 EventData.of("Action", "colour_value").append("@Colour", "#ColourPicker.Color"), false);
-        builder.append("#ColourResetSlot", "Pages/BasicTextButton.ui");
-        builder.set("#ColourResetSlot[0].TextSpans", Message.raw("RESET THIS COLOUR").color(GOLD));
-        events.addEventBinding(CustomUIEventBindingType.Activating, "#ColourResetSlot[0]", EventData.of("Action", "colour_reset"), false);
-        builder.append("#ColourResetAllSlot", "Pages/BasicTextButton.ui");
-        builder.set("#ColourResetAllSlot[0].TextSpans", Message.raw("RESET ALL COLOURS").color(GOLD));
-        events.addEventBinding(CustomUIEventBindingType.Activating, "#ColourResetAllSlot[0]", EventData.of("Action", "colour_reset_all"), false);
+        builder.append("#ColourResetButtonSlot", "Pages/BasicTextButton.ui");
+        builder.set("#ColourResetButtonSlot[0].TextSpans", Message.raw(""));
+        events.addEventBinding(CustomUIEventBindingType.Activating, "#ColourResetButtonSlot[0]", EventData.of("Action", "colour_reset"), false);
+        builder.append("#ColourResetAllButtonSlot", "Pages/BasicTextButton.ui");
+        builder.set("#ColourResetAllButtonSlot[0].TextSpans", Message.raw(""));
+        events.addEventBinding(CustomUIEventBindingType.Activating, "#ColourResetAllButtonSlot[0]", EventData.of("Action", "colour_reset_all"), false);
     }
 
     private void refreshColourEditor(UICommandBuilder builder, DynamicMinimapSetting settings, boolean syncPicker) {
@@ -171,13 +195,66 @@ public final class DapperMapSettingsPage
         if (syncPicker) builder.set("#ColourPicker.Color", settings.colours.hex(this.selectedColour));
     }
 
+    private void bindPositionEditor(UICommandBuilder builder, UIEventBuilder events,
+                                    DynamicMinimapSetting settings) {
+        String[] labels = {"Horizontal Position", "Vertical Position"};
+        String[] actions = {"position_slider_x", "position_slider_y"};
+        for (int index = 0; index < labels.length; index++) {
+            String row = "#PositionFineTuneList[" + index + "]";
+            builder.append("#PositionFineTuneList", "Pages/DapperMapSliderRow.ui");
+            builder.set(row + " #RowLabel.Text", labels[index]);
+            builder.set(row + " #RowDescription.Text", "");
+            events.addEventBinding(CustomUIEventBindingType.ValueChanged, row + " #ValueSlider",
+                    EventData.of("Action", actions[index])
+                            .append("@SliderValue", row + " #ValueSlider.Value"), false);
+        }
+        for (int row = 0; row < POSITION_STOPS.length; row++) {
+            for (int column = 0; column < POSITION_STOPS.length; column++) {
+                String slot = "#PositionSlot" + row + column + "Button";
+                builder.append(slot, "Pages/BasicTextButton.ui");
+                builder.set(slot + "[0].TextSpans", Message.raw(""));
+                events.addEventBinding(CustomUIEventBindingType.Activating, slot + "[0]",
+                        EventData.of("Action", "position_" + POSITION_STOPS[column] + "_" + POSITION_STOPS[row]), false);
+            }
+        }
+        this.updatePositionEditor(builder, settings, true);
+    }
+
+    private void updatePositionEditor(UICommandBuilder builder, DynamicMinimapSetting settings,
+                                      boolean syncSliders) {
+        int[] values = {settings.hudPositionX, settings.hudPositionY};
+        for (int index = 0; index < values.length; index++) {
+            String row = "#PositionFineTuneList[" + index + "]";
+            builder.set(row + " #ValueLabel.Text", values[index] + "%");
+            if (syncSliders) builder.set(row + " #ValueSlider.Value", values[index]);
+        }
+        builder.set("#PositionSummary.Text",
+                positionName(settings.hudPositionX, settings.hudPositionY)
+                        + "   •   " + settings.hudPositionX + "% / " + settings.hudPositionY + "%");
+        int selectedX = nearestPositionStop(settings.hudPositionX);
+        int selectedY = nearestPositionStop(settings.hudPositionY);
+        for (int row = 0; row < POSITION_STOPS.length; row++) {
+            for (int column = 0; column < POSITION_STOPS.length; column++) {
+                int x = POSITION_STOPS[column];
+                int y = POSITION_STOPS[row];
+                boolean selected = x == selectedX && y == selectedY;
+                builder.set("#PositionSlot" + row + column + "Active.Visible", selected);
+                builder.set("#PositionSlot" + row + column + "Label.TextSpans",
+                        Message.raw(positionButtonName(x, y))
+                                .color(selected ? VIOLET : MUTED));
+            }
+        }
+    }
+
     private void updatePreview(UICommandBuilder ui, DynamicMinimapSetting settings) {
         if (!settings.enabled) {
             ui.set("#PreviewHudImage.Visible", false);
             ui.set("#PreviewDisabled.Visible", true);
             return;
         }
-        byte[] png = DynamicMinimapRenderer.renderSettingsPreview(settings);
+        byte[] png = this.activeTab == Tab.POSITION
+                ? DynamicMinimapRenderer.renderPositionPreview(settings)
+                : DynamicMinimapRenderer.renderSettingsPreview(settings);
         if (png == null) return;
         String slug = this.playerRef.getUuid() == null ? "anon" : this.playerRef.getUuid().toString().replace("-", "");
         String path = "UI/DapperMap/settings-preview-" + slug + "-" + (++this.previewRevision) + ".png";
@@ -191,10 +268,9 @@ public final class DapperMapSettingsPage
     private void updateNavigationLabels(UICommandBuilder builder) {
         for (Tab tab : Tab.values()) {
             boolean selected = tab == this.activeTab;
-            String prefix = selected ? "○  " : "   ";
             builder.set("#DapperMapTab" + tab.label + "Active.Visible", selected);
-            builder.set("#DapperMapTab" + tab.label + "ButtonSlot[0].TextSpans",
-                    Message.raw(prefix + tab.label.toUpperCase()).color(selected ? VIOLET : MUTED));
+            builder.set("#DapperMapTab" + tab.label + "Label.TextSpans",
+                    Message.raw(tab.label.toUpperCase()).color(selected ? VIOLET : MUTED));
         }
     }
 
@@ -208,9 +284,10 @@ public final class DapperMapSettingsPage
         );
 
         builder.set(
-                "#DapperMapResetButtonSlot[0].TextSpans",
+                "#DapperMapResetButtonLabel.TextSpans",
                 Message.raw(this.adminMode ? "RESET TO MOD DEFAULTS" : "RESET TO DEFAULTS").color(GOLD)
         );
+        builder.set("#DapperMapResetButtonSlot[0].TextSpans", Message.raw(""));
 
         events.addEventBinding(
                 CustomUIEventBindingType.Activating,
@@ -220,19 +297,20 @@ public final class DapperMapSettingsPage
         );
 
         builder.append("#DapperMapCloseButtonSlot", "Pages/BasicTextButton.ui");
-        builder.set("#DapperMapCloseButtonSlot[0].TextSpans", Message.raw("CANCEL").color(VIOLET));
+        builder.set("#DapperMapCloseButtonSlot[0].TextSpans", Message.raw(""));
         events.addEventBinding(CustomUIEventBindingType.Activating, "#DapperMapCloseButtonSlot[0]",
                 EventData.of("Action", "cancel_settings"), false);
 
         builder.append("#DapperMapApplyButtonSlot", "Pages/BasicTextButton.ui");
-        builder.set("#DapperMapApplyButtonSlot[0].TextSpans",
+        builder.set("#DapperMapApplyButtonLabel.TextSpans",
                 Message.raw("APPLY").color(this.adminMode ? GREEN : new Color(0xF0EDFF)));
+        builder.set("#DapperMapApplyButtonSlot[0].TextSpans", Message.raw(""));
         events.addEventBinding(CustomUIEventBindingType.Activating, "#DapperMapApplyButtonSlot[0]",
                 EventData.of("Action", "apply_settings"), false);
 
         if (!this.adminMode && this.playerRef.hasPermission(ADMIN_PERMISSION)) {
             builder.append("#DapperMapAdminButtonSlot", "Pages/BasicTextButton.ui");
-            builder.set("#DapperMapAdminButtonSlot[0].TextSpans", Message.raw("ADMIN SETTINGS").color(GREEN));
+            builder.set("#DapperMapAdminButtonSlot[0].TextSpans", Message.raw(""));
             events.addEventBinding(CustomUIEventBindingType.Activating, "#DapperMapAdminButtonSlot[0]",
                     EventData.of("Action", "admin_settings"), false);
         }
@@ -254,14 +332,25 @@ public final class DapperMapSettingsPage
                 builder.append("#DapperMapSettingsList", "Pages/DapperMapSectionRow.ui");
                 builder.set("#DapperMapSettingsList[" + index + "] #SectionLabel.Text", row.label);
             } else if (row.kind == Kind.TOGGLE) {
-                this.toggleRow(builder, events, index, row, settings);
+                if (isControlDisabled(row.id, settings)) this.disabledRow(builder, index, row, settings);
+                else this.toggleRow(builder, events, index, row, settings);
             } else if (row.kind == Kind.DROPDOWN) {
-                if (isBooleanToggle(row.id)) this.toggleRow(builder, events, index, row, settings);
+                if (isControlDisabled(row.id, settings)) this.disabledRow(builder, index, row, settings);
+                else if (isBooleanToggle(row.id)) this.toggleRow(builder, events, index, row, settings);
                 else this.dropdownRow(builder, events, index, row, settings);
             } else if (row.kind == Kind.ACTION) {
                 this.actionRow(builder, events, index, row, settings);
             }
         }
+    }
+
+    private void disabledRow(UICommandBuilder builder, int index, Row row,
+                             DynamicMinimapSetting settings) {
+        String selector = "#DapperMapSettingsList[" + index + "]";
+        builder.append("#DapperMapSettingsList", "Pages/DapperMapDisabledDropdownRow.ui");
+        builder.set(selector + " #RowLabel.Text", row.label);
+        builder.set(selector + " #RowDescription.Text", description(row.id));
+        builder.set(selector + " #ValueLabel.Text", disabledValue(row.id, settings));
     }
 
     private void actionRow(UICommandBuilder builder, UIEventBuilder events,
@@ -277,9 +366,11 @@ public final class DapperMapSettingsPage
         builder.append("#DapperMapSettingsList", "Pages/DapperMapMoveRow.ui");
         builder.set(selector + " #RowLabel.Text", row.label);
         builder.set(selector + " #RowDescription.Text", description(row.id));
-        builder.append(selector + " #BtnSlot", "Pages/BasicTextButton.ui");
-        builder.set(selector + " #BtnSlot[0].TextSpans", Message.raw(row.id.equals("colours") ? "EDIT COLOURS" : "MOVE MINIMAP").color(BLUE));
-        events.addEventBinding(CustomUIEventBindingType.Activating, selector + " #BtnSlot[0]",
+        builder.append(selector + " #BtnClickSlot", "Pages/BasicTextButton.ui");
+        builder.set(selector + " #BtnClickSlot[0].TextSpans", Message.raw(""));
+        builder.set(selector + " #BtnLabel.TextSpans",
+                Message.raw(row.id.equals("colours") ? "EDIT COLOURS" : "MOVE MINIMAP").color(BLUE));
+        events.addEventBinding(CustomUIEventBindingType.Activating, selector + " #BtnClickSlot[0]",
                 EventData.of("Action", row.id), false);
     }
 
@@ -452,34 +543,12 @@ public final class DapperMapSettingsPage
             UIEventBuilder navEvents = new UIEventBuilder();
             this.renderList(navBuilder, navEvents, current);
             this.refreshColourEditor(navBuilder, current, true);
+            this.updatePositionEditor(navBuilder, current, true);
             this.updatePreview(navBuilder, current);
             this.updateTabVisibility(navBuilder);
+            this.updateEditorAvailability(navBuilder, current);
             this.updateNavigationLabels(navBuilder);
             this.sendUpdate(navBuilder, navEvents, false);
-            return;
-        }
-
-        if ("move_minimap".equals(action)) {
-            if (this.draftSettings == null || !this.draftSettings.enabled) return;
-            Player player =
-                    (Player) store.getComponent(
-                            ref,
-                            Player.getComponentType()
-                    );
-
-            if (player != null) {
-                player.getPageManager().openCustomPage(
-                        ref,
-                        store,
-                        new MoveMinimapPage(
-                                this.playerRef,
-                                this.sessions,
-                                this.config,
-                                this.adminMode
-                        )
-                );
-            }
-
             return;
         }
 
@@ -493,7 +562,9 @@ public final class DapperMapSettingsPage
             UIEventBuilder resetEvents = new UIEventBuilder();
             this.renderList(resetBuilder, resetEvents, reset);
             this.refreshColourEditor(resetBuilder, reset, true);
+            this.updatePositionEditor(resetBuilder, reset, true);
             this.updatePreview(resetBuilder, reset);
+            this.updateEditorAvailability(resetBuilder, reset);
             this.sendUpdate(resetBuilder, resetEvents, false);
             return;
         }
@@ -501,16 +572,35 @@ public final class DapperMapSettingsPage
         DynamicMinimapSetting settings = this.draftSettings;
         if (settings == null) return;
 
-        if ("colour_target".equals(action)) {
+        if (!settings.enabled
+                && !"toggle_enabled".equals(action)
+                && (action.startsWith("position_") || action.startsWith("colour_")
+                || action.startsWith("toggle_") || action.startsWith("dropdown_"))) {
+            return;
+        }
+
+        if (action.startsWith("position_") && !action.startsWith("position_slider_")) {
+            String[] parts = action.split("_");
+            if (parts.length != 3) return;
+            try {
+                settings.hudPositionX = clampPercent(Integer.parseInt(parts[1]));
+                settings.hudPositionY = clampPercent(Integer.parseInt(parts[2]));
+            } catch (NumberFormatException ignored) {
+                return;
+            }
+        } else if ("position_slider_x".equals(action)) {
+            settings.hudPositionX = clampPercent(event.sliderValue);
+        } else if ("position_slider_y".equals(action)) {
+            settings.hudPositionY = clampPercent(event.sliderValue);
+        } else if ("colour_target".equals(action)) {
             Key key = Key.find(event.target);
-            if (key == null) return;
+            if (key == null || !VISIBLE_COLOUR_KEYS.contains(key)) return;
             this.selectedColour = key;
             UICommandBuilder colourUi = new UICommandBuilder();
             this.refreshColourEditor(colourUi, settings, true);
             this.sendUpdate(colourUi, new UIEventBuilder(), false);
             return;
-        }
-        if ("colour_value".equals(action)) {
+        } else if ("colour_value".equals(action)) {
             if (event.colour == null) return;
             int rgb = (Byte.toUnsignedInt(event.colour.red) << 16)
                     | (Byte.toUnsignedInt(event.colour.green) << 8)
@@ -545,12 +635,15 @@ public final class DapperMapSettingsPage
 
         this.renderList(builder, events, settings);
         this.refreshColourEditor(builder, settings, !"colour_value".equals(action));
+        this.updatePositionEditor(builder, settings, !action.startsWith("position_slider_"));
         this.updatePreview(builder, settings);
+        this.updateEditorAvailability(builder, settings);
 
         this.sendUpdate(builder, events, false);
     }
 
     private static void applyToggle(DynamicMinimapSetting settings, String id) {
+        if (isControlDisabled(id, settings)) return;
         switch (id) {
             case "enabled" -> settings.enabled = !settings.enabled;
             case "players" -> settings.showOtherPlayers = !settings.showOtherPlayers;
@@ -577,7 +670,7 @@ public final class DapperMapSettingsPage
     private static String toggleStateLabel(String id, DynamicMinimapSetting settings) {
         return switch (id) {
             case "shape" -> settings.shape == 1 ? "CIRCLE" : "SQUARE";
-            case "rotation" -> settings.rotationMode == 1 ? "PLAYER FACING" : "NORTH LOCKED";
+            case "rotation" -> settings.rotationMode == 1 ? "ENABLED" : "DISABLED";
             case "clock_format" -> settings.clock24Hour ? "24 HOUR" : "12 HOUR";
             default -> toggleValue(id, settings) ? "ENABLED" : "DISABLED";
         };
@@ -620,7 +713,7 @@ public final class DapperMapSettingsPage
             case "size" -> "Change the size of the map on your screen.";
             case "interface_scale" -> "Resize the map and its information together.";
             case "shape" -> "Choose a round or square map.";
-            case "rotation" -> "Keep north fixed or turn the map as you turn.";
+            case "rotation" -> "Enable or disable player-facing map rotation.";
             case "speed" -> "Choose how often the minimap refreshes.";
             case "move_minimap" -> "Choose where the minimap sits on your screen.";
             case "panel_position" -> "Choose which side shows the map information.";
@@ -655,8 +748,8 @@ public final class DapperMapSettingsPage
             case "speed" -> displaySpeed(settings.updateSpeed);
             case "panel_position" -> displayPanelPosition(settings.infoPanelPosition);
             case "shape" -> settings.isCircle() ? "Circle" : "Square";
-            case "rotation" -> settings.rotationMode == 0 ? "Locked North" : "Follow player";
-            case "vrange" -> settings.mobVerticalRange + " blocks above/below";
+            case "rotation" -> settings.rotationMode == 0 ? "Disabled" : "Enabled";
+            case "vrange" -> settings.mobVerticalRange + " blocks";
             case "clock_format" -> settings.clock24Hour ? "24-hour" : "12-hour";
             default -> "true".equals(dropdownValue(id, settings)) ? "Enabled" : "Disabled";
         };
@@ -668,6 +761,10 @@ public final class DapperMapSettingsPage
                 || (("height".equals(id) || "vrange".equals(id)) && !settings.showEntities)
                 || ("vrange".equals(id) && !settings.limitMobHeight)
                 || ("clock_format".equals(id) && !settings.showClock);
+    }
+
+    private static boolean isControlDisabled(String id, DynamicMinimapSetting settings) {
+        return !"enabled".equals(id) && isDropdownDisabled(id, settings);
     }
 
     private static void applyDropdown(DynamicMinimapSetting settings, String id, String value) {
@@ -706,7 +803,10 @@ public final class DapperMapSettingsPage
             case "zoom" -> addNumericEntries(entries, settings.zoomBlocks, 16, 256, 16, " blocks");
             case "size" -> addNumericEntries(entries, settings.sizePixels, 120, 360, 20, " px");
             case "vrange" -> {
-                addNumericEntries(entries, settings.mobVerticalRange, 8, 256, 8, " blocks above/below");
+                TreeSet<Integer> values = new TreeSet<>(List.of(4));
+                for (int value = 8; value <= 256; value += 8) values.add(value);
+                values.add(settings.mobVerticalRange);
+                for (int value : values) entries.add(entry(value + " blocks", Integer.toString(value)));
             }
             case "interface_scale" -> {
                 TreeSet<Integer> values = new TreeSet<>(List.of(75, 85, 100, 110, 125, 140, 160));
@@ -722,18 +822,18 @@ public final class DapperMapSettingsPage
                 for (int value = 0; value <= 3; value++) entries.add(entry(displaySpeed(value), Integer.toString(value)));
             }
             case "panel_position" -> {
-                entries.add(entry("Telemetry rail — Right", Integer.toString(DynamicMinimapSetting.INFO_RIGHT)));
-                entries.add(entry("Telemetry rail — Left", Integer.toString(DynamicMinimapSetting.INFO_LEFT)));
-                entries.add(entry("Telemetry rail — Above", Integer.toString(DynamicMinimapSetting.INFO_ABOVE)));
-                entries.add(entry("Telemetry rail — Below", Integer.toString(DynamicMinimapSetting.INFO_BELOW)));
+                entries.add(entry("Right", Integer.toString(DynamicMinimapSetting.INFO_RIGHT)));
+                entries.add(entry("Left", Integer.toString(DynamicMinimapSetting.INFO_LEFT)));
+                entries.add(entry("Above", Integer.toString(DynamicMinimapSetting.INFO_ABOVE)));
+                entries.add(entry("Below", Integer.toString(DynamicMinimapSetting.INFO_BELOW)));
             }
             case "shape" -> {
                 entries.add(entry("Circle", "1"));
                 entries.add(entry("Square", "0"));
             }
             case "rotation" -> {
-                entries.add(entry("Locked North", "0"));
-                entries.add(entry("Follow player", "1"));
+                entries.add(entry("Disabled", "0"));
+                entries.add(entry("Enabled", "1"));
             }
             case "clock_format" -> {
                 entries.add(entry("24-hour", "true"));
@@ -757,7 +857,6 @@ public final class DapperMapSettingsPage
         TreeSet<Integer> values = new TreeSet<>();
         for (int value = min; value <= max; value += step) values.add(value);
         values.add(current);
-        if (" blocks above/below".equals(suffix)) values.add(4);
         for (int value : values) entries.add(entry(value + suffix, Integer.toString(value)));
     }
 
@@ -795,12 +894,35 @@ public final class DapperMapSettingsPage
 
     private static String displayPanelPosition(int panelPosition) {
         return switch (panelPosition) {
-            case DynamicMinimapSetting.INFO_LEFT -> "Telemetry rail — Left";
-            case DynamicMinimapSetting.INFO_RIGHT -> "Telemetry rail — Right";
-            case DynamicMinimapSetting.INFO_ABOVE -> "Telemetry rail — Above";
-            case DynamicMinimapSetting.INFO_BELOW -> "Telemetry rail — Below";
-            default -> "Telemetry rail — Right";
+            case DynamicMinimapSetting.INFO_LEFT -> "Left";
+            case DynamicMinimapSetting.INFO_RIGHT -> "Right";
+            case DynamicMinimapSetting.INFO_ABOVE -> "Above";
+            case DynamicMinimapSetting.INFO_BELOW -> "Below";
+            default -> "Right";
         };
+    }
+
+    private static int clampPercent(int value) {
+        return Math.max(0, Math.min(100, value));
+    }
+
+    private static int nearestPositionStop(int value) {
+        if (value < 25) return 0;
+        if (value > 75) return 100;
+        return 50;
+    }
+
+    private static String positionName(int x, int y) {
+        String vertical = y < 25 ? "TOP" : (y > 75 ? "BOTTOM" : "MIDDLE");
+        String horizontal = x < 25 ? "LEFT" : (x > 75 ? "RIGHT" : "CENTRE");
+        if ("MIDDLE".equals(vertical) && "CENTRE".equals(horizontal)) return "CENTRE";
+        return vertical + " " + horizontal;
+    }
+
+    private static String positionButtonName(int x, int y) {
+        if (y < 25) return x < 25 ? "TOP LEFT" : (x > 75 ? "TOP RIGHT" : "TOP");
+        if (y > 75) return x < 25 ? "BOTTOM LEFT" : (x > 75 ? "BOTTOM RIGHT" : "BOTTOM");
+        return x < 25 ? "LEFT" : (x > 75 ? "RIGHT" : "CENTRE");
     }
 
     private static String displaySpeed(int speed) {
@@ -817,7 +939,7 @@ public final class DapperMapSettingsPage
         return switch (id) {
             case "section_2", "players", "death", "entities", "height", "vrange",
                  "section_4", "worldmap", "bettermap" -> Tab.MARKERS;
-            case "section_1", "move_minimap", "panel_position", "section_3",
+            case "panel_position", "section_3",
                  "coordinates", "clock", "clock_format", "compass", "biome" -> Tab.INTERFACE;
             default -> Tab.DISPLAY;
         };
@@ -834,8 +956,6 @@ public final class DapperMapSettingsPage
                 new Row("rotation", "Map Rotation", Kind.DROPDOWN),
                 new Row("speed", "Update Speed", Kind.DROPDOWN),
                 new Row("texture_resolution", "Texture Resolution", Kind.DROPDOWN),
-                new Row("section_1", "POSITION", Kind.HEADER),
-                new Row("move_minimap", "Screen Position", Kind.ACTION),
                 new Row("panel_position", "Information Panel", Kind.DROPDOWN),
                 new Row("section_2", "MARKERS", Kind.HEADER),
                 new Row("players", "Player Markers", Kind.DROPDOWN),
@@ -862,6 +982,7 @@ public final class DapperMapSettingsPage
         private String action = "";
         private String value = "";
         private String target = "";
+        private int sliderValue = 0;
         private com.hypixel.hytale.protocol.Color colour;
 
         public Ev() {
@@ -895,6 +1016,8 @@ public final class DapperMapSettingsPage
                     .add()
                     .append(new KeyedCodec<>("@Target", Codec.STRING, true), (ev, value) -> ev.target = value, ev -> ev.target).add()
                     .append(new KeyedCodec<>("@Colour", new ColorCodec(), true), (ev, value) -> ev.colour = value, ev -> ev.colour).add()
+                    .append(new KeyedCodec<>("@SliderValue", Codec.INTEGER, true),
+                            (ev, value) -> ev.sliderValue = value, ev -> ev.sliderValue).add()
                     .build();
         }
     }
@@ -910,6 +1033,7 @@ public final class DapperMapSettingsPage
         DISPLAY("display", "Display"),
         MARKERS("markers", "Markers"),
         INTERFACE("interface", "Interface"),
+        POSITION("position", "Position"),
         COLOURS("colours", "Colours");
 
         final String id;

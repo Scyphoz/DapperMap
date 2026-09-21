@@ -9,12 +9,7 @@ public final class MinimapColours {
     public enum Key {
         EDGE("edge", "Frame", "Aperture Edge", "The main edge of the DapperMap aperture.", 0x7B6CFF),
         TICKS("ticks", "Frame", "Survey Marks", "The fine marks around the map aperture.", 0x57D8D0),
-        CARDINALS("cardinals", "Frame", "Bearing Labels", "The cardinal labels around the aperture.", 0x6FE8DF),
         PANEL("panel", "Panel", "Telemetry Rail", "The translucent rail holding map telemetry.", 0x111426),
-        COORDS_BACKGROUND("coords-background", "Panel", "Coordinate Chip", "The coordinate readout chip.", 0x24203D),
-        COMPASS_BACKGROUND("compass-background", "Panel", "Bearing Chip", "The facing-direction chip.", 0x1C2F3D),
-        CLOCK_BACKGROUND("clock-background", "Panel", "Time Chip", "The world-time chip.", 0x18283A),
-        BIOME_BACKGROUND("biome-background", "Panel", "Region Chip", "The current biome chip.", 0x1A2432),
         BRAND_TEXT("brand-text", "Text", "DapperMap Label", "The DapperMap instrument label.", 0xB8AEFF),
         COORDS_TEXT("coords-text", "Text", "Coordinates", "The world-coordinate text.", 0xF4F2FF),
         COMPASS_TEXT("compass-text", "Text", "Bearing", "The facing-direction text.", 0x6FE8DF),
@@ -55,7 +50,7 @@ public final class MinimapColours {
     public MinimapColours reset(Key key) { return with(key, key.defaultRgb); }
     public String frameKey() {
         StringBuilder out = new StringBuilder();
-        for (Key key : new Key[]{Key.EDGE, Key.TICKS, Key.CARDINALS})
+        for (Key key : new Key[]{Key.EDGE, Key.TICKS})
             out.append(hex(key).substring(1));
         return out.toString();
     }

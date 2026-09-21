@@ -1,40 +1,14 @@
 $C = "../Common.ui";
-
-Group {
-  Anchor: (Height: 62);
-  Background: PatchStyle(TexturePath: "DapperMapGlassRow.png", Border: 10);
-  LayoutMode: Left;
-  Padding: (Horizontal: 12, Vertical: 7);
-
-  Group #Accent {
-    Anchor: (Width: 7, Height: 7);
-    Background: #5adbd3;
+Group { Anchor: (Height: 42); LayoutMode: Left; Padding: (Left: 2, Right: 2, Vertical: 4);
+  Group #Accent { Anchor: (Width: 0); Visible: false; }
+  Group #Info { Anchor: (Width: 180); LayoutMode: Top;
+    Label #RowLabel { Anchor: (Height: 34); Style: (FontSize: 10, TextColor: #cdc7e6, HorizontalAlignment: Start, VerticalAlignment: Center); }
+    Label #RowDescription { Anchor: (Height: 0); Visible: false; }
   }
-
-  Group #Info {
-    FlexWeight: 1;
-    LayoutMode: Top;
-    Padding: (Left: 14, Right: 10);
-
-    Label #RowLabel {
-      Anchor: (Height: 23);
-      Style: (
-        FontSize: 14,
-        RenderBold: true,
-        TextColor: #d9d0f5,
-        HorizontalAlignment: Start,
-        VerticalAlignment: Center
-      );
-    }
-
-    Label #RowDescription {
-      Anchor: (Height: 19);
-      Style: (FontSize: 10, TextColor: #9997b1, HorizontalAlignment: Start, VerticalAlignment: Center);
-    }
-  }
-
-  $C.@DropdownBox #ValueDropdown {
-    @Anchor = (Width: 230, Height: 38);
-    ShowLabel: true;
+  Group { FlexWeight: 1; }
+  // The stock dropdown macro has a wide intrinsic size. A fixed parent with a
+  // full anchor constrains the actual rendered control, not only the row slot.
+  Group #ValueFrame { Anchor: (Width: 170, Height: 34); LayoutMode: Full;
+    $C.@DropdownBox #ValueDropdown { @Anchor = (Full: 0); ShowLabel: true; }
   }
 }

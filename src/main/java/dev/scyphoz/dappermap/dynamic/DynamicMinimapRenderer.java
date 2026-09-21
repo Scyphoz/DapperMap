@@ -448,6 +448,69 @@ public final class DynamicMinimapRenderer {
         } catch (Exception ignored) { return null; }
     }
 
+    /**
+     * Renders the Position-tab preview as a complete screen rather than a
+     * close-up of the HUD. The HUD image is the same settings preview used by
+     * the other tabs, scaled and placed from the draft X/Y percentages.
+     */
+    public static byte[] renderPositionPreview(DynamicMinimapSetting settings) {
+        byte[] hudPng = renderSettingsPreview(settings);
+        if (hudPng == null) return null;
+        try {
+            BufferedImage hud = ImageIO.read(new ByteArrayInputStream(hudPng));
+            if (hud == null) return null;
+
+            // renderSettingsPreview returns a transparent preview-stage canvas with the
+            // HUD centred inside it. Position the visible HUD bounds, not that canvas;
+            // otherwise its transparent margins keep corner selections near the centre.
+            int minX = hud.getWidth();
+            int minY = hud.getHeight();
+            int maxX = -1;
+            int maxY = -1;
+            for (int py = 0; py < hud.getHeight(); py++) {
+                for (int px = 0; px < hud.getWidth(); px++) {
+                    if ((hud.getRGB(px, py) >>> 24) == 0) continue;
+                    minX = Math.min(minX, px);
+                    minY = Math.min(minY, py);
+                    maxX = Math.max(maxX, px);
+                    maxY = Math.max(maxY, py);
+                }
+            }
+            if (maxX >= minX && maxY >= minY) {
+                hud = hud.getSubimage(minX, minY, maxX - minX + 1, maxY - minY + 1);
+            }
+
+            int width = 360;
+            int height = 286;
+            int inset = 8;
+            int widgetExtent = 154;
+            double widgetScale = widgetExtent / (double) Math.max(hud.getWidth(), hud.getHeight());
+            int widgetWidth = Math.max(1, (int) Math.round(hud.getWidth() * widgetScale));
+            int widgetHeight = Math.max(1, (int) Math.round(hud.getHeight() * widgetScale));
+            int x = inset + (int) Math.round((width - inset * 2 - widgetWidth)
+                    * Math.max(0, Math.min(100, settings.hudPositionX)) / 100.0D);
+            int y = inset + (int) Math.round((height - inset * 2 - widgetHeight)
+                    * Math.max(0, Math.min(100, settings.hudPositionY)) / 100.0D);
+
+            BufferedImage screen = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
+            Graphics2D g = screen.createGraphics();
+            g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            g.setColor(new Color(10, 11, 24, 222));
+            g.fillRoundRect(1, 1, width - 2, height - 2, 18, 18);
+            g.setColor(new Color(110, 101, 151, 92));
+            g.setStroke(new BasicStroke(1.2F));
+            g.drawRoundRect(1, 1, width - 3, height - 3, 18, 18);
+            g.setColor(new Color(90, 219, 211, 30));
+            g.drawLine(width / 2, 12, width / 2, height - 12);
+            g.drawLine(12, height / 2, width - 12, height / 2);
+            g.drawImage(hud, x, y, widgetWidth, widgetHeight, null);
+            g.dispose();
+            return toPng(screen);
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
     private static void drawPreviewAsset(Graphics2D g, byte[] png, double x, double y, int size) throws IOException {
         if (png == null) return;
         BufferedImage image = ImageIO.read(new ByteArrayInputStream(png));

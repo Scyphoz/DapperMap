@@ -161,7 +161,7 @@ public final class DapperMapColoursPage extends InteractiveCustomUIPage<DapperMa
             ui.set(selector + ".Background", draft.hex(Key.TICKS));
         }
 
-        int cardinals = draft.rgb(Key.CARDINALS);
+        int cardinals = draft.rgb(Key.TICKS);
         ui.set("#PreviewNorth.TextSpans", Message.raw("N").color(new java.awt.Color(cardinals)));
         ui.set("#PreviewEast.TextSpans", Message.raw("E").color(new java.awt.Color(cardinals)));
         ui.set("#PreviewSouth.TextSpans", Message.raw("S").color(new java.awt.Color(cardinals)));
@@ -169,10 +169,10 @@ public final class DapperMapColoursPage extends InteractiveCustomUIPage<DapperMa
 
         // Information panel.
         ui.set("#PreviewPanel.Background", draft.hex(Key.PANEL));
-        ui.set("#PreviewCoords.Background", draft.hex(Key.COORDS_BACKGROUND));
-        ui.set("#PreviewCompass.Background", draft.hex(Key.COMPASS_BACKGROUND));
-        ui.set("#PreviewClock.Background", draft.hex(Key.CLOCK_BACKGROUND));
-        ui.set("#PreviewBiome.Background", draft.hex(Key.BIOME_BACKGROUND));
+        ui.set("#PreviewCoords.Background", draft.hex(Key.PANEL));
+        ui.set("#PreviewCompass.Background", draft.hex(Key.PANEL));
+        ui.set("#PreviewClock.Background", draft.hex(Key.PANEL));
+        ui.set("#PreviewBiome.Background", draft.hex(Key.PANEL));
         ui.set("#PreviewBrand.TextSpans", Message.raw("DapperMap").color(new java.awt.Color(draft.rgb(Key.BRAND_TEXT))));
         ui.set("#PreviewCoordsText.TextSpans", Message.raw("X 124  Y 67  Z -302").color(new java.awt.Color(draft.rgb(Key.COORDS_TEXT))));
         ui.set("#PreviewCompassText.TextSpans", Message.raw("NW 315°").color(new java.awt.Color(draft.rgb(Key.COMPASS_TEXT))));
@@ -266,17 +266,13 @@ public final class DapperMapColoursPage extends InteractiveCustomUIPage<DapperMa
                 ui.set("#PreviewTickBottom.Background", colour);
                 ui.set("#PreviewTickLeft.Background", colour);
             }
-            case CARDINALS -> {
-                ui.set("#PreviewNorth.TextSpans", coloured("N", rgb));
-                ui.set("#PreviewEast.TextSpans", coloured("E", rgb));
-                ui.set("#PreviewSouth.TextSpans", coloured("S", rgb));
-                ui.set("#PreviewWest.TextSpans", coloured("W", rgb));
+            case PANEL -> {
+                ui.set("#PreviewPanel.Background", colour);
+                ui.set("#PreviewCoords.Background", colour);
+                ui.set("#PreviewCompass.Background", colour);
+                ui.set("#PreviewClock.Background", colour);
+                ui.set("#PreviewBiome.Background", colour);
             }
-            case PANEL -> ui.set("#PreviewPanel.Background", colour);
-            case COORDS_BACKGROUND -> ui.set("#PreviewCoords.Background", colour);
-            case COMPASS_BACKGROUND -> ui.set("#PreviewCompass.Background", colour);
-            case CLOCK_BACKGROUND -> ui.set("#PreviewClock.Background", colour);
-            case BIOME_BACKGROUND -> ui.set("#PreviewBiome.Background", colour);
             case BRAND_TEXT -> ui.set("#PreviewBrand.TextSpans", coloured("DapperMap", rgb));
             case COORDS_TEXT -> ui.set("#PreviewCoordsText.TextSpans", coloured("X 124  Y 67  Z -302", rgb));
             case COMPASS_TEXT -> ui.set("#PreviewCompassText.TextSpans", coloured("NW 315°", rgb));
