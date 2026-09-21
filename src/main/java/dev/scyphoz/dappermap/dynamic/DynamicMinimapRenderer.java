@@ -280,7 +280,7 @@ public final class DynamicMinimapRenderer {
                                          int sidePanelWidth, int panelHeight, int gap) {
         boolean side = settings.infoPanelPosition == DynamicMinimapSetting.INFO_LEFT
                 || settings.infoPanelPosition == DynamicMinimapSetting.INFO_RIGHT;
-        int panelWidth = side ? sidePanelWidth : mapSize;
+        int panelWidth = sidePanelWidth;
         int width = side ? mapSize + gap + panelWidth : Math.max(mapSize, panelWidth);
         int height = side ? Math.max(mapSize, panelHeight) : mapSize + gap + panelHeight;
 
@@ -346,7 +346,7 @@ public final class DynamicMinimapRenderer {
 
             boolean side = settings.infoPanelPosition == DynamicMinimapSetting.INFO_LEFT
                     || settings.infoPanelPosition == DynamicMinimapSetting.INFO_RIGHT;
-            int panelWidth = side ? sidePanelWidth : mapSize;
+            int panelWidth = sidePanelWidth;
             int mapX = settings.infoPanelPosition == DynamicMinimapSetting.INFO_LEFT
                     ? panelWidth + gap : (side ? 0
                     : Math.max(0, (overlay.getWidth() - mapSize) / 2));
@@ -385,7 +385,7 @@ public final class DynamicMinimapRenderer {
         DynamicMinimapSetting preview = settings.copy();
         preview.normalize();
         int mapSize = Math.max(180, Math.min(256, preview.sizePixels));
-        int panelWidth = 164;
+        int panelWidth = 148;
         int gap = preview.isCircle() ? 8 : 16;
         int panelHeight = 24 + 12;
         if (preview.showCoordinates) panelHeight += 43;

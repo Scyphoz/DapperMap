@@ -19,7 +19,8 @@ public final class DynamicMinimapHud extends CustomUIHud {
     private static final int HUD_MARGIN = 10;
     private static final int SQUARE_READOUT_GAP = 16;
     private static final int CIRCLE_READOUT_GAP = 8;
-    private static final int READOUT_WIDTH = 164;
+    /** Compact concept-style telemetry rail used in every panel orientation. */
+    private static final int READOUT_WIDTH = 148;
     private static final int READOUT_PADDING_V = 6;
     private static final int BRAND_HEIGHT = 24;
     private static final int COORDS_HEIGHT = 43;
@@ -766,7 +767,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
     }
 
     private int readoutLogicalWidth() {
-        return this.isSideRail() ? READOUT_WIDTH : this.logicalUiSize;
+        return READOUT_WIDTH;
     }
 
     private boolean isSideRail() {
