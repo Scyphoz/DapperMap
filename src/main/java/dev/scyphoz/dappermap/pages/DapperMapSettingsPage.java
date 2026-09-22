@@ -35,13 +35,13 @@ import java.util.TreeSet;
 import com.hypixel.hytale.server.core.ui.DropdownEntryInfo;
 import com.hypixel.hytale.server.core.ui.LocalizableString;
 
+/** Tabbed settings editor used for both player preferences and administrator defaults. */
 public final class DapperMapSettingsPage
         extends InteractiveCustomUIPage<DapperMapSettingsPage.Ev> {
 
     private static final Color GOLD = new Color(16766571);
     private static final Color BLUE = new Color(10345727);
     private static final Color GREEN = new Color(5757323);
-    private static final Color GRAY = new Color(8491684);
     private static final Color VIOLET = new Color(0xB8AEFF);
     private static final Color MUTED = new Color(0x7F89A3);
 
@@ -54,6 +54,11 @@ public final class DapperMapSettingsPage
     );
 
     private static final Row[] ROWS;
+    private static final List<String> PLAYER_SETTING_PERMISSIONS = List.of(
+            "toggle", "zoom", "size", "scale", "shape", "rotation", "speed", "resolution",
+            "panel", "markers", "height", "height-range", "coordinates", "clock", "compass",
+            "biome", "integration", "colours", "position"
+    );
 
     private final PlayerRef playerRef;
     private final MinimapSessionManager sessions;
@@ -137,8 +142,10 @@ public final class DapperMapSettingsPage
             String slot = "#DapperMapTab" + tab.label + "ButtonSlot";
             builder.append(slot, "Pages/BasicTextButton.ui");
             builder.set(slot + "[0].TextSpans", Message.raw(""));
-            events.addEventBinding(CustomUIEventBindingType.Activating, slot + "[0]",
-                    EventData.of("Action", "tab_" + tab.id), false);
+            if (this.canOpenTab(tab)) {
+                events.addEventBinding(CustomUIEventBindingType.Activating, slot + "[0]",
+                        EventData.of("Action", "tab_" + tab.id), false);
+            }
         }
         this.updateNavigationLabels(builder);
     }
@@ -162,10 +169,16 @@ public final class DapperMapSettingsPage
     private void updateEditorAvailability(UICommandBuilder builder, DynamicMinimapSetting settings) {
         boolean colours = this.activeTab == Tab.COLOURS;
         boolean position = this.activeTab == Tab.POSITION;
-        builder.set("#DapperMapColourEditor.Visible", colours && settings.enabled);
-        builder.set("#ColourDisabledNotice.Visible", colours && !settings.enabled);
-        builder.set("#DapperMapPositionEditor.Visible", position && settings.enabled);
-        builder.set("#PositionDisabledNotice.Visible", position && !settings.enabled);
+        boolean canEditColours = this.hasSettingPermission("colours");
+        boolean canEditPosition = this.hasSettingPermission("position");
+        builder.set("#DapperMapColourEditor.Visible", colours && settings.enabled && canEditColours);
+        builder.set("#ColourDisabledNotice.Visible", colours && (!settings.enabled || !canEditColours));
+        builder.set("#ColourDisabledNotice.Text", canEditColours
+                ? "ENABLE THE MINIMAP TO EDIT COLOURS" : "PERMISSION REQUIRED TO EDIT COLOURS");
+        builder.set("#DapperMapPositionEditor.Visible", position && settings.enabled && canEditPosition);
+        builder.set("#PositionDisabledNotice.Visible", position && (!settings.enabled || !canEditPosition));
+        builder.set("#PositionDisabledNotice.Text", canEditPosition
+                ? "ENABLE THE MINIMAP TO EDIT POSITION" : "PERMISSION REQUIRED TO EDIT POSITION");
     }
 
     private void bindColourEditor(UICommandBuilder builder, UIEventBuilder events, DynamicMinimapSetting settings) {
@@ -176,16 +189,21 @@ public final class DapperMapSettingsPage
         builder.set("#ColourPicker.Color", settings.colours.hex(this.selectedColour));
         builder.set("#ColourDescription.Text", this.selectedColour.description);
         builder.set("#ColourHex.Text", settings.colours.hex(this.selectedColour));
-        events.addEventBinding(CustomUIEventBindingType.ValueChanged, "#ColourTarget",
-                EventData.of("Action", "colour_target").append("@Target", "#ColourTarget.Value"), false);
-        events.addEventBinding(CustomUIEventBindingType.ValueChanged, "#ColourPicker",
-                EventData.of("Action", "colour_value").append("@Colour", "#ColourPicker.Color"), false);
+        boolean allowed = this.hasSettingPermission("colours");
+        if (allowed) {
+            events.addEventBinding(CustomUIEventBindingType.ValueChanged, "#ColourTarget",
+                    EventData.of("Action", "colour_target").append("@Target", "#ColourTarget.Value"), false);
+            events.addEventBinding(CustomUIEventBindingType.ValueChanged, "#ColourPicker",
+                    EventData.of("Action", "colour_value").append("@Colour", "#ColourPicker.Color"), false);
+        }
         builder.append("#ColourResetButtonSlot", "Pages/BasicTextButton.ui");
         builder.set("#ColourResetButtonSlot[0].TextSpans", Message.raw(""));
-        events.addEventBinding(CustomUIEventBindingType.Activating, "#ColourResetButtonSlot[0]", EventData.of("Action", "colour_reset"), false);
+        if (allowed) events.addEventBinding(CustomUIEventBindingType.Activating,
+                "#ColourResetButtonSlot[0]", EventData.of("Action", "colour_reset"), false);
         builder.append("#ColourResetAllButtonSlot", "Pages/BasicTextButton.ui");
         builder.set("#ColourResetAllButtonSlot[0].TextSpans", Message.raw(""));
-        events.addEventBinding(CustomUIEventBindingType.Activating, "#ColourResetAllButtonSlot[0]", EventData.of("Action", "colour_reset_all"), false);
+        if (allowed) events.addEventBinding(CustomUIEventBindingType.Activating,
+                "#ColourResetAllButtonSlot[0]", EventData.of("Action", "colour_reset_all"), false);
     }
 
     private void refreshColourEditor(UICommandBuilder builder, DynamicMinimapSetting settings, boolean syncPicker) {
@@ -197,6 +215,7 @@ public final class DapperMapSettingsPage
 
     private void bindPositionEditor(UICommandBuilder builder, UIEventBuilder events,
                                     DynamicMinimapSetting settings) {
+        boolean allowed = this.hasSettingPermission("position");
         String[] labels = {"Horizontal Position", "Vertical Position"};
         String[] actions = {"position_slider_x", "position_slider_y"};
         for (int index = 0; index < labels.length; index++) {
@@ -204,17 +223,21 @@ public final class DapperMapSettingsPage
             builder.append("#PositionFineTuneList", "Pages/DapperMapSliderRow.ui");
             builder.set(row + " #RowLabel.Text", labels[index]);
             builder.set(row + " #RowDescription.Text", "");
-            events.addEventBinding(CustomUIEventBindingType.ValueChanged, row + " #ValueSlider",
-                    EventData.of("Action", actions[index])
-                            .append("@SliderValue", row + " #ValueSlider.Value"), false);
+            if (allowed) {
+                events.addEventBinding(CustomUIEventBindingType.ValueChanged, row + " #ValueSlider",
+                        EventData.of("Action", actions[index])
+                                .append("@SliderValue", row + " #ValueSlider.Value"), false);
+            }
         }
         for (int row = 0; row < POSITION_STOPS.length; row++) {
             for (int column = 0; column < POSITION_STOPS.length; column++) {
                 String slot = "#PositionSlot" + row + column + "Button";
                 builder.append(slot, "Pages/BasicTextButton.ui");
                 builder.set(slot + "[0].TextSpans", Message.raw(""));
-                events.addEventBinding(CustomUIEventBindingType.Activating, slot + "[0]",
-                        EventData.of("Action", "position_" + POSITION_STOPS[column] + "_" + POSITION_STOPS[row]), false);
+                if (allowed) {
+                    events.addEventBinding(CustomUIEventBindingType.Activating, slot + "[0]",
+                            EventData.of("Action", "position_" + POSITION_STOPS[column] + "_" + POSITION_STOPS[row]), false);
+                }
             }
         }
         this.updatePositionEditor(builder, settings, true);
@@ -270,7 +293,8 @@ public final class DapperMapSettingsPage
             boolean selected = tab == this.activeTab;
             builder.set("#DapperMapTab" + tab.label + "Active.Visible", selected);
             builder.set("#DapperMapTab" + tab.label + "Label.TextSpans",
-                    Message.raw(tab.label.toUpperCase()).color(selected ? VIOLET : MUTED));
+                    Message.raw(tab.label.toUpperCase()).color(selected ? VIOLET
+                            : this.canOpenTab(tab) ? MUTED : new Color(0x555B6D)));
         }
     }
 
@@ -283,18 +307,22 @@ public final class DapperMapSettingsPage
                 "Pages/BasicTextButton.ui"
         );
 
+        boolean canReset = this.hasSettingPermission("reset");
         builder.set(
                 "#DapperMapResetButtonLabel.TextSpans",
-                Message.raw(this.adminMode ? "RESET TO MOD DEFAULTS" : "RESET TO DEFAULTS").color(GOLD)
+                Message.raw(this.adminMode ? "RESET TO MOD DEFAULTS" : "RESET TO DEFAULTS")
+                        .color(canReset ? GOLD : new Color(0x666A78))
         );
         builder.set("#DapperMapResetButtonSlot[0].TextSpans", Message.raw(""));
 
-        events.addEventBinding(
-                CustomUIEventBindingType.Activating,
-                "#DapperMapResetButtonSlot[0]",
-                EventData.of("Action", "reset_defaults"),
-                false
-        );
+        if (canReset) {
+            events.addEventBinding(
+                    CustomUIEventBindingType.Activating,
+                    "#DapperMapResetButtonSlot[0]",
+                    EventData.of("Action", "reset_defaults"),
+                    false
+            );
+        }
 
         builder.append("#DapperMapCloseButtonSlot", "Pages/BasicTextButton.ui");
         builder.set("#DapperMapCloseButtonSlot[0].TextSpans", Message.raw(""));
@@ -316,6 +344,97 @@ public final class DapperMapSettingsPage
         }
     }
 
+    /** Returns whether this page may edit the named player-setting permission. */
+    private boolean hasSettingPermission(String permission) {
+        return this.adminMode || permission == null
+                || this.playerRef.hasPermission(DapperMapPermissions.player(permission));
+    }
+
+    private boolean canOpenTab(Tab tab) {
+        return switch (tab) {
+            case COLOURS -> this.hasSettingPermission("colours");
+            case POSITION -> this.hasSettingPermission("position");
+            default -> true;
+        };
+    }
+
+    /** Maps UI-only row identifiers onto the canonical command permission nodes. */
+    private static String permissionForSetting(String id) {
+        return switch (id) {
+            case "enabled" -> "toggle";
+            case "interface_scale" -> "scale";
+            case "texture_resolution" -> "resolution";
+            case "panel_position", "panel_alignment" -> "panel";
+            case "players", "entities", "death", "worldmap" -> "markers";
+            case "vrange" -> "height-range";
+            case "clock_format" -> "clock";
+            case "bettermap" -> "integration";
+            case "move_minimap" -> "position";
+            default -> id;
+        };
+    }
+
+    private static String permissionForAction(String action) {
+        if (action.startsWith("position_")) return "position";
+        if (action.startsWith("colour_")) return "colours";
+        if (action.startsWith("toggle_")) {
+            return permissionForSetting(action.substring("toggle_".length()));
+        }
+        if (action.startsWith("dropdown_")) {
+            return permissionForSetting(action.substring("dropdown_".length()));
+        }
+        return null;
+    }
+
+    private boolean hasAllSettingPermissions() {
+        return this.adminMode || PLAYER_SETTING_PERMISSIONS.stream().allMatch(this::hasSettingPermission);
+    }
+
+    /**
+     * Copies only values that the player may edit. This is the authoritative server-side
+     * guard for Apply/Reset; disabled controls and missing event bindings are presentation.
+     */
+    private DynamicMinimapSetting mergePermittedSettings(
+            DynamicMinimapSetting target,
+            DynamicMinimapSetting source
+    ) {
+        if (this.hasSettingPermission("toggle")) target.enabled = source.enabled;
+        if (this.hasSettingPermission("zoom")) target.zoomBlocks = source.zoomBlocks;
+        if (this.hasSettingPermission("size")) target.sizePixels = source.sizePixels;
+        if (this.hasSettingPermission("scale")) target.interfaceScalePercent = source.interfaceScalePercent;
+        if (this.hasSettingPermission("shape")) target.shape = source.shape;
+        if (this.hasSettingPermission("rotation")) target.rotationMode = source.rotationMode;
+        if (this.hasSettingPermission("speed")) target.updateSpeed = source.updateSpeed;
+        if (this.hasSettingPermission("resolution")) target.textureResolution = source.textureResolution;
+        if (this.hasSettingPermission("panel")) {
+            target.infoPanelPosition = source.infoPanelPosition;
+            target.infoPanelTextAlignment = source.infoPanelTextAlignment;
+        }
+        if (this.hasSettingPermission("markers")) {
+            target.showOtherPlayers = source.showOtherPlayers;
+            target.showEntities = source.showEntities;
+            target.showDeathMarker = source.showDeathMarker;
+            target.showWorldMapMarkers = source.showWorldMapMarkers;
+        }
+        if (this.hasSettingPermission("height")) target.limitMobHeight = source.limitMobHeight;
+        if (this.hasSettingPermission("height-range")) target.mobVerticalRange = source.mobVerticalRange;
+        if (this.hasSettingPermission("position")) {
+            target.hudPositionX = source.hudPositionX;
+            target.hudPositionY = source.hudPositionY;
+        }
+        if (this.hasSettingPermission("clock")) {
+            target.showClock = source.showClock;
+            target.clock24Hour = source.clock24Hour;
+        }
+        if (this.hasSettingPermission("coordinates")) target.showCoordinates = source.showCoordinates;
+        if (this.hasSettingPermission("compass")) target.showCompass = source.showCompass;
+        if (this.hasSettingPermission("biome")) target.showBiome = source.showBiome;
+        if (this.hasSettingPermission("integration")) target.betterMapEnabled = source.betterMapEnabled;
+        if (this.hasSettingPermission("colours")) target.colours = source.colours;
+        target.normalize();
+        return target;
+    }
+
     private void renderList(
             UICommandBuilder builder,
             UIEventBuilder events,
@@ -332,10 +451,16 @@ public final class DapperMapSettingsPage
                 builder.append("#DapperMapSettingsList", "Pages/DapperMapSectionRow.ui");
                 builder.set("#DapperMapSettingsList[" + index + "] #SectionLabel.Text", row.label);
             } else if (row.kind == Kind.TOGGLE) {
-                if (isControlDisabled(row.id, settings)) this.disabledRow(builder, index, row, settings);
+                if (!this.hasSettingPermission(permissionForSetting(row.id))
+                        || isControlDisabled(row.id, settings)) {
+                    this.disabledRow(builder, index, row, settings);
+                }
                 else this.toggleRow(builder, events, index, row, settings);
             } else if (row.kind == Kind.DROPDOWN) {
-                if (isControlDisabled(row.id, settings)) this.disabledRow(builder, index, row, settings);
+                if (!this.hasSettingPermission(permissionForSetting(row.id))
+                        || isControlDisabled(row.id, settings)) {
+                    this.disabledRow(builder, index, row, settings);
+                }
                 else if (isBooleanToggle(row.id)) this.toggleRow(builder, events, index, row, settings);
                 else this.dropdownRow(builder, events, index, row, settings);
             } else if (row.kind == Kind.ACTION) {
@@ -350,17 +475,19 @@ public final class DapperMapSettingsPage
         builder.append("#DapperMapSettingsList", "Pages/DapperMapDisabledDropdownRow.ui");
         builder.set(selector + " #RowLabel.Text", row.label);
         builder.set(selector + " #RowDescription.Text", description(row.id));
-        builder.set(selector + " #ValueLabel.Text", disabledValue(row.id, settings));
+        builder.set(selector + " #ValueLabel.Text",
+                this.hasSettingPermission(permissionForSetting(row.id))
+                        ? disabledValue(row.id, settings) : "Permission denied");
     }
 
     private void actionRow(UICommandBuilder builder, UIEventBuilder events,
                            int index, Row row, DynamicMinimapSetting settings) {
         String selector = "#DapperMapSettingsList[" + index + "]";
-        if (!settings.enabled) {
+        if (!settings.enabled || !this.hasSettingPermission(permissionForSetting(row.id))) {
             builder.append("#DapperMapSettingsList", "Pages/DapperMapDisabledDropdownRow.ui");
             builder.set(selector + " #RowLabel.Text", row.label);
             builder.set(selector + " #RowDescription.Text", description(row.id));
-            builder.set(selector + " #ValueLabel.Text", row.label);
+            builder.set(selector + " #ValueLabel.Text", settings.enabled ? "Permission denied" : row.label);
             return;
         }
         builder.append("#DapperMapSettingsList", "Pages/DapperMapMoveRow.ui");
@@ -499,10 +626,13 @@ public final class DapperMapSettingsPage
             this.draftSettings.normalize();
             if (this.adminMode) {
                 this.sessions.setAdminDefaults(this.draftSettings.copy());
-            } else if (this.draftResetsPlayerOverride) {
+            } else if (this.draftResetsPlayerOverride && this.hasAllSettingPermissions()) {
                 this.sessions.resetSettings(this.playerRef, this.config);
             } else {
-                this.sessions.applySettings(this.playerRef, this.draftSettings.copy());
+                DynamicMinimapSetting live = this.sessions
+                        .getSettings(this.playerRef.getUuid(), this.config).copy();
+                this.sessions.applySettings(this.playerRef,
+                        this.mergePermittedSettings(live, this.draftSettings));
             }
             Player player = store.getComponent(ref, Player.getComponentType());
             if (player == null) return;
@@ -536,7 +666,7 @@ public final class DapperMapSettingsPage
 
         if (action.startsWith("tab_")) {
             Tab requested = Tab.find(action.substring("tab_".length()));
-            if (requested == null || requested == this.activeTab) return;
+            if (requested == null || requested == this.activeTab || !this.canOpenTab(requested)) return;
             this.activeTab = requested;
             DynamicMinimapSetting current = this.draftSettings;
             UICommandBuilder navBuilder = new UICommandBuilder();
@@ -553,11 +683,17 @@ public final class DapperMapSettingsPage
         }
 
         if ("reset_defaults".equals(action)) {
+            if (!this.hasSettingPermission("reset")) return;
             DynamicMinimapSetting reset = this.adminMode
                     ? DynamicMinimapSetting.fromConfig(this.config)
                     : this.sessions.getAdminDefaults(this.config).copy();
-            this.draftSettings = reset.copy();
-            this.draftResetsPlayerOverride = !this.adminMode;
+            DynamicMinimapSetting current = this.draftSettings == null
+                    ? this.sessions.getSettings(this.playerRef.getUuid(), this.config).copy()
+                    : this.draftSettings.copy();
+            this.draftSettings = this.adminMode
+                    ? reset.copy() : this.mergePermittedSettings(current, reset);
+            this.draftResetsPlayerOverride = !this.adminMode && this.hasAllSettingPermissions();
+            reset = this.draftSettings;
             UICommandBuilder resetBuilder = new UICommandBuilder();
             UIEventBuilder resetEvents = new UIEventBuilder();
             this.renderList(resetBuilder, resetEvents, reset);
@@ -571,6 +707,9 @@ public final class DapperMapSettingsPage
 
         DynamicMinimapSetting settings = this.draftSettings;
         if (settings == null) return;
+
+        String requiredPermission = permissionForAction(action);
+        if (requiredPermission != null && !this.hasSettingPermission(requiredPermission)) return;
 
         if (!settings.enabled
                 && !"toggle_enabled".equals(action)
@@ -867,12 +1006,6 @@ public final class DapperMapSettingsPage
         values.add(current);
         for (int value : values) entries.add(entry(value + suffix, Integer.toString(value)));
     }
-
-    private static Message toggleButton(String id, DynamicMinimapSetting settings) {
-        return Message.raw(settings.enabled ? "ENABLED" : "DISABLED").color(settings.enabled ? GREEN : GRAY);
-    }
-
-
 
     private static String dropdownValue(String id, DynamicMinimapSetting settings) {
         return switch (id) {

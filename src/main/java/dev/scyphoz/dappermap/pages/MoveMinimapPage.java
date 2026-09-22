@@ -18,6 +18,7 @@ import com.hypixel.hytale.server.core.universe.world.storage.EntityStore;
 import dev.scyphoz.dappermap.config.MinimapConfig;
 import dev.scyphoz.dappermap.dynamic.DynamicMinimapSetting;
 import dev.scyphoz.dappermap.service.MinimapSessionManager;
+import dev.scyphoz.dappermap.permissions.DapperMapPermissions;
 
 import java.awt.Color;
 
@@ -88,7 +89,7 @@ public final class MoveMinimapPage
             UIEventBuilder events,
             Store<EntityStore> store
     ) {
-        if (adminMode && !playerRef.hasPermission(DapperMapSettingsPage.ADMIN_PERMISSION)) return;
+        if (!this.canEdit()) return;
         builder.append(adminMode ? "Pages/DapperMapAdminMoveMinimap.ui" : "Pages/DapperMapMoveMinimap.ui");
 
         builder.clear("#MovePreviewCanvas");
@@ -232,6 +233,7 @@ public final class MoveMinimapPage
             Store<EntityStore> store,
             Ev event
     ) {
+        if (!this.canEdit()) return;
         String action = event.action;
         if (action == null || action.isEmpty()) {
             return;
@@ -327,6 +329,12 @@ public final class MoveMinimapPage
         );
 
         this.sendUpdate(builder, events, false);
+    }
+
+    private boolean canEdit() {
+        return this.adminMode
+                ? this.playerRef.hasPermission(DapperMapSettingsPage.ADMIN_PERMISSION)
+                : this.playerRef.hasPermission(DapperMapPermissions.player("position"));
     }
 
     private String buildPreviewMarkup() {

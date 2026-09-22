@@ -2,6 +2,7 @@ package dev.scyphoz.dappermap.dynamic;
 
 import dev.scyphoz.dappermap.config.MinimapConfig;
 
+/** Mutable per-player (or administrator-default) settings consumed by every minimap subsystem. */
 public final class DynamicMinimapSetting {
     public static final int SHAPE_SQUARE = 0;
     public static final int SHAPE_CIRCLE = 1;
@@ -69,11 +70,6 @@ public final class DynamicMinimapSetting {
     public boolean showBiome = true;
     /** Show BetterMap waypoints on the minimap when BetterMap is installed. */
     public boolean betterMapEnabled = true;
-    public static final int UPDATE_VERY_FAST = 0;
-    public static final int UPDATE_FAST = 1;
-    public static final int UPDATE_NORMAL = 2;
-    public static final int UPDATE_SLOW = 3;
-
     public DynamicMinimapSetting() {
     }
 
@@ -202,17 +198,17 @@ public final class DynamicMinimapSetting {
         long var10000;
         switch (this.updateSpeed) {
             case 0:
-                var10000 = 50L;
+                var10000 = 40L;   // 25 Hz
                 break;
             case 1:
-                var10000 = 75L;
+                var10000 = 75L;   // ~13 Hz
                 break;
             case 2:
             default:
-                var10000 = 125L;
+                var10000 = 150L;  // ~7 Hz
                 break;
             case 3:
-                var10000 = 200L;
+                var10000 = 300L;  // ~3 Hz
         }
 
         return var10000;
@@ -225,14 +221,14 @@ public final class DynamicMinimapSetting {
                 var10000 = 50L;   // 20 Hz
                 break;
             case 1:
-                var10000 = 75L;   // ~13 Hz
+                var10000 = 100L;  // 10 Hz
                 break;
             case 2:
             default:
-                var10000 = 125L;  // 8 Hz
+                var10000 = 250L;  // 4 Hz
                 break;
             case 3:
-                var10000 = 250L;  // 4 Hz
+                var10000 = 500L;  // 2 Hz
         }
 
         return var10000;
@@ -242,17 +238,17 @@ public final class DynamicMinimapSetting {
         long var10000;
         switch (this.updateSpeed) {
             case 0:
-                var10000 = 200L;
+                var10000 = 150L;
                 break;
             case 1:
-                var10000 = 350L;
+                var10000 = 300L;
                 break;
             case 2:
             default:
-                var10000 = 600L;
+                var10000 = 750L;
                 break;
             case 3:
-                var10000 = 1000L;
+                var10000 = 1500L;
         }
 
         return var10000;
@@ -262,17 +258,17 @@ public final class DynamicMinimapSetting {
         long var10000;
         switch (this.updateSpeed) {
             case 0:
-                var10000 = 450L;
+                var10000 = 300L;
                 break;
             case 1:
-                var10000 = 650L;
+                var10000 = 600L;
                 break;
             case 2:
             default:
-                var10000 = 1000L;
+                var10000 = 1200L;
                 break;
             case 3:
-                var10000 = 1750L;
+                var10000 = 2500L;
         }
 
         return var10000;

@@ -27,6 +27,10 @@ import javax.annotation.Nonnull;
 import java.util.Arrays;
 import java.util.stream.Collectors;
 
+/**
+ * Builds the player and administrator command trees and routes both trees through the
+ * same setting parsers while keeping their permission scopes and persistence targets separate.
+ */
 public class MinimapCommand extends AbstractPlayerCommand {
     private final MinimapSessionManager sessions;
 

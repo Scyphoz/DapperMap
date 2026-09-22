@@ -33,11 +33,11 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import org.joml.Vector3d;
 
+/**
+ * Runs one player's minimap update loop, coordinating terrain renders, marker scans,
+ * dynamic-asset delivery and incremental HUD updates.
+ */
 public final class DynamicMinimapSession {
-    private static final long INITIAL_DELAY_MS = 500L;
-    private static final double RECENTER_FRAC = 0.8;
-    private static final long WARMUP_MS = 1000L;
-    private static final long WARMUP_TOTAL_MS = 15000L;
     private static final int SELF_BUCKETS = DynamicMinimapRenderer.ROTATION_BUCKETS;
     private static final ExecutorService RENDER_POOL = Executors.newFixedThreadPool(Math.max(2, Runtime.getRuntime().availableProcessors() / 4), (runnable) -> {
         Thread thread = new Thread(runnable, "DapperMap-Render");

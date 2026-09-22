@@ -29,6 +29,7 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import javax.imageio.ImageIO;
 
+/** Pure rendering utilities for terrain, HUD chrome, previews and marker PNG assets. */
 public final class DynamicMinimapRenderer {
     // Fixed visual colours that are intentionally not part of the player palette.
     private static final Color FIXED_MAP_BACKGROUND = new Color(0x0A1218);
@@ -207,10 +208,6 @@ public final class DynamicMinimapRenderer {
         }
 
         return png;
-    }
-
-    public static byte[] renderFrame(DynamicMinimapSetting settings) {
-        return renderFrame(settings, 0.0D);
     }
 
     /**
@@ -760,58 +757,6 @@ public final class DynamicMinimapRenderer {
         return path;
     }
 
-    private static void drawConnectorDivider(Graphics2D graphics, DynamicMinimapSetting settings,
-                                             int mapX, int mapY, int mapSize, int gap,
-                                             Color survey, Color edge) {
-        graphics.setStroke(new BasicStroke(2.2F, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
-        graphics.setColor(edge);
-        int position = settings.infoPanelPosition;
-        if (settings.isCircle()) {
-            double start = switch (position) {
-                case DynamicMinimapSetting.INFO_LEFT -> 125.0D;
-                case DynamicMinimapSetting.INFO_BELOW -> 215.0D;
-                case DynamicMinimapSetting.INFO_ABOVE -> 35.0D;
-                default -> -55.0D;
-            };
-            // The frame arc itself is inset four pixels from the map bounds.
-            // Compensate for that inset before moving it into the transparent
-            // gap, otherwise an eight-pixel circle gap hides the arc in-frame.
-            double dividerOffset = gap / 2.0D + 4.0D;
-            double offsetX = position == DynamicMinimapSetting.INFO_LEFT ? -dividerOffset
-                    : position == DynamicMinimapSetting.INFO_RIGHT ? dividerOffset : 0.0D;
-            double offsetY = position == DynamicMinimapSetting.INFO_ABOVE ? -dividerOffset
-                    : position == DynamicMinimapSetting.INFO_BELOW ? dividerOffset : 0.0D;
-            graphics.draw(new Arc2D.Double(mapX + 3 + offsetX, mapY + 3 + offsetY,
-                    mapSize - 7, mapSize - 7,
-                    start, 110.0D, Arc2D.OPEN));
-        } else {
-            int inset = Math.max(24, mapSize / 5);
-            if (position == DynamicMinimapSetting.INFO_LEFT || position == DynamicMinimapSetting.INFO_RIGHT) {
-                int x = position == DynamicMinimapSetting.INFO_LEFT
-                        ? mapX - gap / 2 : mapX + mapSize + gap / 2;
-                graphics.drawLine(x, mapY + inset, x, mapY + mapSize - inset);
-            } else {
-                int y = position == DynamicMinimapSetting.INFO_ABOVE
-                        ? mapY - gap / 2 : mapY + mapSize + gap / 2;
-                graphics.drawLine(mapX + inset, y, mapX + mapSize - inset, y);
-            }
-        }
-
-        graphics.setColor(survey);
-        int node = 5;
-        if (position == DynamicMinimapSetting.INFO_LEFT || position == DynamicMinimapSetting.INFO_RIGHT) {
-            int x = position == DynamicMinimapSetting.INFO_LEFT
-                    ? mapX - gap / 2 - node / 2 : mapX + mapSize + gap / 2 - node / 2;
-            graphics.fillOval(x, mapY + mapSize / 2 - node / 2, node, node);
-        } else {
-            int y = position == DynamicMinimapSetting.INFO_ABOVE
-                    ? mapY - gap / 2 - node / 2 : mapY + mapSize + gap / 2 - node / 2;
-            graphics.fillOval(mapX + mapSize / 2 - node / 2, y, node, node);
-        }
-    }
-
-    public static byte[] renderDot(int rgb) { return renderDot(rgb, new MinimapColours()); }
-
     public static byte[] renderDot(int rgb, MinimapColours colours) {
         BufferedImage image = new BufferedImage(32, 32, 2);
         Graphics2D graphics = image.createGraphics();
@@ -825,8 +770,6 @@ public final class DynamicMinimapRenderer {
         graphics.dispose();
         return toPng(image);
     }
-
-    public static byte[] renderDeath() { return renderDeath(new MinimapColours()); }
 
     public static byte[] renderDeath(MinimapColours colours) {
         BufferedImage image = new BufferedImage(32, 32, 2);
@@ -844,8 +787,6 @@ public final class DynamicMinimapRenderer {
         graphics.dispose();
         return toPng(image);
     }
-
-    public static byte[] renderSelfArrow(double angle) { return renderSelfArrow(angle, new MinimapColours()); }
 
     public static byte[] renderSelfArrow(double angle, MinimapColours colours) {
         BufferedImage image = new BufferedImage(40, 40, 2);
@@ -1055,21 +996,6 @@ public final class DynamicMinimapRenderer {
         graphics.setStroke(new BasicStroke(width, 1, 1));
         graphics.setColor(color);
         graphics.drawLine(x1, y1, x2, y2);
-    }
-
-    private static void drawNorthNeedle(Graphics2D graphics, int center, int top, MinimapColours colours) {
-        Path2D.Double needle = new Path2D.Double();
-        needle.moveTo((double)center, (double)top);
-        needle.lineTo((double)(center + 5), (double)(top + 11));
-        needle.lineTo((double)center, (double)(top + 8));
-        needle.lineTo((double)(center - 5), (double)(top + 11));
-        needle.closePath();
-        graphics.setColor(withAlpha(FIXED_FRAME_SHADOW, 190));
-        graphics.translate(1, 1);
-        graphics.fill(needle);
-        graphics.translate(-1, -1);
-        graphics.setColor(colours.awt(EDGE, 255));
-        graphics.fill(needle);
     }
 
     private static void drawCornerBracket(Graphics2D graphics, int x, int y, int xDir, int yDir, MinimapColours colours) {

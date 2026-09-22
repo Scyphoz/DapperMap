@@ -9,6 +9,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+/** Persists normalized player settings as small JSON files and caches active values in memory. */
 public final class DynamicMinimapSettingsStore {
     private final Path dataDir;
     private final ConcurrentHashMap<UUID, DynamicMinimapSetting> cache = new ConcurrentHashMap();

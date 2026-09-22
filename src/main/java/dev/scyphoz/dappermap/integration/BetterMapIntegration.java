@@ -8,7 +8,6 @@ import com.hypixel.hytale.server.core.universe.world.worldmap.markers.user.UserM
 import dev.scyphoz.dappermap.dynamic.DynamicAssetPublisher;
 import dev.scyphoz.dappermap.dynamic.DynamicMinimapMarker;
 import com.hypixel.hytale.server.core.universe.PlayerRef;
-
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.ByteArrayInputStream;

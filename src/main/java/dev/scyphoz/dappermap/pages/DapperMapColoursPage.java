@@ -22,6 +22,7 @@ import com.hypixel.hytale.server.core.universe.world.storage.EntityStore;
 import dev.scyphoz.dappermap.config.MinimapConfig;
 import dev.scyphoz.dappermap.dynamic.MinimapColours;
 import dev.scyphoz.dappermap.dynamic.MinimapColours.Key;
+import dev.scyphoz.dappermap.permissions.DapperMapPermissions;
 import dev.scyphoz.dappermap.service.MinimapSessionManager;
 
 import java.util.Arrays;
@@ -69,7 +70,7 @@ public final class DapperMapColoursPage extends InteractiveCustomUIPage<DapperMa
 
     @Override
     public void build(Ref<EntityStore> ref, UICommandBuilder ui, UIEventBuilder events, Store<EntityStore> store) {
-        if (adminMode && !owner.hasPermission(DapperMapSettingsPage.ADMIN_PERMISSION)) return;
+        if (!this.canEdit()) return;
         ui.append(adminMode ? "Pages/DapperMapAdminColours.ui" : "Pages/DapperMapColours.ui");
         ui.set("#ColourTarget.Entries", Arrays.stream(Key.values())
                 .filter(DapperMapColoursPage::isEditorVisible)
@@ -293,6 +294,7 @@ public final class DapperMapColoursPage extends InteractiveCustomUIPage<DapperMa
 
     @Override
     public void handleDataEvent(Ref<EntityStore> ref, Store<EntityStore> store, Ev event) {
+        if (!this.canEdit()) return;
         String action = event.action;
         if (action == null) return;
 
@@ -362,6 +364,12 @@ public final class DapperMapColoursPage extends InteractiveCustomUIPage<DapperMa
         MinimapColours result = live;
         for (Key key : edited) result = result.with(key, draft.rgb(key));
         return result;
+    }
+
+    private boolean canEdit() {
+        return this.adminMode
+                ? this.owner.hasPermission(DapperMapSettingsPage.ADMIN_PERMISSION)
+                : this.owner.hasPermission(DapperMapPermissions.player("colours"));
     }
 
     private void openSettings(Ref<EntityStore> ref, Store<EntityStore> store) {

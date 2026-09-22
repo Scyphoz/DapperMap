@@ -2,6 +2,7 @@ package dev.scyphoz.dappermap.dynamic;
 
 import java.awt.Color;
 
+/** Immutable world-space marker description consumed by the session's HUD projection step. */
 public final class DynamicMinimapMarker {
     public static final Color DEATH_COLOR = new Color(255, 255, 255, 235);
     public final double x;

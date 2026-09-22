@@ -49,23 +49,24 @@ public final class DapperMapPermissions {
     public static final PermissionQuery ADMIN = PermissionQuery.of(ADMIN_NODE);
 
     /**
-     * Default group every player belongs to, or inherits through, out of the box. Every
-     * player-command node is registered against it via {@link PermissionsModule#registerPermission},
-     * the same call used for {@link #ADMIN_NODE} against the operator group — the path that
-     * actually goes through the deny-aware permission check.
+     * Default group every player belongs to, or inherits through, out of the box. When
+     * {@code GrantPlayerSettingsByDefault} is enabled, player-command nodes are registered
+     * against it via {@link PermissionsModule#registerPermission}; in explicit-grant mode
+     * the same nodes are registered without a default group.
      *
      * <p>{@code AbstractCommand.setPermissionGroups(...)} looks similar but is not the same
      * mechanism: its constant-pool neighbourhood (a {@code GameMode}-keyed switch table
      * alongside the same group name strings) indicates it is a coarse "anyone in this group
      * may run this command" fast path, evaluated independently of — and in addition to — the
      * node-specific permission. Since almost every player is a member of this default group,
-     * calling it here would let it silently override any admin who explicitly denies a
-     * specific player one of these nodes. Use {@link #player(String)} instead, which never
-     * touches {@code setPermissionGroups}.
+     * calling it here would let it silently override any administrator who explicitly denies
+     * a player one of these nodes. Use {@link #player(String)} instead, which never touches
+     * {@code setPermissionGroups}.
      */
     public static final String DEFAULT_PLAYER_GROUP = HytalePermissionsProvider.DEFAULT_GROUP;
 
     private static boolean registered;
+    private static boolean grantPlayerSettingsByDefault = true;
     private static final java.util.Set<String> registeredPlayerNodes = new java.util.HashSet<>();
 
     private DapperMapPermissions() {
@@ -77,11 +78,9 @@ public final class DapperMapPermissions {
      * so {@code scyphoz.dappermap.command.*} covers every one of them without covering
      * {@link #ADMIN_NODE}.
      *
-     * <p>Registers the node against {@link #DEFAULT_PLAYER_GROUP} the first time it is asked
-     * for, via the same deny-respecting {@code PermissionsModule.registerPermission} call used
-     * for admin, so a server admin's explicit deny on a specific player and node actually
-     * takes effect. Must be called during plugin setup, before the command tree goes live —
-     * every caller in {@code MinimapCommand} already does this by construction.
+     * <p>Registers the node the first time it is requested. When
+     * {@code GrantPlayerSettingsByDefault} is enabled it is attached to the default player
+     * group; otherwise it is registered without a group and requires an explicit grant.
      *
      * @param settingName the sub-command's own registered name — must match exactly, since a
      *                     mismatch here would leave that command checking a node nobody
@@ -90,7 +89,11 @@ public final class DapperMapPermissions {
     public static synchronized PermissionQuery player(String settingName) {
         String node = COMMAND_ROOT + "." + settingName;
         if (registeredPlayerNodes.add(node)) {
-            PermissionsModule.registerPermission(node, DEFAULT_PLAYER_GROUP);
+            if (grantPlayerSettingsByDefault) {
+                PermissionsModule.registerPermission(node, DEFAULT_PLAYER_GROUP);
+            } else {
+                PermissionsModule.registerPermission(node);
+            }
         }
         return PermissionQuery.of(node);
     }
@@ -100,10 +103,11 @@ public final class DapperMapPermissions {
      * operators inherit it without any manual permission setup. Must be called during
      * plugin setup, before the command tree is registered.
      */
-    public static synchronized void register() {
+    public static synchronized void register(boolean grantPlayerSettingsByDefault) {
         if (registered) {
             return;
         }
+        DapperMapPermissions.grantPlayerSettingsByDefault = grantPlayerSettingsByDefault;
         PermissionsModule.registerPermission(ADMIN_NODE, HytalePermissionsProvider.OP_GROUP);
         registered = true;
     }

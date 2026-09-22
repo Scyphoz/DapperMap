@@ -1,7 +1,6 @@
 
 package dev.scyphoz.dappermap;
 
-import com.hypixel.hytale.event.EventRegistry;
 import com.hypixel.hytale.server.core.event.events.player.PlayerDisconnectEvent;
 import com.hypixel.hytale.server.core.event.events.player.PlayerReadyEvent;
 import com.hypixel.hytale.server.core.plugin.JavaPlugin;
@@ -12,9 +11,12 @@ import dev.scyphoz.dappermap.config.MinimapConfig;
 import dev.scyphoz.dappermap.events.PlayerReadyListener;
 import dev.scyphoz.dappermap.permissions.DapperMapPermissions;
 import dev.scyphoz.dappermap.service.MinimapSessionManager;
-import java.util.Objects;
 import javax.annotation.Nonnull;
 
+/**
+ * Plugin entry point. It owns configuration, permission/command registration and the
+ * player-session lifecycle; rendering work is delegated to {@link MinimapSessionManager}.
+ */
 public class DapperMap extends JavaPlugin {
     private static Config<MinimapConfig> config = null;
     private final MinimapSessionManager sessions;
@@ -25,18 +27,18 @@ public class DapperMap extends JavaPlugin {
         this.sessions = new MinimapSessionManager();
     }
 
+    @Override
     protected void setup() {
         config.save();
-        DapperMapPermissions.register();
+        DapperMapPermissions.register(config.get().isGrantPlayerSettingsByDefault());
         this.sessions.setDataDirectory(this.getDataDirectory());
         this.getCommandRegistry().registerCommand(new MinimapCommand("dappermap", "Configure DapperMap", this.sessions));
-        EventRegistry var10000 = this.getEventRegistry();
-        PlayerReadyListener var10002 = new PlayerReadyListener(this.sessions);
-        Objects.requireNonNull(var10002);
-        var10000.registerGlobal(PlayerReadyEvent.class, var10002::onPlayerReady);
+        PlayerReadyListener readyListener = new PlayerReadyListener(this.sessions);
+        this.getEventRegistry().registerGlobal(PlayerReadyEvent.class, readyListener::onPlayerReady);
         this.getEventRegistry().registerGlobal(PlayerDisconnectEvent.class, (event) -> this.sessions.onDisconnect(event.getPlayerRef()));
     }
 
+    @Override
     protected void shutdown() {
         this.sessions.stopAll();
     }

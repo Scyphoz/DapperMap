@@ -10,6 +10,10 @@ import com.hypixel.hytale.server.core.universe.PlayerRef;
 import java.util.Objects;
 import java.util.UUID;
 
+/**
+ * Owns the client-side HUD tree and applies small UI updates without rebuilding the
+ * complete minimap whenever terrain, markers, readouts or layout values change.
+ */
 public final class DynamicMinimapHud extends CustomUIHud {
     public static final String KEY = "DapperMapDynamicMinimapHud";
     public static final int MARKER_SLOTS = 48;
@@ -67,7 +71,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
     private final int[] slotSize = new int[48];
 
     public DynamicMinimapHud(PlayerRef playerRef, DynamicMinimapSetting settings) {
-        super(playerRef, "DapperMapDynamicMinimapHud");
+        super(playerRef, KEY);
         this.ownerRef = playerRef;
         this.uuid = playerRef.getUuid();
         this.settings = settings.copy();
@@ -363,15 +367,6 @@ public final class DynamicMinimapHud extends CustomUIHud {
         this.settings.infoPanelTextAlignment = normalized;
         if (this.built) {
             this.publishOverlayAsset(true);
-        }
-    }
-
-    public void setCoords(String coords) {
-        if (coords != null && !coords.equals(this.coordsText)) {
-            this.coordsText = coords;
-            if (this.built) {
-                this.publishOverlayAsset(true);
-            }
         }
     }
 

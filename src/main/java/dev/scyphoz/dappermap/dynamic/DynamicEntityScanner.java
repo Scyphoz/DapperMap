@@ -17,6 +17,7 @@ import java.util.ArrayList;
 import java.util.List;
 import org.joml.Vector3d;
 
+/** Converts nearby NPC and player entities into coloured minimap markers. */
 public final class DynamicEntityScanner {
 
     private DynamicEntityScanner() {

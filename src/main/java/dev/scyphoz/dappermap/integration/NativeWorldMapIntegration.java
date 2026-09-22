@@ -12,7 +12,6 @@ import com.hypixel.hytale.server.core.universe.world.worldmap.markers.MarkersCol
 import dev.scyphoz.dappermap.dynamic.DynamicMinimapMarker;
 import dev.scyphoz.dappermap.dynamic.MinimapColours;
 import dev.scyphoz.dappermap.dynamic.DynamicAssetPublisher;
-
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;

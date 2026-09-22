@@ -13,6 +13,7 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
+/** Sends generated PNG assets to a player's client and avoids retransmitting identical bytes. */
 public final class DynamicAssetPublisher {
     private static final int PART_SIZE = 2621440;
     private static final ConcurrentMap<UUID, ConcurrentMap<String, String>> DELIVERED = new ConcurrentHashMap();
@@ -59,7 +60,7 @@ public final class DynamicAssetPublisher {
                 }
 
                 try {
-                    byte[][] parts = splitBytes(data, 2621440);
+                    byte[][] parts = splitBytes(data, PART_SIZE);
                     Packet[] packets = new Packet[parts.length + 2];
                     packets[0] = new AssetInitialize(asset.toPacket(), data.length);
 
