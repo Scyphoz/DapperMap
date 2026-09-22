@@ -136,6 +136,7 @@ public class MinimapSessionManager {
             session.settings().position = settings.position;
             session.settings().hudPositionX = settings.hudPositionX;
             session.settings().hudPositionY = settings.hudPositionY;
+            session.settings().infoPanelEnabled = settings.infoPanelEnabled;
             session.settings().infoPanelPosition = settings.infoPanelPosition;
             session.settings().infoPanelTextAlignment = settings.infoPanelTextAlignment;
             session.settings().updateSpeed = settings.updateSpeed;

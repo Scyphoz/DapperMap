@@ -140,7 +140,7 @@ public final class DapperMapSettingsPage
 
     private void bindNavigation(UICommandBuilder builder, UIEventBuilder events) {
         for (Tab tab : Tab.values()) {
-            String slot = "#DapperMapTab" + tab.label + "ButtonSlot";
+            String slot = "#DapperMapTab" + tab.uiLabel + "ButtonSlot";
             builder.append(slot, "Pages/BasicTextButton.ui");
             builder.set(slot + "[0].TextSpans", Message.raw(""));
             if (this.canOpenTab(tab)) {
@@ -292,8 +292,8 @@ public final class DapperMapSettingsPage
     private void updateNavigationLabels(UICommandBuilder builder) {
         for (Tab tab : Tab.values()) {
             boolean selected = tab == this.activeTab;
-            builder.set("#DapperMapTab" + tab.label + "Active.Visible", selected);
-            builder.set("#DapperMapTab" + tab.label + "Label.TextSpans",
+            builder.set("#DapperMapTab" + tab.uiLabel + "Active.Visible", selected);
+            builder.set("#DapperMapTab" + tab.uiLabel + "Label.TextSpans",
                     Message.raw(tab.label.toUpperCase()).color(selected ? VIOLET
                             : this.canOpenTab(tab) ? MUTED : new Color(0x555B6D)));
         }
@@ -365,6 +365,7 @@ public final class DapperMapSettingsPage
             case "enabled" -> "toggle";
             case "interface_scale" -> "scale";
             case "texture_resolution" -> "resolution";
+            case "info_panel" -> "info";
             case "panel_position", "panel_alignment" -> "panel";
             case "players", "entities", "death", "worldmap" -> "markers";
             case "vrange" -> "height-range";
@@ -407,6 +408,7 @@ public final class DapperMapSettingsPage
         if (this.hasSettingPermission("rotation")) target.rotationMode = source.rotationMode;
         if (this.hasSettingPermission("speed")) target.updateSpeed = source.updateSpeed;
         if (this.hasSettingPermission("resolution")) target.textureResolution = source.textureResolution;
+        if (this.hasSettingPermission("info")) target.infoPanelEnabled = source.infoPanelEnabled;
         if (this.hasSettingPermission("panel")) {
             target.infoPanelPosition = source.infoPanelPosition;
             target.infoPanelTextAlignment = source.infoPanelTextAlignment;
@@ -791,6 +793,7 @@ public final class DapperMapSettingsPage
             case "death" -> settings.showDeathMarker = !settings.showDeathMarker;
             case "worldmap" -> settings.showWorldMapMarkers = !settings.showWorldMapMarkers;
             case "height" -> settings.limitMobHeight = !settings.limitMobHeight;
+            case "info_panel" -> settings.infoPanelEnabled = !settings.infoPanelEnabled;
             case "clock" -> settings.showClock = !settings.showClock;
             case "coordinates" -> settings.showCoordinates = !settings.showCoordinates;
             case "compass" -> settings.showCompass = !settings.showCompass;
@@ -818,7 +821,7 @@ public final class DapperMapSettingsPage
 
     private static boolean isBooleanToggle(String id) {
         return switch (id) {
-            case "players", "entities", "death", "worldmap", "height",
+            case "players", "entities", "death", "worldmap", "height", "info_panel",
                  "clock", "coordinates", "compass", "biome", "bettermap",
                  "shape", "rotation", "clock_format" -> true;
             default -> false;
@@ -828,6 +831,7 @@ public final class DapperMapSettingsPage
     private static boolean toggleValue(String id, DynamicMinimapSetting settings) {
         return switch (id) {
             case "enabled" -> settings.enabled;
+            case "info_panel" -> settings.infoPanelEnabled;
             case "players" -> settings.showOtherPlayers;
             case "entities" -> settings.showEntities;
             case "death" -> settings.showDeathMarker;
@@ -848,6 +852,7 @@ public final class DapperMapSettingsPage
     private static String description(String id) {
         return switch (id) {
             case "enabled" -> "Show or hide your minimap.";
+            case "info_panel" -> "Show or hide the Info Panel while keeping the minimap visible.";
             case "colours" -> "Choose colours for your minimap and markers.";
             case "zoom" -> "Choose how far around you the map shows.";
             case "size" -> "Change the size of the map on your screen.";
@@ -899,10 +904,19 @@ public final class DapperMapSettingsPage
 
     private static boolean isDropdownDisabled(String id, DynamicMinimapSetting settings) {
         return !settings.enabled
+                || (isInfoPanelSetting(id) && !"info_panel".equals(id) && !settings.infoPanelEnabled)
                 || ("bettermap".equals(id) && !BetterMapIntegration.isAvailable())
                 || (("height".equals(id) || "vrange".equals(id)) && !settings.showEntities)
                 || ("vrange".equals(id) && !settings.limitMobHeight)
                 || ("clock_format".equals(id) && !settings.showClock);
+    }
+
+    private static boolean isInfoPanelSetting(String id) {
+        return switch (id) {
+            case "panel_position", "panel_alignment", "coordinates", "clock",
+                 "clock_format", "compass", "biome" -> true;
+            default -> false;
+        };
     }
 
     private static boolean isControlDisabled(String id, DynamicMinimapSetting settings) {
@@ -1091,7 +1105,7 @@ public final class DapperMapSettingsPage
         return switch (id) {
             case "section_2", "players", "death", "entities", "height", "vrange",
                  "section_4", "worldmap", "bettermap" -> Tab.MARKERS;
-            case "panel_position", "panel_alignment", "section_3",
+            case "info_panel", "panel_position", "panel_alignment", "section_3",
                  "coordinates", "clock", "clock_format", "compass", "biome" -> Tab.INTERFACE;
             default -> Tab.DISPLAY;
         };
@@ -1108,7 +1122,8 @@ public final class DapperMapSettingsPage
                 new Row("rotation", "Map Rotation", Kind.DROPDOWN),
                 new Row("speed", "Update Speed", Kind.DROPDOWN),
                 new Row("texture_resolution", "Texture Resolution", Kind.DROPDOWN),
-                new Row("panel_position", "Information Panel", Kind.DROPDOWN),
+                new Row("info_panel", "Info Panel", Kind.TOGGLE),
+                new Row("panel_position", "Info Panel Position", Kind.DROPDOWN),
                 new Row("panel_alignment", "Panel Text Alignment", Kind.DROPDOWN),
                 new Row("section_2", "MARKERS", Kind.HEADER),
                 new Row("players", "Player Markers", Kind.DROPDOWN),
@@ -1185,15 +1200,19 @@ public final class DapperMapSettingsPage
     private enum Tab {
         DISPLAY("display", "Display"),
         MARKERS("markers", "Markers"),
-        INTERFACE("interface", "Interface"),
+        INTERFACE("interface", "Interface", "Info Panel"),
         POSITION("position", "Position"),
         COLOURS("colours", "Colours");
 
         final String id;
+        final String uiLabel;
         final String label;
 
-        Tab(String id, String label) {
+        Tab(String id, String label) { this(id, label, label); }
+
+        Tab(String id, String uiLabel, String label) {
             this.id = id;
+            this.uiLabel = uiLabel;
             this.label = label;
         }
 

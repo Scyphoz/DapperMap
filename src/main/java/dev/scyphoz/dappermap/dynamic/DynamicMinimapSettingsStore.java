@@ -78,6 +78,7 @@ public final class DynamicMinimapSettingsStore {
                                 + "  \"position\": %d,\n"
                                 + "  \"hudPositionX\": %d,\n"
                                 + "  \"hudPositionY\": %d,\n"
+                                + "  \"infoPanelEnabled\": %s,\n"
                                 + "  \"infoPanelPosition\": %d,\n"
                                 + "  \"infoPanelTextAlignment\": %d,\n"
                                 + "  \"updateSpeed\": %d,\n"
@@ -104,6 +105,7 @@ public final class DynamicMinimapSettingsStore {
                                 settings.position,
                                 settings.hudPositionX,
                                 settings.hudPositionY,
+                                settings.infoPanelEnabled,
                                 settings.infoPanelPosition,
                                 settings.infoPanelTextAlignment,
                                 settings.updateSpeed,
@@ -151,6 +153,7 @@ public final class DynamicMinimapSettingsStore {
                     Integer position = extractInt(json, "position");
                     Integer hudPositionX = extractInt(json, "hudPositionX");
                     Integer hudPositionY = extractInt(json, "hudPositionY");
+                    Boolean infoPanelEnabled = extractBool(json, "infoPanelEnabled");
                     Integer infoPanelPosition = extractInt(json, "infoPanelPosition");
                     Integer infoPanelTextAlignment = extractInt(json, "infoPanelTextAlignment");
                     Integer updateSpeed = extractInt(json, "updateSpeed");
@@ -232,6 +235,10 @@ public final class DynamicMinimapSettingsStore {
 
                     if (hudPositionY != null) {
                         settings.hudPositionY = hudPositionY;
+                    }
+
+                    if (infoPanelEnabled != null) {
+                        settings.infoPanelEnabled = infoPanelEnabled;
                     }
 
                     if (infoPanelPosition != null) {

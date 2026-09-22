@@ -1,8 +1,8 @@
 {
     "Group": "Scyphoz",
     "Name": "DapperMap",
-    "Version": "2.0.0",
-    "Description": "A lightweight and sophisticated minimap mod for Hytale",
+    "Version": "2.1.0",
+    "Description": "A lightweight, sophisticated and fully configurable Hytale minimap",
     "Authors": [
         {
             "Name": "Scyphoz",

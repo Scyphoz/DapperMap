@@ -57,6 +57,9 @@ public final class DynamicMinimapSetting {
     public int hudPositionY = 0;
 
     /** Position of the information panel relative to the map image. */
+    public boolean infoPanelEnabled = true;
+
+    /** Position of the information panel relative to the map image. */
     public int infoPanelPosition = INFO_RIGHT;
 
     /** Horizontal alignment of all information-panel text. */
@@ -105,6 +108,7 @@ public final class DynamicMinimapSetting {
         copy.position = this.position;
         copy.hudPositionX = this.hudPositionX;
         copy.hudPositionY = this.hudPositionY;
+        copy.infoPanelEnabled = this.infoPanelEnabled;
         copy.infoPanelPosition = this.infoPanelPosition;
         copy.infoPanelTextAlignment = this.infoPanelTextAlignment;
         copy.updateSpeed = this.updateSpeed;

@@ -39,7 +39,7 @@ $C.@PageOverlay {
         Group { Anchor: (Height: 4); }
         Group #DapperMapTabInterfaceSlot { Anchor: (Height: 50); LayoutMode: Full;
           Group #DapperMapTabInterfaceActive { Anchor: (Full: 0); Background: PatchStyle(TexturePath: "DapperMapGlassActive.png", Border: 11); Visible: false; }
-          Label #DapperMapTabInterfaceLabel { Anchor: (Left: 52, Top: 0, Width: 112, Height: 50); Text: "INTERFACE"; Style: (FontSize: 15, TextColor: #7f89a3, HorizontalAlignment: Start, VerticalAlignment: Center); }
+          Label #DapperMapTabInterfaceLabel { Anchor: (Left: 52, Top: 0, Width: 112, Height: 50); Text: "INFO PANEL"; Style: (FontSize: 15, TextColor: #7f89a3, HorizontalAlignment: Start, VerticalAlignment: Center); }
           Group #DapperMapTabInterfaceButtonSlot { Anchor: (Full: 0); LayoutMode: Full; }
           AssetImage { Anchor: (Left: 24, Top: 15, Width: 20, Height: 20); AssetPath: "UI/Custom/Pages/DapperMapIconInterface.png"; }
         }

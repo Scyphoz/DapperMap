@@ -57,6 +57,7 @@ public final class DynamicMinimapSession {
     private int builtPosition = -1;
     private int builtHudPositionX = -1;
     private int builtHudPositionY = -1;
+    private boolean builtInfoPanelEnabled;
     private int builtInfoPanelPosition = -1;
     private int builtInfoPanelTextAlignment = -1;
     private int builtInterfaceScale = -1;
@@ -244,11 +245,17 @@ public final class DynamicMinimapSession {
                 this.hud.setInterfaceScale(this.settings.interfaceScalePercent);
             }
 
+            if (this.settings.infoPanelEnabled != this.builtInfoPanelEnabled) {
+                this.builtInfoPanelEnabled = this.settings.infoPanelEnabled;
+                this.hud.setInfoPanelEnabled(this.settings.infoPanelEnabled);
+            }
+
             if (this.settings.hudPositionX != this.builtHudPositionX
                     || this.settings.hudPositionY != this.builtHudPositionY
                     || this.settings.infoPanelPosition != this.builtInfoPanelPosition) {
                 this.builtHudPositionX = this.settings.hudPositionX;
                 this.builtHudPositionY = this.settings.hudPositionY;
+                this.builtInfoPanelEnabled = this.settings.infoPanelEnabled;
                 this.builtInfoPanelPosition = this.settings.infoPanelPosition;
                 this.hud.setLayoutPosition(
                         this.settings.hudPositionX,
@@ -438,6 +445,7 @@ public final class DynamicMinimapSession {
             this.builtPosition = this.settings.position;
             this.builtHudPositionX = this.settings.hudPositionX;
             this.builtHudPositionY = this.settings.hudPositionY;
+            this.builtInfoPanelEnabled = this.settings.infoPanelEnabled;
             this.builtInfoPanelPosition = this.settings.infoPanelPosition;
             this.builtInfoPanelTextAlignment = this.settings.infoPanelTextAlignment;
             this.builtInterfaceScale = this.settings.interfaceScalePercent;

@@ -330,6 +330,20 @@ public final class DynamicMinimapRenderer {
                                           int sidePanelWidth, int panelHeight, int gap,
                                           double frameAngle, String coords, String compass,
                                           String clock, String biome) {
+        if (!settings.infoPanelEnabled) {
+            try {
+                BufferedImage overlay = new BufferedImage(mapSize, mapSize, BufferedImage.TYPE_INT_ARGB);
+                byte[] framePng = renderFrame(settings, frameAngle);
+                if (framePng != null) {
+                    BufferedImage frame = ImageIO.read(new ByteArrayInputStream(framePng));
+                    Graphics2D g = overlay.createGraphics();
+                    g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC);
+                    g.drawImage(frame, 0, 0, mapSize, mapSize, null);
+                    g.dispose();
+                }
+                return toPng(overlay);
+            } catch (Exception ignored) { return null; }
+        }
         byte[] chromePng = renderHudChrome(settings, mapSize, sidePanelWidth, panelHeight, gap);
         if (chromePng == null) return null;
 
@@ -400,11 +414,11 @@ public final class DynamicMinimapRenderer {
             g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
             boolean side = preview.infoPanelPosition == DynamicMinimapSetting.INFO_LEFT
                     || preview.infoPanelPosition == DynamicMinimapSetting.INFO_RIGHT;
-            int mapX = preview.infoPanelPosition == DynamicMinimapSetting.INFO_LEFT ? panelWidth + gap
-                    : (side ? 0 : Math.max(0, (hud.getWidth() - mapSize) / 2));
-            int mapY = preview.infoPanelPosition == DynamicMinimapSetting.INFO_ABOVE ? panelHeight + gap
+            int mapX = !preview.infoPanelEnabled ? 0 : (preview.infoPanelPosition == DynamicMinimapSetting.INFO_LEFT ? panelWidth + gap
+                    : (side ? 0 : Math.max(0, (hud.getWidth() - mapSize) / 2)));
+            int mapY = !preview.infoPanelEnabled ? 0 : (preview.infoPanelPosition == DynamicMinimapSetting.INFO_ABOVE ? panelHeight + gap
                     : (preview.infoPanelPosition == DynamicMinimapSetting.INFO_BELOW ? 0
-                    : Math.max(0, (hud.getHeight() - mapSize) / 2));
+                    : Math.max(0, (hud.getHeight() - mapSize) / 2)));
 
             Shape oldClip = g.getClip();
             if (preview.isCircle()) g.setClip(new Ellipse2D.Double(mapX + 3, mapY + 3, mapSize - 6, mapSize - 6));
@@ -439,7 +453,24 @@ public final class DynamicMinimapRenderer {
             BufferedImage stage = new BufferedImage(stageW, stageH, BufferedImage.TYPE_INT_ARGB);
             Graphics2D sg = stage.createGraphics();
             sg.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC);
-            double scale = Math.min((stageW - 8.0) / hud.getWidth(), (stageH - 8.0) / hud.getHeight());
+            // Keep the minimap at the same preview scale when the Info Panel is disabled.
+            // The live HUD correctly collapses to the map alone, but using that smaller image
+            // as the preview's scale reference made the map expand to fill the preview stage.
+            // For preview scaling only, reserve the footprint the enabled panel would have used.
+            int scaleReferenceWidth = hud.getWidth();
+            int scaleReferenceHeight = hud.getHeight();
+            if (!preview.infoPanelEnabled) {
+                boolean referenceSide = preview.infoPanelPosition == DynamicMinimapSetting.INFO_LEFT
+                        || preview.infoPanelPosition == DynamicMinimapSetting.INFO_RIGHT;
+                scaleReferenceWidth = referenceSide
+                        ? mapSize + gap + panelWidth
+                        : Math.max(mapSize, panelWidth);
+                scaleReferenceHeight = referenceSide
+                        ? Math.max(mapSize, panelHeight)
+                        : mapSize + gap + panelHeight;
+            }
+            double scale = Math.min((stageW - 8.0) / scaleReferenceWidth,
+                    (stageH - 8.0) / scaleReferenceHeight);
             int w = Math.max(1, (int)Math.round(hud.getWidth() * scale));
             int h = Math.max(1, (int)Math.round(hud.getHeight() * scale));
             sg.drawImage(hud, (stageW - w) / 2, (stageH - h) / 2, w, h, null);
@@ -484,7 +515,33 @@ public final class DynamicMinimapRenderer {
             int height = 286;
             int inset = 8;
             int widgetExtent = 154;
-            double widgetScale = widgetExtent / (double) Math.max(hud.getWidth(), hud.getHeight());
+            int widgetScaleReference = Math.max(hud.getWidth(), hud.getHeight());
+            if (!settings.infoPanelEnabled) {
+                // renderSettingsPreview intentionally leaves the disabled-panel map smaller so
+                // its map scale matches the enabled preview. Do not enlarge it again here after
+                // trimming transparent pixels: use the enabled HUD footprint as the scale basis.
+                DynamicMinimapSetting reference = settings.copy();
+                reference.infoPanelEnabled = true;
+                byte[] referencePng = renderSettingsPreview(reference);
+                if (referencePng != null) {
+                    BufferedImage referenceHud = ImageIO.read(new ByteArrayInputStream(referencePng));
+                    if (referenceHud != null) {
+                        int rMinX = referenceHud.getWidth(), rMinY = referenceHud.getHeight();
+                        int rMaxX = -1, rMaxY = -1;
+                        for (int py = 0; py < referenceHud.getHeight(); py++) {
+                            for (int px = 0; px < referenceHud.getWidth(); px++) {
+                                if ((referenceHud.getRGB(px, py) >>> 24) == 0) continue;
+                                rMinX = Math.min(rMinX, px); rMinY = Math.min(rMinY, py);
+                                rMaxX = Math.max(rMaxX, px); rMaxY = Math.max(rMaxY, py);
+                            }
+                        }
+                        if (rMaxX >= rMinX && rMaxY >= rMinY) {
+                            widgetScaleReference = Math.max(rMaxX - rMinX + 1, rMaxY - rMinY + 1);
+                        }
+                    }
+                }
+            }
+            double widgetScale = widgetExtent / (double) widgetScaleReference;
             int widgetWidth = Math.max(1, (int) Math.round(hud.getWidth() * widgetScale));
             int widgetHeight = Math.max(1, (int) Math.round(hud.getHeight() * widgetScale));
             int x = inset + (int) Math.round((width - inset * 2 - widgetWidth)

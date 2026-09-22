@@ -70,7 +70,8 @@ public class MinimapCommand extends AbstractPlayerCommand {
         addString(parent, scope, "speed", "Set update speed", new String[]{"very-fast", "fast", "normal", "slow"}, "update");
         addString(parent, scope, "shape", "Set map shape", new String[]{"circle", "square"});
         addString(parent, scope, "rotation", "Set rotation", new String[]{"north", "player"}, "rotate");
-        addString(parent, scope, "panel", "Set information panel position", new String[]{"below", "above", "left", "right"}, "info-panel", "infopanel");
+        addString(parent, scope, "info", "Enable or disable the Info Panel", ON_OFF, "info-panel", "infopanel");
+        addString(parent, scope, "panel", "Set Info Panel position", new String[]{"below", "above", "left", "right"});
         addString(parent, scope, "height", "Toggle creature height detection", ON_OFF, "height-detection");
         addString(parent, scope, "clock", "Configure clock", new String[]{"on", "off", "12", "24"});
         addString(parent, scope, "coordinates", "Toggle coordinates", ON_OFF, "coords");
@@ -203,9 +204,19 @@ public class MinimapCommand extends AbstractPlayerCommand {
                     this.sessions.applySettings(playerRef, settings);
                     context.sendMessage(Message.raw("DapperMap rotation: " + (settings.rotationMode == DynamicMinimapSetting.ROTATION_NORTH_UP ? "locked north" : "follow player") + "."));
                     break;
-                case "panel":
+                case "info":
                 case "info-panel":
                 case "infopanel":
+                    Boolean infoEnabled = parseOnOff(value);
+                    if (infoEnabled == null) {
+                        context.sendMessage(Message.raw("Usage: /mm info on|off"));
+                        return;
+                    }
+                    settings.infoPanelEnabled = infoEnabled;
+                    this.sessions.applySettings(playerRef, settings);
+                    context.sendMessage(Message.raw("DapperMap Info Panel " + (infoEnabled ? "enabled." : "disabled.")));
+                    break;
+                case "panel":
                     if (!setPanelPosition(settings, value)) {
                         context.sendMessage(Message.raw("Usage: /mm panel below|above|left|right"));
                         return;
@@ -356,7 +367,8 @@ public class MinimapCommand extends AbstractPlayerCommand {
             case "speed", "update" -> { changed = setSpeed(settings, value); usage = "admin speed very-fast|fast|normal|slow"; }
             case "shape" -> { changed = setShape(settings, value); usage = "admin shape circle|square"; }
             case "rotation", "rotate" -> { changed = setRotation(settings, value); usage = "admin rotation north|player"; }
-            case "panel", "info-panel", "infopanel" -> { changed = setPanelPosition(settings, value); usage = "admin panel below|above|left|right"; }
+            case "info", "info-panel", "infopanel" -> { Boolean b=parseOnOff(value); if (b != null) { settings.infoPanelEnabled=b; changed=true; } usage="admin info on|off"; }
+            case "panel" -> { changed = setPanelPosition(settings, value); usage = "admin panel below|above|left|right"; }
             case "position", "pos" -> { changed = setPosition(settings, value, extra); usage = "admin position <x 0..100> <y 0..100>"; }
             case "size" -> { changed = setRangedInt(value,120,360,v->settings.sizePixels=v); usage = "admin size <120..360>"; }
             case "scale", "interface-scale", "interfacescale" -> { changed = setRangedInt(value,75,160,v->settings.interfaceScalePercent=v); usage = "admin scale <75..160>"; }
@@ -689,6 +701,7 @@ public class MinimapCommand extends AbstractPlayerCommand {
                 + ", shape=" + (settings.isCircle() ? "circle" : "square")
                 + ", rotation=" + (settings.rotationMode == DynamicMinimapSetting.ROTATION_NORTH_UP ? "north" : "player")
                 + ", position=" + settings.hudPositionX + "," + settings.hudPositionY
+                + ", info-panel=" + (settings.infoPanelEnabled ? "on" : "off")
                 + ", panel=" + panelPositionName(settings.infoPanelPosition)
                 + ", markers[players=" + settings.showOtherPlayers
                 + ", entities=" + settings.showEntities

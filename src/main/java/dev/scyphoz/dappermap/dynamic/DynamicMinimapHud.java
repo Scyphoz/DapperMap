@@ -336,6 +336,15 @@ public final class DynamicMinimapHud extends CustomUIHud {
      * The readout subtree is rebuilt only when visibility actually changes, so
      * disabled rows disappear and the remaining rows reclaim their space.
      */
+    public void setInfoPanelEnabled(boolean enabled) {
+        if (this.settings.infoPanelEnabled == enabled) return;
+        this.settings.infoPanelEnabled = enabled;
+        if (this.built) {
+            this.publishOverlayAsset(false);
+            this.rebuildPositionLayout();
+        }
+    }
+
     public void setInfoVisibility(boolean showCoordinates, boolean showCompass, boolean showClock, boolean showBiome) {
         if (this.settings.showCoordinates == showCoordinates
                 && this.settings.showCompass == showCompass
@@ -713,6 +722,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
     }
 
     private int readoutHeight() {
+        if (!this.settings.infoPanelEnabled) return 0;
         int height = (READOUT_PADDING_V * 2) + BRAND_HEIGHT;
 
         if (this.settings.showCoordinates) {
@@ -746,6 +756,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
     }
 
     private int widgetWidth() {
+        if (!this.settings.infoPanelEnabled) return this.displaySize(this.logicalUiSize);
         if (this.isSideRail()) {
             return this.displaySize(this.logicalUiSize + this.readoutGap() + READOUT_WIDTH);
         }
@@ -753,6 +764,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
     }
 
     private int widgetHeight() {
+        if (!this.settings.infoPanelEnabled) return this.displaySize(this.logicalUiSize);
         if (this.isSideRail()) {
             return this.displaySize(Math.max(this.logicalUiSize, this.readoutHeight()));
         }
@@ -760,6 +772,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
     }
 
     private int mapOriginX() {
+        if (!this.settings.infoPanelEnabled) return 0;
         if (this.infoPanelPosition == DynamicMinimapSetting.INFO_LEFT) {
             return this.displaySize(READOUT_WIDTH + this.readoutGap());
         }
@@ -768,6 +781,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
     }
 
     private int mapOriginY() {
+        if (!this.settings.infoPanelEnabled) return 0;
         if (this.infoPanelPosition == DynamicMinimapSetting.INFO_ABOVE) {
             return this.displaySize(this.readoutHeight() + this.readoutGap());
         }
@@ -787,6 +801,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
     }
 
     private int readoutGap() {
+        if (!this.settings.infoPanelEnabled) return 0;
         return this.settings.isCircle() ? CIRCLE_READOUT_GAP : SQUARE_READOUT_GAP;
     }
 
