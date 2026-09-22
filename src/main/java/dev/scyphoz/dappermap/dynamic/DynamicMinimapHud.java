@@ -23,7 +23,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
     private static final int HUD_MARGIN = 10;
     private static final int SQUARE_READOUT_GAP = 16;
     private static final int CIRCLE_READOUT_GAP = 8;
-    /** Compact concept-style telemetry rail used in every panel orientation. */
+    /** Compact concept-style information panel used in every panel orientation. */
     private static final int READOUT_WIDTH = 148;
     private static final int READOUT_PADDING_V = 6;
     private static final int BRAND_HEIGHT = 24;

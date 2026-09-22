@@ -16,7 +16,7 @@ $C.@PageOverlay {
         Label { Anchor: (Width: 270, Height: 58); Text: "DapperMap"; Style: (FontSize: 35, TextColor: #d2c5ff, HorizontalAlignment: Start, VerticalAlignment: Center); }
         Group { FlexWeight: 1; }
       }
-      Label #DapperMapTagline { Anchor: (Height: 22); Text: "N A V I G A T I O N   I N S T R U M E N T"; Style: (FontSize: 8, TextColor: #999abb, HorizontalAlignment: Start, VerticalAlignment: Center); }
+      Label #DapperMapTagline { Anchor: (Height: 22); Text: "A lightweight, sophisticated and fully configurable Hytale minimap."; Style: (FontSize: 10, TextColor: #999abb, HorizontalAlignment: Start, VerticalAlignment: Center); }
       Group { FlexWeight: 1; }
       Group { Anchor: (Height: 1); Background: #615a78(0.54); }
     }
