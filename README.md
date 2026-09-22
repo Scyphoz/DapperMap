@@ -1,10 +1,8 @@
 # DapperMap
 
-**A lightweight, sophisticated and fully configurable server-side minimap for Hytale.**
+**A lightweight, sophisticated and fully configurable Hytale minimap.**
 
 DapperMap adds a live minimap and navigation instrument to the Hytale HUD. It combines nearby terrain, a directional player locator, configurable markers and useful world information in one compact display. Players can tailor the map through an in-game settings interface or commands, while server administrators can control the defaults and decide which options players may change.
-
-DapperMap is delivered by the server and includes its own UI assets. Players do not need to install a separate client-side mod.
 
 ## Highlights
 
