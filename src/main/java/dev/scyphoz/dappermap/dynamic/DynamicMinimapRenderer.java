@@ -524,9 +524,6 @@ public final class DynamicMinimapRenderer {
         int brandHeight = 24;
         int rowHeight = 43;
         int baseInset = 8;
-        Color caption = settings.colours.awt(TICKS, 255);
-
-        graphics.setColor(caption);
         int brandLeftInset = 8;
         int brandRightInset = 8;
         if (settings.isCircle() && settings.infoPanelPosition == DynamicMinimapSetting.INFO_RIGHT) brandLeftInset += 6;
@@ -654,7 +651,7 @@ public final class DynamicMinimapRenderer {
             rightInset += curveInset;
         }
         drawAlignedHudText(graphics, settings, caption, x, width, leftInset, rightInset, y + 14, 9,
-                settings.colours.awt(TICKS, 255), false, 0.105F);
+                settings.colours.awt(INFO_HEADERS, 255), false, 0.105F);
         drawAlignedHudText(graphics, settings, value == null ? "" : value, x, width,
                 leftInset, rightInset, y + 32, 11, valueColor, false, 0.015F);
     }
@@ -1070,7 +1067,7 @@ public final class DynamicMinimapRenderer {
         int baseline = centerY + metrics.getAscent() / 2 - 1;
         graphics.setColor(new Color(0, 0, 0, 170));
         graphics.drawString(label, left + 1, baseline + 1);
-        graphics.setColor(colours.awt(EDGE, 255));
+        graphics.setColor(colours.awt(CARDINAL_TEXT, 255));
         graphics.drawString(label, left, baseline);
     }
 

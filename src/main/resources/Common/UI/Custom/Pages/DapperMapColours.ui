@@ -131,8 +131,9 @@ $C.@DecoratedContainer {
         Group #PreviewCoords {
           Anchor: (Height: 48);
           Background: #24203d;
-          LayoutMode: CenterMiddle;
-          Label #PreviewCoordsText { Text: "X 124  Y 67  Z -302"; Style: (FontSize: 14, RenderBold: true, TextColor: #f5f7fb, HorizontalAlignment: Center, VerticalAlignment: Center); }
+          LayoutMode: Top;
+          Label #PreviewCoordsHeader { Anchor: (Height: 18); Text: "COORDINATES"; Style: (FontSize: 8, TextColor: #57d8d0, HorizontalAlignment: Center, VerticalAlignment: Center); }
+          Label #PreviewCoordsText { Anchor: (Height: 30); Text: "X 124  Y 67  Z -302"; Style: (FontSize: 14, RenderBold: true, TextColor: #f5f7fb, HorizontalAlignment: Center, VerticalAlignment: Center); }
         }
 
         Group {
@@ -141,23 +142,26 @@ $C.@DecoratedContainer {
           Group #PreviewCompass {
             FlexWeight: 1;
             Background: #1c2f3d;
-            LayoutMode: CenterMiddle;
-            Label #PreviewCompassText { Text: "NW 315°"; Style: (FontSize: 14, RenderBold: true, TextColor: #ffd66b, HorizontalAlignment: Center, VerticalAlignment: Center); }
+            LayoutMode: Top;
+            Label #PreviewCompassHeader { Anchor: (Height: 18); Text: "BEARING"; Style: (FontSize: 8, TextColor: #57d8d0, HorizontalAlignment: Center, VerticalAlignment: Center); }
+            Label #PreviewCompassText { Anchor: (Height: 30); Text: "NW 315°"; Style: (FontSize: 14, RenderBold: true, TextColor: #ffd66b, HorizontalAlignment: Center, VerticalAlignment: Center); }
           }
           Group { Anchor: (Width: 4); }
           Group #PreviewClock {
             FlexWeight: 1;
             Background: #18283a;
-            LayoutMode: CenterMiddle;
-            Label #PreviewClockText { Text: "18:42"; Style: (FontSize: 14, RenderBold: true, TextColor: #9ddcff, HorizontalAlignment: Center, VerticalAlignment: Center); }
+            LayoutMode: Top;
+            Label #PreviewClockHeader { Anchor: (Height: 18); Text: "WORLD TIME"; Style: (FontSize: 8, TextColor: #57d8d0, HorizontalAlignment: Center, VerticalAlignment: Center); }
+            Label #PreviewClockText { Anchor: (Height: 30); Text: "18:42"; Style: (FontSize: 14, RenderBold: true, TextColor: #9ddcff, HorizontalAlignment: Center, VerticalAlignment: Center); }
           }
         }
 
         Group #PreviewBiome {
           Anchor: (Height: 48);
           Background: #1a2432;
-          LayoutMode: CenterMiddle;
-          Label #PreviewBiomeText { Text: "Emerald Grove"; Style: (FontSize: 14, RenderBold: true, TextColor: #cfe0ef, HorizontalAlignment: Center, VerticalAlignment: Center); }
+          LayoutMode: Top;
+          Label #PreviewBiomeHeader { Anchor: (Height: 18); Text: "REGION"; Style: (FontSize: 8, TextColor: #57d8d0, HorizontalAlignment: Center, VerticalAlignment: Center); }
+          Label #PreviewBiomeText { Anchor: (Height: 30); Text: "Emerald Grove"; Style: (FontSize: 14, RenderBold: true, TextColor: #cfe0ef, HorizontalAlignment: Center, VerticalAlignment: Center); }
         }
 
         Label {

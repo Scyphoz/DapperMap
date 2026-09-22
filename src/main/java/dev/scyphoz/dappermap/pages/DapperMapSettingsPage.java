@@ -49,7 +49,8 @@ public final class DapperMapSettingsPage
     /** Only colours consumed by the current live HUD renderer are user-facing. */
     private static final List<Key> VISIBLE_COLOUR_KEYS = List.of(
             Key.EDGE, Key.TICKS, Key.PANEL,
-            Key.BRAND_TEXT, Key.COORDS_TEXT, Key.COMPASS_TEXT, Key.CLOCK_TEXT, Key.BIOME_TEXT,
+            Key.CARDINAL_TEXT, Key.BRAND_TEXT, Key.INFO_HEADERS,
+            Key.COORDS_TEXT, Key.COMPASS_TEXT, Key.CLOCK_TEXT, Key.BIOME_TEXT,
             Key.SELF, Key.PLAYERS, Key.DEATH, Key.HOSTILE_ACTIVE, Key.HOSTILE, Key.NEUTRAL, Key.FRIENDLY
     );
 

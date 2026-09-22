@@ -9,8 +9,10 @@ public final class MinimapColours {
     public enum Key {
         EDGE("edge", "Frame", "Aperture Edge", "The main edge of the DapperMap aperture.", 0x7B6CFF),
         TICKS("ticks", "Frame", "Survey Marks", "The fine marks around the map aperture.", 0x57D8D0),
+        CARDINAL_TEXT("cardinal-text", "Text", "Compass Directions", "The N, E, S and W labels on the minimap.", 0x7B6CFF),
         PANEL("panel", "Panel", "Telemetry Rail", "The translucent rail holding map telemetry.", 0x111426),
         BRAND_TEXT("brand-text", "Text", "DapperMap Label", "The DapperMap instrument label.", 0xB8AEFF),
+        INFO_HEADERS("info-headers", "Text", "Information Headings", "The heading above each information-panel value.", 0x57D8D0),
         COORDS_TEXT("coords-text", "Text", "Coordinates", "The world-coordinate text.", 0xF4F2FF),
         COMPASS_TEXT("compass-text", "Text", "Bearing", "The facing-direction text.", 0x6FE8DF),
         CLOCK_TEXT("clock-text", "Text", "World Time", "The Hytale world-time text.", 0x8FCBFF),
@@ -50,7 +52,7 @@ public final class MinimapColours {
     public MinimapColours reset(Key key) { return with(key, key.defaultRgb); }
     public String frameKey() {
         StringBuilder out = new StringBuilder();
-        for (Key key : new Key[]{Key.EDGE, Key.TICKS})
+        for (Key key : new Key[]{Key.EDGE, Key.TICKS, Key.CARDINAL_TEXT})
             out.append(hex(key).substring(1));
         return out.toString();
     }
