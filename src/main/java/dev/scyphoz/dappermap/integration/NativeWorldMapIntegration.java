@@ -21,7 +21,10 @@ import java.util.function.Predicate;
 
 /** Collects only non-player, non-death markers visible to the current player. */
 public final class NativeWorldMapIntegration {
-    private static final Set<String> INCLUDED = Set.of("personal", "shared", "poi", "spawn", "respawn");
+    // Built-in systems also register "portals", "warps", "objectives" and
+    // "prefabs". Keep their markers (and future providers), excluding only
+    // marker types rendered separately by the minimap.
+    private static final Set<String> EXCLUDED = Set.of("playerIcons", "death");
     private static final String ICON_PREFIX = "UI/WorldMap/MapMarkers/";
     private static final int MARKER_SIZE = 18;
     private static final Map<String, byte[]> ICON_BYTES = new ConcurrentHashMap<>();
@@ -59,7 +62,7 @@ public final class NativeWorldMapIntegration {
             }
         };
         world.getWorldMapManager().getMarkerProviders().forEach((key, provider) -> {
-            if (INCLUDED.contains(key)) provider.update(world, player, collector);
+            if (!EXCLUDED.contains(key)) provider.update(world, player, collector);
         });
         return result;
     }

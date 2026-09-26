@@ -841,7 +841,20 @@ public final class DynamicMinimapSession {
         int panLeft = this.hud.panLeft();
         int panTop = this.hud.panTop();
 
-        for (DynamicMinimapMarker marker : this.cachedMarkers) {
+        // The native POI provider returns world-wide markers from a map with no
+        // useful display order. Select nearby markers before the fixed HUD slots
+        // are exhausted by distant POIs clamped to the edge.
+        List<DynamicMinimapMarker> orderedMarkers = new ArrayList<>(this.cachedMarkers);
+        orderedMarkers.sort(Comparator
+                .comparingInt((DynamicMinimapMarker marker) ->
+                        marker.style == DynamicMinimapMarker.Style.DEATH ? 0 : 1)
+                .thenComparingDouble(marker -> {
+                    double dx = marker.x - this.bufferCenterX;
+                    double dz = marker.z - this.bufferCenterZ;
+                    return dx * dx + dz * dz;
+                }));
+
+        for (DynamicMinimapMarker marker : orderedMarkers) {
             if (slot >= slots.length) {
                 break;
             }
