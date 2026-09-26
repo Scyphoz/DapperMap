@@ -279,6 +279,12 @@ public final class DynamicMinimapHud extends CustomUIHud {
         this.update(false, builder);
     }
 
+    /** Force the next marker update to rebind client asset paths after teleportation. */
+    public void invalidateMarkerSlots() {
+        java.util.Arrays.fill(this.slotPath, null);
+        java.util.Arrays.fill(this.slotVisible, false);
+    }
+
     /** Slot coordinates and sizes are logical minimap values, converted here for display. */
     public void setMarkers(Slot[] slots) {
         if (this.built) {

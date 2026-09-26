@@ -98,6 +98,12 @@ public final class DynamicMinimapSession {
     private boolean hasDeath = false;
     private double deathX;
     private double deathZ;
+    // Detect discontinuous movement even when the player stays in the same world.
+    private World lastObservedWorld;
+    private double lastObservedX = Double.NaN;
+    private double lastObservedZ = Double.NaN;
+    private static final double TELEPORT_DISTANCE_SQUARED = 64.0D * 64.0D;
+
 
     public DynamicMinimapSession(PlayerRef playerRef, DynamicMinimapSetting settings) {
         this.playerRef = playerRef;
@@ -185,6 +191,24 @@ public final class DynamicMinimapSession {
             double x = position.x();
             double y = position.y();
             double z = position.z();
+            boolean teleported = lastObservedWorld != null
+                    && (lastObservedWorld != world
+                    || Math.pow(x - lastObservedX, 2) + Math.pow(z - lastObservedZ, 2)
+                    > TELEPORT_DISTANCE_SQUARED);
+            lastObservedWorld = world;
+            lastObservedX = x;
+            lastObservedZ = z;
+            if (teleported) {
+                // A teleport can reset the client's dynamic assets without ending
+                // the DapperMap session. Re-send integration icons and force HUD
+                // slot paths to be rebound rather than relying on cached values.
+                DynamicAssetPublisher.clear(this.uuid);
+                if (this.hud != null) this.hud.invalidateMarkerSlots();
+                this.cachedMarkers = new ArrayList<>();
+                this.cachedBetterMapMarkers = new ArrayList<>();
+                this.lastMarkerMs = 0L;
+                this.lastBetterMapScanMs = 0L;
+            }
             Rotation3f rotation = transform.getRotation();
             double yaw = rotation == null ? Double.NaN : (double)rotation.yaw();
             if (!this.settings.enabled) {
