@@ -71,7 +71,7 @@ public final class DynamicMinimapSetting {
     public boolean showClock = true;
     public boolean showCompass = true;
     public boolean showBiome = true;
-    /** Show BetterMap waypoints on the minimap when BetterMap is installed. */
+    /** Use BetterMap waypoints, its map image quality, and enabled underground cave layers. */
     public boolean betterMapEnabled = true;
     public DynamicMinimapSetting() {
     }

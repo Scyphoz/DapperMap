@@ -875,7 +875,7 @@ public final class DapperMapSettingsPage
             case "compass" -> "Show the direction you are facing.";
             case "biome" -> "Show the name of the biome you are in.";
             case "bettermap" -> BetterMapIntegration.isAvailable()
-                    ? "Show BetterMap waypoints on the minimap and around its edge."
+                    ? "Show BetterMap waypoints and map quality; show its cave layers underground when enabled."
                     : "BetterMap is not installed or could not be detected.";
             case "texture_resolution" -> "Choose the resolution used to render minimap textures.";
             default -> "";

@@ -27,6 +27,7 @@ import java.io.IOException;
 import java.util.Arrays;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.BiFunction;
 import javax.imageio.ImageIO;
 
 /** Pure rendering utilities for terrain, HUD chrome, previews and marker PNG assets. */
@@ -85,6 +86,10 @@ public final class DynamicMinimapRenderer {
     }
 
     public static Terrain renderTerrain(WorldMapManager worldMapManager, double centerX, double centerZ, DynamicMinimapSetting settings) {
+        return renderTerrain(worldMapManager, centerX, centerZ, settings, null);
+    }
+
+    public static Terrain renderTerrain(WorldMapManager worldMapManager, double centerX, double centerZ, DynamicMinimapSetting settings, BiFunction<Integer, Integer, MapImage> caveImages) {
         int logicalBuffer = bufferPixels(settings);
         int textureBuffer = textureBufferPixels(settings);
         double logicalPixelsPerBlock = pixelsPerBlock(settings);
@@ -98,8 +103,7 @@ public final class DynamicMinimapRenderer {
         graphics.fillRect(0, 0, textureBuffer, textureBuffer);
         int present = 0;
         int total = 0;
-        if (worldMapManager != null) {
-            graphics.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR);
+        if (worldMapManager != null || caveImages != null) {
             double worldSize = (double)logicalBuffer / logicalPixelsPerBlock;
             int minChunkX = ChunkUtil.chunkCoordinate((int)Math.floor(originX));
             int minChunkZ = ChunkUtil.chunkCoordinate((int)Math.floor(originZ));
@@ -112,7 +116,8 @@ public final class DynamicMinimapRenderer {
                     ++total;
 
                     try {
-                        MapImage image = worldMapManager.getImageAsync(chunkX, chunkZ).getNow(null);
+                        MapImage image = caveImages != null ? caveImages.apply(chunkX, chunkZ)
+                                : worldMapManager.getImageAsync(chunkX, chunkZ).getNow(null);
                         if (image != null && image.width > 0 && image.height > 0) {
                             int[] pixels = decodePixels(image);
                             if (pixels != null) {
@@ -120,6 +125,11 @@ public final class DynamicMinimapRenderer {
                                 chunk.setRGB(0, 0, image.width, image.height, pixels, 0, image.width);
                                 int drawX = (int)Math.round(((double)chunkX * (double)CHUNK_SIZE - originX) * texturePixelsPerBlock);
                                 int drawZ = (int)Math.round(((double)chunkZ * (double)CHUNK_SIZE - originZ) * texturePixelsPerBlock);
+                                // Preserve detail when BetterMap supplies more samples per chunk.
+                                graphics.setRenderingHint(RenderingHints.KEY_INTERPOLATION,
+                                        image.width > chunkPixels || image.height > chunkPixels
+                                                ? RenderingHints.VALUE_INTERPOLATION_BILINEAR
+                                                : RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR);
                                 graphics.drawImage(chunk, drawX, drawZ, chunkPixels, chunkPixels, (ImageObserver)null);
                                 ++present;
                             }
@@ -135,7 +145,11 @@ public final class DynamicMinimapRenderer {
     }
 
     public static long terrainSignature(WorldMapManager worldMapManager, double centerX, double centerZ, DynamicMinimapSetting settings) {
-        if (worldMapManager == null) {
+        return terrainSignature(worldMapManager, centerX, centerZ, settings, null);
+    }
+
+    public static long terrainSignature(WorldMapManager worldMapManager, double centerX, double centerZ, DynamicMinimapSetting settings, BiFunction<Integer, Integer, MapImage> caveImages) {
+        if (worldMapManager == null && caveImages == null) {
             return 0L;
         } else {
             double pixelsPerBlock = pixelsPerBlock(settings);
@@ -154,7 +168,8 @@ public final class DynamicMinimapRenderer {
                     long chunkHash = 1L;
 
                     try {
-                        MapImage image = worldMapManager.getImageIfInMemory(chunkX, chunkZ);
+                        MapImage image = caveImages != null ? caveImages.apply(chunkX, chunkZ)
+                                : worldMapManager.getImageIfInMemory(chunkX, chunkZ);
                         if (image != null) {
                             chunkHash = 31L * chunkHash + (long)image.width;
                             chunkHash = 31L * chunkHash + (long)image.height;

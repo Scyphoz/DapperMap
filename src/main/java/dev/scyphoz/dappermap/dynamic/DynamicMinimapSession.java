@@ -81,10 +81,14 @@ public final class DynamicMinimapSession {
     private long lastTickMs = 0L;
     private long lastSignature = 0L;
     private long lastSignatureMs = 0L;
+    private BetterMapIntegration.CaveView lastCaveView;
     private long lastMarkerMs = 0L;
     private MinimapColours renderedColours;
     private List<DynamicMinimapMarker> cachedMarkers = new ArrayList<>();
     private List<DynamicMinimapMarker> cachedBetterMapMarkers = new ArrayList<>();
+    private List<DynamicMinimapMarker> cachedWorldMapMarkers = new ArrayList<>();
+    private int emptyBetterMapScans = 0;
+    private int emptyWorldMapScans = 0;
     private long lastBetterMapScanMs = 0L;
     private long lastTerrainMs = 0L;
     private boolean bufferComplete = false;
@@ -191,8 +195,9 @@ public final class DynamicMinimapSession {
             double x = position.x();
             double y = position.y();
             double z = position.z();
+            boolean worldChanged = lastObservedWorld != null && lastObservedWorld != world;
             boolean teleported = lastObservedWorld != null
-                    && (lastObservedWorld != world
+                    && (worldChanged
                     || Math.pow(x - lastObservedX, 2) + Math.pow(z - lastObservedZ, 2)
                     > TELEPORT_DISTANCE_SQUARED);
             lastObservedWorld = world;
@@ -204,8 +209,13 @@ public final class DynamicMinimapSession {
                 // slot paths to be rebound rather than relying on cached values.
                 DynamicAssetPublisher.clear(this.uuid);
                 if (this.hud != null) this.hud.invalidateMarkerSlots();
-                this.cachedMarkers = new ArrayList<>();
-                this.cachedBetterMapMarkers = new ArrayList<>();
+                if (worldChanged) {
+                    this.cachedMarkers = new ArrayList<>();
+                    this.cachedBetterMapMarkers = new ArrayList<>();
+                    this.cachedWorldMapMarkers = new ArrayList<>();
+                    this.emptyBetterMapScans = 0;
+                    this.emptyWorldMapScans = 0;
+                }
                 this.lastMarkerMs = 0L;
                 this.lastBetterMapScanMs = 0L;
             }
@@ -310,6 +320,14 @@ public final class DynamicMinimapSession {
             }
 
             long now = System.currentTimeMillis();
+            BetterMapIntegration.CaveView caveView = this.settings.betterMapEnabled
+                    ? BetterMapIntegration.caveView(player, world) : null;
+            boolean caveChanged = !java.util.Objects.equals(caveView, this.lastCaveView);
+            if (caveChanged) {
+                this.lastCaveView = caveView;
+                this.lastSignatureMs = 0L;
+                this.bufferComplete = false;
+            }
             if (!this.settings.colours.equals(this.renderedColours)) {
                 this.renderedColours = this.settings.colours;
                 java.util.Arrays.fill(this.selfArrowCache, null);
@@ -355,7 +373,7 @@ public final class DynamicMinimapSession {
             boolean signatureChanged = false;
             if (!Double.isNaN(this.bufferCenterX) && now - this.lastSignatureMs > this.settings.signatureIntervalMs()) {
                 this.lastSignatureMs = now;
-                long signature = DynamicMinimapRenderer.terrainSignature(world.getWorldMapManager(), this.bufferCenterX, this.bufferCenterZ, this.settings);
+                long signature = DynamicMinimapRenderer.terrainSignature(world.getWorldMapManager(), this.bufferCenterX, this.bufferCenterZ, this.settings, caveView);
                 if (signature != this.lastSignature) {
                     this.lastSignature = signature;
                     signatureChanged = true;
@@ -370,7 +388,7 @@ public final class DynamicMinimapSession {
                     || Math.abs(z - this.bufferCenterZ) * pixelsPerBlock
                     > panMargin * recenterFraction);
             boolean warmupRetry = !this.bufferComplete && now < this.warmupUntilMs && !noBuffer && now - this.lastTerrainMs >= 1000L;
-            boolean needsTerrain = noBuffer || needsRecenter || signatureChanged || warmupRetry;
+            boolean needsTerrain = noBuffer || needsRecenter || signatureChanged || warmupRetry || caveChanged;
             if (needsTerrain && now - this.lastTerrainMs >= this.settings.terrainIntervalMs()) {
                 if (noBuffer || needsRecenter) {
                     this.warmupUntilMs = now + 15000L;
@@ -378,7 +396,7 @@ public final class DynamicMinimapSession {
                 }
 
                 this.lastTerrainMs = now;
-                this.scheduleTerrainRender(world, x, z, yaw);
+                this.scheduleTerrainRender(world, x, z, yaw, caveView);
             } else if (!noBuffer) {
                 double dx = (x - this.bufferCenterX) * pixelsPerBlock;
                 double dz = (z - this.bufferCenterZ) * pixelsPerBlock;
@@ -541,7 +559,8 @@ public final class DynamicMinimapSession {
             World world,
             double centerX,
             double centerZ,
-            double yaw
+            double yaw,
+            BetterMapIntegration.CaveView caveView
     ) {
         long sequence = this.renderSequence.incrementAndGet();
         DynamicMinimapSetting renderSettings = this.settings.copy();
@@ -561,7 +580,8 @@ public final class DynamicMinimapSession {
                             world.getWorldMapManager(),
                             centerX,
                             centerZ,
-                            renderSettings
+                            renderSettings,
+                            caveView
                     );
 
             byte[] northUpPng = terrain.png;
@@ -580,6 +600,7 @@ public final class DynamicMinimapSession {
             world.execute(() -> {
                 if (!this.running
                         || renderHud != this.hud
+                        || !java.util.Objects.equals(caveView, this.lastCaveView)
                         || sequence <= this.deliveredSequence
                         || this.settings.textureResolution != renderSettings.textureResolution) {
                     return;
@@ -619,7 +640,8 @@ public final class DynamicMinimapSession {
                         world.getWorldMapManager(),
                         centerX,
                         centerZ,
-                        renderSettings
+                        renderSettings,
+                        caveView
                 );
                 this.updateRotatingFrame(rotationBucket);
                 this.lastMapRotationBucket = rotationBucket;
@@ -814,12 +836,22 @@ public final class DynamicMinimapSession {
             Player player = store.getComponent(playerRef, Player.getComponentType());
             if (player != null) {
                 try {
-                    markers.addAll(NativeWorldMapIntegration.getMarkers(
+                    List<DynamicMinimapMarker> current = NativeWorldMapIntegration.getMarkers(
                             store.getExternalData().getWorld(),
-                            player,
-                            this.settings.colours));
+                            player, this.settings.colours);
+                    if (current.isEmpty() && !this.cachedWorldMapMarkers.isEmpty()
+                            && ++this.emptyWorldMapScans < 3) {
+                        // A provider can briefly return no markers during a map refresh.
+                    } else {
+                        this.cachedWorldMapMarkers = current;
+                        this.emptyWorldMapScans = 0;
+                    }
                 } catch (Throwable ignored) { }
             }
+            markers.addAll(this.cachedWorldMapMarkers);
+        } else {
+            this.cachedWorldMapMarkers = new ArrayList<>();
+            this.emptyWorldMapScans = 0;
         }
 
         if (this.settings.betterMapEnabled && BetterMapIntegration.isAvailable()) {
@@ -827,17 +859,21 @@ public final class DynamicMinimapSession {
             if (now - this.lastBetterMapScanMs >= 750L) {
                 this.lastBetterMapScanMs = now;
                 Player player = store.getComponent(playerRef, Player.getComponentType());
-                List<DynamicMinimapMarker> betterMap = new ArrayList<>(BetterMapIntegration.getMarkers(player));
-                betterMap.sort(Comparator.comparingDouble(marker -> {
-                    double dx = marker.x - playerPosition.x();
-                    double dz = marker.z - playerPosition.z();
-                    return dx * dx + dz * dz;
-                }));
-                this.cachedBetterMapMarkers = betterMap;
+                List<DynamicMinimapMarker> current = BetterMapIntegration.getMarkers(player);
+                if (current != null) {
+                    if (current.isEmpty() && !this.cachedBetterMapMarkers.isEmpty()
+                            && ++this.emptyBetterMapScans < 3) {
+                        // Wait for a repeated empty snapshot before removing visible waypoints.
+                    } else {
+                        this.cachedBetterMapMarkers = new ArrayList<>(current);
+                        this.emptyBetterMapScans = 0;
+                    }
+                }
             }
             markers.addAll(this.cachedBetterMapMarkers);
         } else {
             this.cachedBetterMapMarkers = new ArrayList<>();
+            this.emptyBetterMapScans = 0;
             this.lastBetterMapScanMs = 0L;
         }
 
@@ -870,8 +906,11 @@ public final class DynamicMinimapSession {
         // are exhausted by distant POIs clamped to the edge.
         List<DynamicMinimapMarker> orderedMarkers = new ArrayList<>(this.cachedMarkers);
         orderedMarkers.sort(Comparator
-                .comparingInt((DynamicMinimapMarker marker) ->
-                        marker.style == DynamicMinimapMarker.Style.DEATH ? 0 : 1)
+                .comparingInt((DynamicMinimapMarker marker) -> switch (marker.style) {
+                    case DEATH -> 0;
+                    case BETTERMAP, NATIVE_WORLDMAP -> 1;
+                    case DOT -> 2;
+                })
                 .thenComparingDouble(marker -> {
                     double dx = marker.x - this.bufferCenterX;
                     double dz = marker.z - this.bufferCenterZ;

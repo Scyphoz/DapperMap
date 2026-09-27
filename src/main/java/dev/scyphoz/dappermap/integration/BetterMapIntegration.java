@@ -1,6 +1,9 @@
 package dev.scyphoz.dappermap.integration;
 
 import com.hypixel.hytale.common.plugin.PluginIdentifier;
+import com.hypixel.hytale.math.util.ChunkUtil;
+import com.hypixel.hytale.protocol.packets.worldmap.MapImage;
+import com.hypixel.hytale.server.core.universe.world.World;
 import com.hypixel.hytale.server.core.entity.entities.Player;
 import com.hypixel.hytale.server.core.plugin.PluginBase;
 import com.hypixel.hytale.server.core.plugin.PluginManager;
@@ -20,6 +23,8 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CompletableFuture;
+import java.util.function.BiFunction;
 
 /**
  * Optional BetterMap compatibility layer.
@@ -48,25 +53,17 @@ public final class BetterMapIntegration {
         return resolve() != null;
     }
 
-    /**
-     * Reads the markers BetterMap currently exposes to this player.
-     * Any compatibility failure is isolated and results in an empty list.
-     */
+    /** Reads the player's markers; null means the scan failed and the last snapshot should be kept. */
     public static List<DynamicMinimapMarker> getMarkers(Player player) {
-        if (player == null) {
-            return Collections.emptyList();
-        }
+        if (player == null) return null;
 
         Method method = resolve();
-        if (method == null) {
-            return Collections.emptyList();
-        }
+        if (method == null) return null;
 
         try {
             Object value = method.invoke(null, player);
-            if (!(value instanceof List<?> source) || source.isEmpty()) {
-                return Collections.emptyList();
-            }
+            if (!(value instanceof List<?> source)) return null;
+            if (source.isEmpty()) return Collections.emptyList();
 
             List<DynamicMinimapMarker> result = new ArrayList<>(source.size());
             for (Object item : source) {
@@ -90,7 +87,7 @@ public final class BetterMapIntegration {
             }
             return result;
         } catch (ReflectiveOperationException | RuntimeException | LinkageError ignored) {
-            return Collections.emptyList();
+            return null;
         }
     }
 
@@ -284,4 +281,79 @@ public final class BetterMapIntegration {
         }
         return normalized;
     }
+
+    private static final ConcurrentHashMap<Key, Pending> IMAGES = new ConcurrentHashMap<>();
+    private static volatile ClassLoader caveLoader;
+    private static volatile Method managerInstance, enabled, state, underground, renderY, verticalRange, build, image;
+
+    /** Capture cave mode on the world thread before handing an image supplier to the render pool. */
+    public static CaveView caveView(Player player, World world) {
+        if (player == null || world == null || !isAvailable()) return null;
+        try {
+            ClassLoader current = resolvedLoader;
+            if (current == null) return null;
+            resolve(current);
+            if (!Boolean.TRUE.equals(enabled.invoke(null, player))) return null;
+            Object manager = managerInstance.invoke(null);
+            if (!Boolean.TRUE.equals(underground.invoke(manager, player))) return null;
+            Object currentState = state.invoke(manager, player);
+            if (currentState == null) return null;
+            int y = (Integer) renderY.invoke(currentState);
+            int range = (Integer) verticalRange.invoke(currentState);
+            if (range <= 0) return null;
+            // BetterMap's builder takes an image width and height after the chunk index.
+            // Its world map overlay uses floor(32 * imageScale) for both dimensions.
+            int pixels = Math.max(1, (int)Math.floor(32.0F * world.getWorldMapManager()
+                    .getWorldMapSettings().getImageScale()));
+            return new CaveView(world, y, range, pixels);
+        } catch (ReflectiveOperationException | RuntimeException | LinkageError ignored) {
+            return null;
+        }
+    }
+
+    private static synchronized void resolve(ClassLoader current) throws ReflectiveOperationException {
+        if (current == caveLoader && build != null) return;
+        Class<?> caveManager = Class.forName("dev.ninesliced.managers.CaveModeManager", false, current);
+        Class<?> caveState = Class.forName("dev.ninesliced.managers.CaveModeManager$DynamicCaveModeState", false, current);
+        Class<?> builder = Class.forName("dev.ninesliced.providers.CaveModeImageBuilder", false, current);
+        managerInstance = caveManager.getMethod("getInstance");
+        enabled = caveManager.getMethod("isEffectivelyEnabledForPlayer", Player.class);
+        state = caveManager.getMethod("getState", Player.class);
+        underground = caveManager.getMethod("isPlayerUnderground", Player.class);
+        renderY = caveState.getMethod("getRenderYLevel");
+        verticalRange = caveState.getMethod("getVerticalRange");
+        build = builder.getMethod("build", long.class, int.class, int.class, World.class, int.class, int.class);
+        image = builder.getMethod("getImage");
+        IMAGES.clear();
+        caveLoader = current;
+    }
+
+    public record CaveView(World world, int y, int range, int pixels) implements BiFunction<Integer, Integer, MapImage> {
+        @Override public MapImage apply(Integer x, Integer z) {
+            Key key = new Key(world, y, range, pixels, x, z);
+            long now = System.currentTimeMillis();
+            Pending pending = IMAGES.get(key);
+            if (pending == null || now - pending.created > 5000L) {
+                try {
+                    if (IMAGES.size() > 512) IMAGES.clear();
+                    Object result = build.invoke(null, ChunkUtil.indexChunk(x, z), pixels, pixels, world, y, range);
+                    Pending fresh = new Pending((CompletableFuture<?>) result, now);
+                    IMAGES.put(key, fresh);
+                    pending = fresh;
+                } catch (ReflectiveOperationException | RuntimeException | LinkageError ignored) {
+                    return null;
+                }
+            }
+            try {
+                Object builder = pending.future.getNow(null);
+                return builder == null ? null : (MapImage) image.invoke(builder);
+            } catch (ReflectiveOperationException | RuntimeException | LinkageError ignored) {
+                IMAGES.remove(key, pending);
+                return null;
+            }
+        }
+    }
+
+    private record Key(World world, int y, int range, int pixels, int x, int z) {}
+    private record Pending(CompletableFuture<?> future, long created) {}
 }
