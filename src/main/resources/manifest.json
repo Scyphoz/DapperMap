@@ -9,7 +9,7 @@
             "Email": "325493213+Scyphoz@users.noreply.github.com"
         }
     ],
-    "Website": "https://your-plugin-website.com",
+    "Website": "https://www.curseforge.com/hytale/mods/dappermap",
     "ServerVersion": ">=0.6.1 <0.7.0",
     "Dependencies": {
         "Hytale:AssetModule": "*"
@@ -21,6 +21,6 @@
     "Main": "dev.scyphoz.dappermap.DapperMap",
     "IncludesAssetPack": true,
     "UpdateChecker": {
-        "CurseForge": ""
+        "CurseForge": "1714147"
     }
 }
