@@ -321,6 +321,7 @@ public final class DynamicMinimapSession {
 
             long now = System.currentTimeMillis();
             BetterMapIntegration.CaveView caveView = this.settings.betterMapEnabled
+                    && this.settings.betterMapCaveModeEnabled
                     ? BetterMapIntegration.caveView(player, world) : null;
             boolean caveChanged = !java.util.Objects.equals(caveView, this.lastCaveView);
             if (caveChanged) {
@@ -854,7 +855,8 @@ public final class DynamicMinimapSession {
             this.emptyWorldMapScans = 0;
         }
 
-        if (this.settings.betterMapEnabled && BetterMapIntegration.isAvailable()) {
+        if (this.settings.betterMapEnabled && this.settings.betterMapMarkersEnabled
+                && BetterMapIntegration.isAvailable()) {
             long now = System.currentTimeMillis();
             if (now - this.lastBetterMapScanMs >= 750L) {
                 this.lastBetterMapScanMs = now;

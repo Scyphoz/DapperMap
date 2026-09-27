@@ -83,7 +83,7 @@ public class MinimapCommand extends AbstractPlayerCommand {
         addInt(parent, scope, "resolution", "Set texture resolution", "texture-resolution");
         addTwoInt(parent, scope, "position", "Set map position", "pos");
         addTwoString(parent, scope, "markers", "Configure markers", "blips");
-        addTwoString(parent, scope, "integration", "Configure integrations", "integrations");
+        parent.addSubCommand(new IntegrationDispatchCommand("integration", "Configure integrations", this, scope, "integrations"));
         parent.addSubCommand(new ColourDispatchCommand("colours", "Configure colours", this, scope, "colour", "color", "colors"));
     }
 
@@ -272,7 +272,8 @@ public class MinimapCommand extends AbstractPlayerCommand {
                     break;
                 case "integration":
                 case "integrations":
-                    if (!setIntegration(settings, value, extra, context)) {
+                    if (!setIntegration(settings, value, extra, context, player)) {
+                        context.sendMessage(Message.raw("Usage: /mm integration native on|off | bettermap enable|disable|markers on|off|caves on|off"));
                         return;
                     }
 
@@ -380,7 +381,8 @@ public class MinimapCommand extends AbstractPlayerCommand {
             case "compass" -> { if ("on".equals(value)||"off".equals(value)) { settings.showCompass="on".equals(value); changed=true; } usage="admin compass on|off"; }
             case "biome" -> { if ("on".equals(value)||"off".equals(value)) { settings.showBiome="on".equals(value); changed=true; } usage="admin biome on|off"; }
             case "clock" -> { changed=setClock(settings,value); usage="admin clock on|off|12|24"; }
-            case "integration", "integrations" -> { changed=setIntegration(settings,value,extra,context); usage="admin integration bettermap enable|disable"; }
+            case "integration", "integrations" -> { changed=setIntegration(settings,value,extra,context,
+                    store.getComponent(ref, Player.getComponentType())); usage="admin integration native on|off | bettermap enable|disable|markers on|off|caves on|off"; }
             case "colour", "colours", "color", "colors" -> {
                 String colourArgs = args.substring(key.length()).trim();
                 var result = executeColourCommand(settings, colourArgs);
@@ -602,25 +604,48 @@ public class MinimapCommand extends AbstractPlayerCommand {
         }
     }
 
-    private static boolean setIntegration(DynamicMinimapSetting settings, String integration, String value, CommandContext context) {
-        if (!integration.equals("bettermap")) {
-            context.sendMessage(Message.raw("Usage: /mm integration bettermap enable|disable"));
+    private static boolean setIntegration(DynamicMinimapSetting settings, String integration,
+                                          String arguments, CommandContext context, Player player) {
+        String[] parts = arguments.trim().split("\\s+");
+        if (integration.equals("native") || integration.equals("worldmap")) {
+            Boolean enabled = parts.length == 1 ? parseEnabledDisabled(parts[0]) : null;
+            if (enabled == null) return false;
+            settings.showWorldMapMarkers = enabled;
+            context.sendMessage(Message.raw("Hytale world map markers " + (enabled ? "enabled." : "disabled.")));
+            return true;
+        }
+        if (!integration.equals("bettermap")) return false;
+
+        if (parts.length == 1) {
+            Boolean enabled = parseEnabledDisabled(parts[0]);
+            if (enabled == null) return false;
+            if (enabled && !BetterMapIntegration.isAvailable()) {
+                context.sendMessage(Message.raw("BetterMap was not detected."));
+                return false;
+            }
+            settings.betterMapEnabled = enabled;
+            context.sendMessage(Message.raw("BetterMap integration " + (enabled ? "enabled." : "disabled.")));
+            return true;
+        }
+        if (parts.length != 2) return false;
+        Boolean enabled = parseEnabledDisabled(parts[1]);
+        if (enabled == null) return false;
+        if (!settings.betterMapEnabled || !BetterMapIntegration.isAvailable()) {
+            context.sendMessage(Message.raw("Enable the BetterMap integration first."));
             return false;
         }
-
-        Boolean enabled = parseEnabledDisabled(value);
-        if (enabled == null) {
-            context.sendMessage(Message.raw("Usage: /mm integration bettermap enable|disable"));
-            return false;
+        switch (parts[0]) {
+            case "markers" -> settings.betterMapMarkersEnabled = enabled;
+            case "caves", "cave" -> {
+                if (!BetterMapIntegration.isCaveModeEnabled(player)) {
+                    context.sendMessage(Message.raw("Enable BetterMap cave mode first."));
+                    return false;
+                }
+                settings.betterMapCaveModeEnabled = enabled;
+            }
+            default -> { return false; }
         }
-
-        if (enabled && !BetterMapIntegration.isAvailable()) {
-            context.sendMessage(Message.raw("BetterMap integration cannot be enabled because BetterMap was not detected."));
-            return false;
-        }
-
-        settings.betterMapEnabled = enabled;
-        context.sendMessage(Message.raw("BetterMap integration " + (enabled ? "enabled." : "disabled.")));
+        context.sendMessage(Message.raw("BetterMap " + parts[0] + " " + (enabled ? "enabled." : "disabled.")));
         return true;
     }
 
@@ -713,7 +738,10 @@ public class MinimapCommand extends AbstractPlayerCommand {
                 + ", coordinates=" + settings.showCoordinates
                 + ", compass=" + settings.showCompass
                 + ", biome=" + settings.showBiome
-                + ", integrations[bettermap=" + settings.betterMapEnabled + "]";
+                + ", integrations[native=" + settings.showWorldMapMarkers
+                + ", bettermap=" + settings.betterMapEnabled
+                + ", markers=" + settings.betterMapMarkersEnabled
+                + ", caves=" + settings.betterMapCaveModeEnabled + "]";
     }
 
     private static void showHelp(CommandContext context) {
@@ -730,7 +758,8 @@ public class MinimapCommand extends AbstractPlayerCommand {
         context.sendMessage(Message.raw("/mm height on|off | /mm height-range <4..256>"));
         context.sendMessage(Message.raw("/mm coordinates on|off | /mm clock on|off|12|24"));
         context.sendMessage(Message.raw("/mm compass on|off | /mm biome on|off"));
-        context.sendMessage(Message.raw("/mm integration bettermap enable|disable"));
+        context.sendMessage(Message.raw("/mm integration native on|off | bettermap enable|disable"));
+        context.sendMessage(Message.raw("/mm integration bettermap markers|caves on|off"));
         context.sendMessage(Message.raw("/mm colours list | /mm colour <target> <#RRGGBB|R G B>"));
         context.sendMessage(Message.raw("/mm colour reset <target|all>"));
         context.sendMessage(Message.raw("Advanced: /mm resolution <256..1024>"));
@@ -849,6 +878,39 @@ public class MinimapCommand extends AbstractPlayerCommand {
         protected void execute(@Nonnull CommandContext context, @Nonnull Store<EntityStore> store,
                                @Nonnull Ref<EntityStore> ref, @Nonnull PlayerRef playerRef, @Nonnull World world) {
             root.dispatchAdmin(context, store, ref, playerRef, "");
+        }
+    }
+
+    /** Accepts integration, feature, and state in one command for both scopes. */
+    private static final class IntegrationDispatchCommand extends AbstractPlayerCommand {
+        private final MinimapCommand root;
+        private final Scope scope;
+        private final OptionalArg<String> arguments;
+
+        IntegrationDispatchCommand(String name, String description, MinimapCommand root, Scope scope, String... aliases) {
+            super(name, description);
+            this.root = root;
+            this.scope = scope;
+            this.addAliases(aliases);
+            this.requirePermission(scope == Scope.ADMIN ? DapperMapPermissions.ADMIN
+                    : DapperMapPermissions.player("integration"));
+            this.arguments = this.withOptionalArg("arguments", "Integration and setting", ArgTypes.GREEDY_STRING);
+            this.arguments.suggest((sender, entered, count, result) -> {
+                String prefix = entered.toLowerCase();
+                for (String value : new String[]{"native on", "native off", "bettermap enable",
+                        "bettermap disable", "bettermap markers on", "bettermap markers off",
+                        "bettermap caves on", "bettermap caves off"}) {
+                    if (value.startsWith(prefix)) result.suggest(value);
+                }
+            });
+        }
+
+        @Override
+        protected void execute(@Nonnull CommandContext context, @Nonnull Store<EntityStore> store,
+                               @Nonnull Ref<EntityStore> ref, @Nonnull PlayerRef playerRef, @Nonnull World world) {
+            String suffix = this.arguments.provided(context) ? " " + this.arguments.get(context) : "";
+            if (scope == Scope.ADMIN) root.dispatchAdmin(context, store, ref, playerRef, this.getName() + suffix);
+            else root.dispatch(context, store, ref, playerRef, world, this.getName() + suffix);
         }
     }
 

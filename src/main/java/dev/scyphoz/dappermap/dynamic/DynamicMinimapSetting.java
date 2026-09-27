@@ -71,8 +71,10 @@ public final class DynamicMinimapSetting {
     public boolean showClock = true;
     public boolean showCompass = true;
     public boolean showBiome = true;
-    /** Use BetterMap waypoints, its map image quality, and enabled underground cave layers. */
+    /** Master switch for DapperMap's BetterMap waypoint and cave integrations. */
     public boolean betterMapEnabled = true;
+    public boolean betterMapMarkersEnabled = true;
+    public boolean betterMapCaveModeEnabled = true;
     public DynamicMinimapSetting() {
     }
 
@@ -118,6 +120,8 @@ public final class DynamicMinimapSetting {
         copy.showCompass = this.showCompass;
         copy.showBiome = this.showBiome;
         copy.betterMapEnabled = this.betterMapEnabled;
+        copy.betterMapMarkersEnabled = this.betterMapMarkersEnabled;
+        copy.betterMapCaveModeEnabled = this.betterMapCaveModeEnabled;
         return copy;
     }
 

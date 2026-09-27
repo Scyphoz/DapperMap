@@ -146,6 +146,8 @@ public class MinimapSessionManager {
             session.settings().showCompass = settings.showCompass;
             session.settings().showBiome = settings.showBiome;
             session.settings().betterMapEnabled = settings.betterMapEnabled;
+            session.settings().betterMapMarkersEnabled = settings.betterMapMarkersEnabled;
+            session.settings().betterMapCaveModeEnabled = settings.betterMapCaveModeEnabled;
         }
 
         this.save(playerUuid);

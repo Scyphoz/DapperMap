@@ -72,6 +72,7 @@ public final class DapperMapSettingsPage
     private DynamicMinimapSetting draftSettings;
     /** Player reset-to-defaults must remove the override only when Apply is pressed. */
     private boolean draftResetsPlayerOverride = false;
+    private boolean betterMapCaveAvailable = false;
     /**
      * Retained for source compatibility. The authoritative definition now lives in
      * {@link dev.scyphoz.dappermap.permissions.DapperMapPermissions#ADMIN}, a node kept
@@ -118,6 +119,8 @@ public final class DapperMapSettingsPage
                     : this.sessions.getSettings(this.playerRef.getUuid(), this.config)).copy();
         }
         DynamicMinimapSetting settings = this.draftSettings;
+        this.betterMapCaveAvailable = BetterMapIntegration.isCaveModeEnabled(
+                store.getComponent(ref, Player.getComponentType()));
 
         builder.append("Pages/DapperMapSettings.ui");
         builder.set("#PlayerTopAccent.Visible", !this.adminMode);
@@ -160,6 +163,7 @@ public final class DapperMapSettingsPage
         String sectionDescription = switch (this.activeTab) {
             case DISPLAY -> "Customize how DapperMap appears in-game.";
             case MARKERS -> "Choose the navigation markers shown on your instrument.";
+            case INTEGRATIONS -> "Connect Hytale and BetterMap map features to your minimap.";
             case INTERFACE -> "Tune the information, compass and HUD presentation.";
             case POSITION -> "Place the minimap on-screen and fine-tune its position.";
             case COLOURS -> "Tune the DapperMap palette and preview every change live.";
@@ -367,10 +371,10 @@ public final class DapperMapSettingsPage
             case "texture_resolution" -> "resolution";
             case "info_panel" -> "info";
             case "panel_position", "panel_alignment" -> "panel";
-            case "players", "entities", "death", "worldmap" -> "markers";
+            case "players", "entities", "death" -> "markers";
             case "vrange" -> "height-range";
             case "clock_format" -> "clock";
-            case "bettermap" -> "integration";
+            case "worldmap", "bettermap", "bettermap_markers", "bettermap_caves" -> "integration";
             case "move_minimap" -> "position";
             default -> id;
         };
@@ -417,7 +421,6 @@ public final class DapperMapSettingsPage
             target.showOtherPlayers = source.showOtherPlayers;
             target.showEntities = source.showEntities;
             target.showDeathMarker = source.showDeathMarker;
-            target.showWorldMapMarkers = source.showWorldMapMarkers;
         }
         if (this.hasSettingPermission("height")) target.limitMobHeight = source.limitMobHeight;
         if (this.hasSettingPermission("height-range")) target.mobVerticalRange = source.mobVerticalRange;
@@ -432,7 +435,12 @@ public final class DapperMapSettingsPage
         if (this.hasSettingPermission("coordinates")) target.showCoordinates = source.showCoordinates;
         if (this.hasSettingPermission("compass")) target.showCompass = source.showCompass;
         if (this.hasSettingPermission("biome")) target.showBiome = source.showBiome;
-        if (this.hasSettingPermission("integration")) target.betterMapEnabled = source.betterMapEnabled;
+        if (this.hasSettingPermission("integration")) {
+            target.showWorldMapMarkers = source.showWorldMapMarkers;
+            target.betterMapEnabled = source.betterMapEnabled;
+            target.betterMapMarkersEnabled = source.betterMapMarkersEnabled;
+            target.betterMapCaveModeEnabled = source.betterMapCaveModeEnabled;
+        }
         if (this.hasSettingPermission("colours")) target.colours = source.colours;
         target.normalize();
         return target;
@@ -608,6 +616,8 @@ public final class DapperMapSettingsPage
             Ev event
     ) {
         String action = event.action;
+        this.betterMapCaveAvailable = BetterMapIntegration.isCaveModeEnabled(
+                store.getComponent(ref, Player.getComponentType()));
 
         if (this.adminMode && !this.playerRef.hasPermission(ADMIN_PERMISSION)) return;
         if ("cancel_settings".equals(action)) {
@@ -784,7 +794,7 @@ public final class DapperMapSettingsPage
         this.sendUpdate(builder, events, false);
     }
 
-    private static void applyToggle(DynamicMinimapSetting settings, String id) {
+    private void applyToggle(DynamicMinimapSetting settings, String id) {
         if (isControlDisabled(id, settings)) return;
         switch (id) {
             case "enabled" -> settings.enabled = !settings.enabled;
@@ -799,6 +809,8 @@ public final class DapperMapSettingsPage
             case "compass" -> settings.showCompass = !settings.showCompass;
             case "biome" -> settings.showBiome = !settings.showBiome;
             case "bettermap" -> settings.betterMapEnabled = !settings.betterMapEnabled;
+            case "bettermap_markers" -> settings.betterMapMarkersEnabled = !settings.betterMapMarkersEnabled;
+            case "bettermap_caves" -> settings.betterMapCaveModeEnabled = !settings.betterMapCaveModeEnabled;
             case "shape" -> settings.shape = settings.shape == 1 ? 0 : 1;
             case "rotation" -> settings.rotationMode = settings.rotationMode == 0 ? 1 : 0;
             case "clock_format" -> settings.clock24Hour = !settings.clock24Hour;
@@ -807,7 +819,8 @@ public final class DapperMapSettingsPage
 
 
     private static boolean isIntegrationToggle(String id) {
-        return "worldmap".equals(id) || "bettermap".equals(id);
+        return "worldmap".equals(id) || "bettermap".equals(id)
+                || id.startsWith("bettermap_");
     }
 
     private static String toggleStateLabel(String id, DynamicMinimapSetting settings) {
@@ -823,6 +836,7 @@ public final class DapperMapSettingsPage
         return switch (id) {
             case "players", "entities", "death", "worldmap", "height", "info_panel",
                  "clock", "coordinates", "compass", "biome", "bettermap",
+                 "bettermap_markers", "bettermap_caves",
                  "shape", "rotation", "clock_format" -> true;
             default -> false;
         };
@@ -842,6 +856,8 @@ public final class DapperMapSettingsPage
             case "compass" -> settings.showCompass;
             case "biome" -> settings.showBiome;
             case "bettermap" -> settings.betterMapEnabled;
+            case "bettermap_markers" -> settings.betterMapMarkersEnabled;
+            case "bettermap_caves" -> settings.betterMapCaveModeEnabled;
             case "shape" -> settings.shape == 1;
             case "rotation" -> settings.rotationMode == 1;
             case "clock_format" -> settings.clock24Hour;
@@ -875,8 +891,10 @@ public final class DapperMapSettingsPage
             case "compass" -> "Show the direction you are facing.";
             case "biome" -> "Show the name of the biome you are in.";
             case "bettermap" -> BetterMapIntegration.isAvailable()
-                    ? "Show BetterMap waypoints and map quality; show its cave layers underground when enabled."
+                    ? "Enable BetterMap features for this minimap."
                     : "BetterMap is not installed or could not be detected.";
+            case "bettermap_markers" -> "Show BetterMap waypoints and icons on the minimap edge.";
+            case "bettermap_caves" -> "Show BetterMap's cave terrain while underground.";
             case "texture_resolution" -> "Choose the resolution used to render minimap textures.";
             default -> "";
         };
@@ -902,10 +920,13 @@ public final class DapperMapSettingsPage
         };
     }
 
-    private static boolean isDropdownDisabled(String id, DynamicMinimapSetting settings) {
+    private boolean isDropdownDisabled(String id, DynamicMinimapSetting settings) {
         return !settings.enabled
                 || (isInfoPanelSetting(id) && !"info_panel".equals(id) && !settings.infoPanelEnabled)
                 || ("bettermap".equals(id) && !BetterMapIntegration.isAvailable())
+                || (id.startsWith("bettermap_") && (!settings.betterMapEnabled
+                || !BetterMapIntegration.isAvailable()))
+                || ("bettermap_caves".equals(id) && !this.betterMapCaveAvailable)
                 || (("height".equals(id) || "vrange".equals(id)) && !settings.showEntities)
                 || ("vrange".equals(id) && !settings.limitMobHeight)
                 || ("clock_format".equals(id) && !settings.showClock);
@@ -919,11 +940,11 @@ public final class DapperMapSettingsPage
         };
     }
 
-    private static boolean isControlDisabled(String id, DynamicMinimapSetting settings) {
+    private boolean isControlDisabled(String id, DynamicMinimapSetting settings) {
         return !"enabled".equals(id) && isDropdownDisabled(id, settings);
     }
 
-    private static void applyDropdown(DynamicMinimapSetting settings, String id, String value) {
+    private void applyDropdown(DynamicMinimapSetting settings, String id, String value) {
         if (isDropdownDisabled(id, settings)) return;
         if (value == null || value.isBlank()) return;
         // Accept only an offered value, including an existing custom numeric value.
@@ -950,6 +971,8 @@ public final class DapperMapSettingsPage
             case "compass" -> settings.showCompass = Boolean.parseBoolean(value);
             case "biome" -> settings.showBiome = Boolean.parseBoolean(value);
             case "bettermap" -> settings.betterMapEnabled = Boolean.parseBoolean(value);
+            case "bettermap_markers" -> settings.betterMapMarkersEnabled = Boolean.parseBoolean(value);
+            case "bettermap_caves" -> settings.betterMapCaveModeEnabled = Boolean.parseBoolean(value);
         }
         settings.normalize();
     }
@@ -1001,7 +1024,7 @@ public final class DapperMapSettingsPage
                 entries.add(entry("24-hour", "true"));
                 entries.add(entry("12-hour", "false"));
             }
-            case "players", "entities", "death", "worldmap", "height", "coordinates", "clock", "compass", "biome", "bettermap" -> {
+            case "players", "entities", "death", "worldmap", "height", "coordinates", "clock", "compass", "biome", "bettermap", "bettermap_markers", "bettermap_caves" -> {
                 entries.add(entry("Enabled", "true"));
                 entries.add(entry("Disabled", "false"));
             }
@@ -1045,6 +1068,8 @@ public final class DapperMapSettingsPage
             case "compass" -> Boolean.toString(settings.showCompass);
             case "biome" -> Boolean.toString(settings.showBiome);
             case "bettermap" -> Boolean.toString(settings.betterMapEnabled);
+            case "bettermap_markers" -> Boolean.toString(settings.betterMapMarkersEnabled);
+            case "bettermap_caves" -> Boolean.toString(settings.betterMapCaveModeEnabled);
             default -> throw new IllegalArgumentException("Unknown dropdown: " + id);
         };
     }
@@ -1103,8 +1128,9 @@ public final class DapperMapSettingsPage
 
     private static Tab tabFor(String id) {
         return switch (id) {
-            case "section_2", "players", "death", "entities", "height", "vrange",
-                 "section_4", "worldmap", "bettermap" -> Tab.MARKERS;
+            case "section_2", "players", "death", "entities", "height", "vrange" -> Tab.MARKERS;
+            case "section_4", "worldmap", "bettermap", "bettermap_markers",
+                 "bettermap_caves" -> Tab.INTEGRATIONS;
             case "info_panel", "panel_position", "panel_alignment", "section_3",
                  "coordinates", "clock", "clock_format", "compass", "biome" -> Tab.INTERFACE;
             default -> Tab.DISPLAY;
@@ -1139,7 +1165,9 @@ public final class DapperMapSettingsPage
                 new Row("biome", "Biome Readout", Kind.DROPDOWN),
                 new Row("section_4", "INTEGRATIONS", Kind.HEADER),
                 new Row("worldmap", "Hytale World Map Markers", Kind.DROPDOWN),
-                new Row("bettermap", "BetterMap", Kind.DROPDOWN)
+                new Row("bettermap", "BetterMap", Kind.DROPDOWN),
+                new Row("bettermap_markers", "BetterMap Markers", Kind.DROPDOWN),
+                new Row("bettermap_caves", "BetterMap Cave Mode", Kind.DROPDOWN)
         };
     }
 
@@ -1200,6 +1228,7 @@ public final class DapperMapSettingsPage
     private enum Tab {
         DISPLAY("display", "Display"),
         MARKERS("markers", "Markers"),
+        INTEGRATIONS("integrations", "Integrations"),
         INTERFACE("interface", "Interface", "Info Panel"),
         POSITION("position", "Position"),
         COLOURS("colours", "Colours");

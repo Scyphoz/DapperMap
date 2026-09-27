@@ -87,7 +87,9 @@ public final class DynamicMinimapSettingsStore {
                                 + "  \"showClock\": %s,\n"
                                 + "  \"showCompass\": %s,\n"
                                 + "  \"showBiome\": %s,\n"
-                                + "  \"betterMapEnabled\": %s%s\n"
+                                + "  \"betterMapEnabled\": %s,\n"
+                                + "  \"betterMapMarkersEnabled\": %s,\n"
+                                + "  \"betterMapCaveModeEnabled\": %s%s\n"
                                 + "}\n").formatted(
                                 settings.enabled,
                                 settings.rotationMode,
@@ -115,6 +117,8 @@ public final class DynamicMinimapSettingsStore {
                                 settings.showCompass,
                                 settings.showBiome,
                                 settings.betterMapEnabled,
+                                settings.betterMapMarkersEnabled,
+                                settings.betterMapCaveModeEnabled,
                                 colourFields(settings.colours)
                         )
                 );
@@ -163,6 +167,8 @@ public final class DynamicMinimapSettingsStore {
                     Boolean showCompass = extractBool(json, "showCompass");
                     Boolean showBiome = extractBool(json, "showBiome");
                     Boolean betterMapEnabled = extractBool(json, "betterMapEnabled");
+                    Boolean betterMapMarkersEnabled = extractBool(json, "betterMapMarkersEnabled");
+                    Boolean betterMapCaveModeEnabled = extractBool(json, "betterMapCaveModeEnabled");
                     if (enabled != null) {
                         settings.enabled = enabled;
                     }
@@ -276,6 +282,8 @@ public final class DynamicMinimapSettingsStore {
                     if (betterMapEnabled != null) {
                         settings.betterMapEnabled = betterMapEnabled;
                     }
+                    if (betterMapMarkersEnabled != null) settings.betterMapMarkersEnabled = betterMapMarkersEnabled;
+                    if (betterMapCaveModeEnabled != null) settings.betterMapCaveModeEnabled = betterMapCaveModeEnabled;
                 } catch (IOException var23) {
                 }
             }

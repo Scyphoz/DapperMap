@@ -286,6 +286,17 @@ public final class BetterMapIntegration {
     private static volatile ClassLoader caveLoader;
     private static volatile Method managerInstance, enabled, state, underground, renderY, verticalRange, build, image;
 
+    /** BetterMap's own global and per-player cave-mode switch. */
+    public static boolean isCaveModeEnabled(Player player) {
+        if (player == null || !isAvailable()) return false;
+        try {
+            resolve(resolvedLoader);
+            return Boolean.TRUE.equals(enabled.invoke(null, player));
+        } catch (ReflectiveOperationException | RuntimeException | LinkageError ignored) {
+            return false;
+        }
+    }
+
     /** Capture cave mode on the world thread before handing an image supplier to the render pool. */
     public static CaveView caveView(Player player, World world) {
         if (player == null || world == null || !isAvailable()) return null;
