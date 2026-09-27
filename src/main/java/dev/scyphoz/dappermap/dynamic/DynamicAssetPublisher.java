@@ -15,6 +15,7 @@ import java.util.concurrent.ConcurrentMap;
 
 /** Sends generated PNG assets to a player's client and avoids retransmitting identical bytes. */
 public final class DynamicAssetPublisher {
+    private static final ConcurrentMap<UUID, ConcurrentMap<String, byte[]>> MARKER_BYTES = new ConcurrentHashMap<>();
     private static final int PART_SIZE = 2621440;
     private static final ConcurrentMap<UUID, ConcurrentMap<String, String>> DELIVERED = new ConcurrentHashMap();
 
@@ -24,8 +25,15 @@ public final class DynamicAssetPublisher {
     public static void clear(UUID uuid) {
         if (uuid != null) {
             DELIVERED.remove(uuid);
+            MARKER_BYTES.remove(uuid);
         }
 
+    }
+
+    public static byte[] markerBytes(UUID uuid, String path) {
+        Map<String, byte[]> assets = uuid == null ? null : MARKER_BYTES.get(uuid);
+        byte[] bytes = assets == null ? null : assets.get(path);
+        return bytes == null ? null : bytes.clone();
     }
 
     public static boolean deliver(PlayerRef playerRef, String path, byte[] data) {
@@ -52,6 +60,12 @@ public final class DynamicAssetPublisher {
                 }
 
                 String hash = asset.getHash();
+                if (uuid != null && path.startsWith("UI/DapperMap/")
+                        && (path.contains("/mk-") || path.contains("/bettermap-")
+                        || path.contains("/worldmap-") || path.contains("/death-"))) {
+                    Map<String, byte[]> markers = MARKER_BYTES.computeIfAbsent(uuid, ignored -> new ConcurrentHashMap<>());
+                    if (markers.size() < 256 || markers.containsKey(path)) markers.put(path, data.clone());
+                }
                 if (uuid != null) {
                     Map<String, String> delivered = (Map)DELIVERED.get(uuid);
                     if (delivered != null && hash.equals(delivered.get(path))) {

@@ -1,9 +1,10 @@
-Group { Anchor: (Height: 38); LayoutMode: Left; Padding: (Left: 2, Right: 2, Vertical: 4);
+Group { Anchor: (Height: 84); LayoutMode: Left; Padding: (Left: 2, Right: 2, Vertical: 4);
   Group #Accent { Anchor: (Width: 0); Visible: false; }
   Group #Info { FlexWeight: 1; LayoutMode: Top;
-    Label #RowLabel { Anchor: (Height: 30); Style: (FontSize: 10, TextColor: #cdc7e6, HorizontalAlignment: Start, VerticalAlignment: Center); }
-    Label #RowDescription { Anchor: (Height: 0); Visible: false; }
+    Label #RowLabel { Anchor: (Height: 24); Style: (FontSize: 12, TextColor: #cdc7e6, HorizontalAlignment: Start, VerticalAlignment: Center); }
+    Label #RowDescription { Anchor: (Height: 48); Style: (FontSize: 10, TextColor: #9298ae, HorizontalAlignment: Start, VerticalAlignment: Center); }
   }
+  Group { Anchor: (Width: 12); }
   Label #StateLabel { Anchor: (Width: 90, Height: 30); Style: (FontSize: 8, TextColor: #62dcd5, HorizontalAlignment: End, VerticalAlignment: Center); }
   Group { Anchor: (Width: 8); }
   Group #ToggleFrame { Anchor: (Width: 38, Height: 20); LayoutMode: Full;

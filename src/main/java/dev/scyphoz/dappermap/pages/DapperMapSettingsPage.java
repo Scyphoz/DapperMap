@@ -68,6 +68,7 @@ public final class DapperMapSettingsPage
     private Tab activeTab = Tab.DISPLAY;
     private Key selectedColour = Key.EDGE;
     private int previewRevision = 0;
+    private DynamicMinimapRenderer.LiveSnapshot previewSnapshot;
     /** Unsaved working copy used by the settings UI and live preview. */
     private DynamicMinimapSetting draftSettings;
     /** Player reset-to-defaults must remove the override only when Apply is pressed. */
@@ -118,6 +119,7 @@ public final class DapperMapSettingsPage
                     ? this.sessions.getAdminDefaults(this.config)
                     : this.sessions.getSettings(this.playerRef.getUuid(), this.config)).copy();
         }
+        if (this.previewSnapshot == null) this.previewSnapshot = this.sessions.capturePreview(this.playerRef.getUuid());
         DynamicMinimapSetting settings = this.draftSettings;
         this.betterMapCaveAvailable = BetterMapIntegration.isCaveModeEnabled(
                 store.getComponent(ref, Player.getComponentType()));
@@ -162,7 +164,7 @@ public final class DapperMapSettingsPage
         builder.set("#PageSectionTitle.Text", this.activeTab.label.toUpperCase());
         String sectionDescription = switch (this.activeTab) {
             case DISPLAY -> "Customize how DapperMap appears in-game.";
-            case MARKERS -> "Choose the navigation markers shown on your instrument.";
+            case MARKERS -> "Choose the navigation markers shown on your minimap.";
             case INTEGRATIONS -> "Connect Hytale and BetterMap map features to your minimap.";
             case INTERFACE -> "Tune the information, compass and HUD presentation.";
             case POSITION -> "Place the minimap on-screen and fine-tune its position.";
@@ -227,7 +229,9 @@ public final class DapperMapSettingsPage
             String row = "#PositionFineTuneList[" + index + "]";
             builder.append("#PositionFineTuneList", "Pages/DapperMapSliderRow.ui");
             builder.set(row + " #RowLabel.Text", labels[index]);
-            builder.set(row + " #RowDescription.Text", "");
+            builder.set(row + " #RowDescription.Text", index == 0
+                    ? "Move the minimap left or right."
+                    : "Move the minimap up or down.");
             if (allowed) {
                 events.addEventBinding(CustomUIEventBindingType.ValueChanged, row + " #ValueSlider",
                         EventData.of("Action", actions[index])
@@ -277,12 +281,20 @@ public final class DapperMapSettingsPage
     private void updatePreview(UICommandBuilder ui, DynamicMinimapSetting settings) {
         if (!settings.enabled) {
             ui.set("#PreviewHudImage.Visible", false);
+            ui.set("#PreviewDisabled.Text", "MINIMAP DISABLED");
+            ui.set("#PreviewDisabled.Visible", true);
+            return;
+        }
+        if (this.previewSnapshot == null) this.previewSnapshot = this.sessions.capturePreview(this.playerRef.getUuid());
+        if (this.previewSnapshot == null) {
+            ui.set("#PreviewHudImage.Visible", false);
+            ui.set("#PreviewDisabled.Text", "LIVE HUD PREVIEW UNAVAILABLE");
             ui.set("#PreviewDisabled.Visible", true);
             return;
         }
         byte[] png = this.activeTab == Tab.POSITION
-                ? DynamicMinimapRenderer.renderPositionPreview(settings)
-                : DynamicMinimapRenderer.renderSettingsPreview(settings);
+                ? DynamicMinimapRenderer.renderPositionPreview(settings, this.previewSnapshot)
+                : DynamicMinimapRenderer.renderSettingsPreview(settings, this.previewSnapshot);
         if (png == null) return;
         String slug = this.playerRef.getUuid() == null ? "anon" : this.playerRef.getUuid().toString().replace("-", "");
         String path = "UI/DapperMap/settings-preview-" + slug + "-" + (++this.previewRevision) + ".png";
@@ -485,7 +497,7 @@ public final class DapperMapSettingsPage
         String selector = "#DapperMapSettingsList[" + index + "]";
         builder.append("#DapperMapSettingsList", "Pages/DapperMapDisabledDropdownRow.ui");
         builder.set(selector + " #RowLabel.Text", row.label);
-        builder.set(selector + " #RowDescription.Text", description(row.id));
+        builder.set(selector + " #RowDescription.Text", wrappedDescription(row.id));
         builder.set(selector + " #ValueLabel.Text",
                 this.hasSettingPermission(permissionForSetting(row.id))
                         ? disabledValue(row.id, settings) : "Permission denied");
@@ -497,13 +509,13 @@ public final class DapperMapSettingsPage
         if (!settings.enabled || !this.hasSettingPermission(permissionForSetting(row.id))) {
             builder.append("#DapperMapSettingsList", "Pages/DapperMapDisabledDropdownRow.ui");
             builder.set(selector + " #RowLabel.Text", row.label);
-            builder.set(selector + " #RowDescription.Text", description(row.id));
+            builder.set(selector + " #RowDescription.Text", wrappedDescription(row.id));
             builder.set(selector + " #ValueLabel.Text", settings.enabled ? "Permission denied" : row.label);
             return;
         }
         builder.append("#DapperMapSettingsList", "Pages/DapperMapMoveRow.ui");
         builder.set(selector + " #RowLabel.Text", row.label);
-        builder.set(selector + " #RowDescription.Text", description(row.id));
+        builder.set(selector + " #RowDescription.Text", wrappedDescription(row.id));
         builder.append(selector + " #BtnClickSlot", "Pages/BasicTextButton.ui");
         builder.set(selector + " #BtnClickSlot[0].TextSpans", Message.raw(""));
         builder.set(selector + " #BtnLabel.TextSpans",
@@ -533,7 +545,7 @@ public final class DapperMapSettingsPage
 
         builder.set(
                 selector + " #RowDescription.Text",
-                description(row.id)
+                wrappedDescription(row.id)
         );
 
         boolean on = toggleValue(row.id, settings);
@@ -575,7 +587,7 @@ public final class DapperMapSettingsPage
             // Render a non-interactive value while its controlling filter is off.
             builder.append("#DapperMapSettingsList", "Pages/DapperMapDisabledDropdownRow.ui");
             builder.set(selector + " #RowLabel.Text", row.label);
-            builder.set(selector + " #RowDescription.Text", description(row.id));
+            builder.set(selector + " #RowDescription.Text", wrappedDescription(row.id));
             builder.set(selector + " #ValueLabel.Text", disabledValue(row.id, settings));
             return;
         }
@@ -590,7 +602,7 @@ public final class DapperMapSettingsPage
                 row.label
         );
 
-        builder.set(selector + " #RowDescription.Text", description(row.id));
+        builder.set(selector + " #RowDescription.Text", wrappedDescription(row.id));
 
         String dropdownSelector = selector + " #ValueDropdown";
 
@@ -891,13 +903,32 @@ public final class DapperMapSettingsPage
             case "compass" -> "Show the direction you are facing.";
             case "biome" -> "Show the name of the biome you are in.";
             case "bettermap" -> BetterMapIntegration.isAvailable()
-                    ? "Enable BetterMap features for this minimap."
+                    ? "Enable BetterMap waypoints and cave terrain. Surface maps use shared Hytale images."
                     : "BetterMap is not installed or could not be detected.";
             case "bettermap_markers" -> "Show BetterMap waypoints and icons on the minimap edge.";
             case "bettermap_caves" -> "Show BetterMap's cave terrain while underground.";
             case "texture_resolution" -> "Choose the resolution used to render minimap textures.";
             default -> "";
         };
+    }
+
+    /** Keep descriptions within the text column at common UI scales. */
+    private static String wrappedDescription(String id) {
+        String text = description(id);
+        StringBuilder lines = new StringBuilder();
+        int length = 0;
+        for (String word : text.split(" ")) {
+            if (length > 0 && length + 1 + word.length() > 58) {
+                lines.append('\n');
+                length = 0;
+            } else if (length > 0) {
+                lines.append(' ');
+                length++;
+            }
+            lines.append(word);
+            length += word.length();
+        }
+        return lines.toString();
     }
 
     private static String disabledValue(String id, DynamicMinimapSetting settings) {
@@ -1128,8 +1159,8 @@ public final class DapperMapSettingsPage
 
     private static Tab tabFor(String id) {
         return switch (id) {
-            case "section_2", "players", "death", "entities", "height", "vrange" -> Tab.MARKERS;
-            case "section_4", "worldmap", "bettermap", "bettermap_markers",
+            case "players", "death", "entities", "height", "vrange" -> Tab.MARKERS;
+            case "section_4", "section_5", "worldmap", "bettermap", "bettermap_markers",
                  "bettermap_caves" -> Tab.INTEGRATIONS;
             case "info_panel", "panel_position", "panel_alignment", "section_3",
                  "coordinates", "clock", "clock_format", "compass", "biome" -> Tab.INTERFACE;
@@ -1151,7 +1182,6 @@ public final class DapperMapSettingsPage
                 new Row("info_panel", "Info Panel", Kind.TOGGLE),
                 new Row("panel_position", "Info Panel Position", Kind.DROPDOWN),
                 new Row("panel_alignment", "Panel Text Alignment", Kind.DROPDOWN),
-                new Row("section_2", "MARKERS", Kind.HEADER),
                 new Row("players", "Player Markers", Kind.DROPDOWN),
                 new Row("death", "Death Marker", Kind.DROPDOWN),
                 new Row("entities", "Creature Markers", Kind.DROPDOWN),
@@ -1163,8 +1193,9 @@ public final class DapperMapSettingsPage
                 new Row("clock_format", "Clock Format", Kind.DROPDOWN),
                 new Row("compass", "Compass Readout", Kind.DROPDOWN),
                 new Row("biome", "Biome Readout", Kind.DROPDOWN),
-                new Row("section_4", "INTEGRATIONS", Kind.HEADER),
+                new Row("section_4", "HYTALE", Kind.HEADER),
                 new Row("worldmap", "Hytale World Map Markers", Kind.DROPDOWN),
+                new Row("section_5", "BETTERMAP", Kind.HEADER),
                 new Row("bettermap", "BetterMap", Kind.DROPDOWN),
                 new Row("bettermap_markers", "BetterMap Markers", Kind.DROPDOWN),
                 new Row("bettermap_caves", "BetterMap Cave Mode", Kind.DROPDOWN)

@@ -111,6 +111,11 @@ public class MinimapSessionManager {
         return settings;
     }
 
+    public dev.scyphoz.dappermap.dynamic.DynamicMinimapRenderer.LiveSnapshot capturePreview(UUID uuid) {
+        DynamicMinimapSession session = uuid == null ? null : this.sessionsByPlayer.get(uuid);
+        return session == null ? null : session.capturePreview();
+    }
+
     public void setSettings(UUID playerUuid, DynamicMinimapSetting settings) {
         settings.normalize();
         if (playerUuid != null) {

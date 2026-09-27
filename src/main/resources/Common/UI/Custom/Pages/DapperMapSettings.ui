@@ -4,7 +4,7 @@ $C = "../Common.ui";
 $C.@PageOverlay {
   LayoutMode: CenterMiddle;
   Group #DapperMapShell {
-    Anchor: (Width: 1000, Height: 700);
+    Anchor: (Width: 1060, Height: 700);
     Background: PatchStyle(TexturePath: "DapperMapGlassPanelDeep.png", Border: 14);
     LayoutMode: Top;
     Padding: (Left: 20, Right: 20, Top: 16, Bottom: 16);
@@ -37,13 +37,6 @@ $C.@PageOverlay {
           AssetImage { Anchor: (Left: 24, Top: 15, Width: 20, Height: 20); AssetPath: "UI/Custom/Pages/DapperMapIconMarkers.png"; }
         }
         Group { Anchor: (Height: 4); }
-        Group #DapperMapTabIntegrationsSlot { Anchor: (Height: 50); LayoutMode: Full;
-          Group #DapperMapTabIntegrationsActive { Anchor: (Full: 0); Background: PatchStyle(TexturePath: "DapperMapGlassActive.png", Border: 11); Visible: false; }
-          Label #DapperMapTabIntegrationsLabel { Anchor: (Left: 52, Top: 0, Width: 112, Height: 50); Text: "INTEGRATIONS"; Style: (FontSize: 13, TextColor: #7f89a3, HorizontalAlignment: Start, VerticalAlignment: Center); }
-          Group #DapperMapTabIntegrationsButtonSlot { Anchor: (Full: 0); LayoutMode: Full; }
-          AssetImage { Anchor: (Left: 24, Top: 15, Width: 20, Height: 20); AssetPath: "UI/Custom/Pages/DapperMapIconIntegrations.png"; }
-        }
-        Group { Anchor: (Height: 4); }
         Group #DapperMapTabInterfaceSlot { Anchor: (Height: 50); LayoutMode: Full;
           Group #DapperMapTabInterfaceActive { Anchor: (Full: 0); Background: PatchStyle(TexturePath: "DapperMapGlassActive.png", Border: 11); Visible: false; }
           Label #DapperMapTabInterfaceLabel { Anchor: (Left: 52, Top: 0, Width: 112, Height: 50); Text: "INFO PANEL"; Style: (FontSize: 15, TextColor: #7f89a3, HorizontalAlignment: Start, VerticalAlignment: Center); }
@@ -64,6 +57,13 @@ $C.@PageOverlay {
           Group #DapperMapTabColoursButtonSlot { Anchor: (Full: 0); LayoutMode: Full; }
           AssetImage { Anchor: (Left: 24, Top: 15, Width: 20, Height: 20); AssetPath: "UI/Custom/Pages/DapperMapIconColours.png"; }
         }
+        Group #DapperMapTabIntegrationsSlot { Anchor: (Height: 50); LayoutMode: Full;
+          Group #DapperMapTabIntegrationsActive { Anchor: (Full: 0); Background: PatchStyle(TexturePath: "DapperMapGlassActive.png", Border: 11); Visible: false; }
+          Label #DapperMapTabIntegrationsLabel { Anchor: (Left: 52, Top: 0, Width: 112, Height: 50); Text: "INTEGRATIONS"; Style: (FontSize: 13, TextColor: #7f89a3, HorizontalAlignment: Start, VerticalAlignment: Center); }
+          Group #DapperMapTabIntegrationsButtonSlot { Anchor: (Full: 0); LayoutMode: Full; }
+          AssetImage { Anchor: (Left: 24, Top: 15, Width: 20, Height: 20); AssetPath: "UI/Custom/Pages/DapperMapIconIntegrations.png"; }
+        }
+        Group { Anchor: (Height: 4); }
         Group { Anchor: (Height: 18); }
         Group { Anchor: (Height: 1); Background: #615a78(0.50); }
         Group { FlexWeight: 1; }
@@ -131,11 +131,11 @@ $C.@PageOverlay {
             Label #PositionDisabledNotice { FlexWeight: 1; Visible: false; Text: "ENABLE THE MINIMAP TO EDIT POSITION"; Style: (FontSize: 10, TextColor: #777d96, HorizontalAlignment: Center, VerticalAlignment: Center); }
           }
           Group { Anchor: (Width: 12); }
-          Group #DapperMapPreviewPanel { Anchor: (Width: 320); Background: PatchStyle(TexturePath: "DapperMapGlassPanel.png", Border: 12); LayoutMode: Top; Padding: (Horizontal: 12, Top: 12, Bottom: 12);
+          Group #DapperMapPreviewPanel { Anchor: (Width: 300); Background: PatchStyle(TexturePath: "DapperMapGlassPanel.png", Border: 12); LayoutMode: Top; Padding: (Horizontal: 12, Top: 12, Bottom: 12);
             Label { Anchor: (Height: 26); Text: "P R E V I E W"; Style: (FontSize: 10, TextColor: #bdb4dd, HorizontalAlignment: Start, VerticalAlignment: Center); }
             Group { Anchor: (Height: 8); }
             Group #PreviewStage { Anchor: (Height: 428); LayoutMode: Full;
-              AssetImage #PreviewHudImage { Anchor: (Left: 2, Top: 58, Width: 292, Height: 232); Visible: true; }
+              AssetImage #PreviewHudImage { Anchor: (Left: 2, Top: 66, Width: 272, Height: 216); Visible: true; }
               Label #PreviewDisabled { Visible: false; Anchor: (Full: 0); Text: "MINIMAP DISABLED"; Style: (FontSize: 10, TextColor: #8491a4, HorizontalAlignment: Center, VerticalAlignment: Center); }
             }
             Group { FlexWeight: 1; }

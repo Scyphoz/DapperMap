@@ -9,6 +9,7 @@ import com.hypixel.hytale.server.core.ui.builder.UICommandBuilder;
 import com.hypixel.hytale.server.core.universe.PlayerRef;
 import java.util.Objects;
 import java.util.UUID;
+import java.util.function.Consumer;
 
 /**
  * Owns the client-side HUD tree and applies small UI updates without rebuilding the
@@ -16,7 +17,7 @@ import java.util.UUID;
  */
 public final class DynamicMinimapHud extends CustomUIHud {
     public static final String KEY = "DapperMapDynamicMinimapHud";
-    public static final int MARKER_SLOTS = 48;
+    public static final int MARKER_SLOTS = 256;
 
     // All constants below are logical HUD units. They are converted to display units
     // only when markup/Anchor values are produced.
@@ -32,6 +33,10 @@ public final class DynamicMinimapHud extends CustomUIHud {
     private static final int BIOME_HEIGHT = 43;
 
     private final PlayerRef ownerRef;
+    private final Consumer<Runnable> worldExecute;
+    private boolean overlayRenderQueued;
+    private boolean overlayDirty;
+    private long overlayGeneration;
     private final UUID uuid;
     private final DynamicMinimapSetting settings;
     /** Base logical UI size. World/pan/marker math remains in this coordinate space. */
@@ -64,15 +69,18 @@ public final class DynamicMinimapHud extends CustomUIHud {
     private String compassText = "N 0 deg";
     private String clockText = "Sun 06:00";
     private String biomeText = "Biome: unknown";
-    private final String[] slotPath = new String[48];
-    private final boolean[] slotVisible = new boolean[48];
-    private final int[] slotLeft = new int[48];
-    private final int[] slotTop = new int[48];
-    private final int[] slotSize = new int[48];
+    private final String[] slotPath = new String[MARKER_SLOTS];
+    private final boolean[] slotVisible = new boolean[MARKER_SLOTS];
+    private final int[] slotLeft = new int[MARKER_SLOTS];
+    private final int[] slotTop = new int[MARKER_SLOTS];
+    private final int[] slotSize = new int[MARKER_SLOTS];
+    private int activeMarkerSlots = 0;
 
-    public DynamicMinimapHud(PlayerRef playerRef, DynamicMinimapSetting settings) {
+    public DynamicMinimapHud(PlayerRef playerRef, DynamicMinimapSetting settings,
+                             Consumer<Runnable> worldExecute) {
         super(playerRef, KEY);
         this.ownerRef = playerRef;
+        this.worldExecute = worldExecute;
         this.uuid = playerRef.getUuid();
         this.settings = settings.copy();
         this.settings.normalize();
@@ -93,6 +101,23 @@ public final class DynamicMinimapHud extends CustomUIHud {
     /** Logical terrain-buffer size expected by the existing session/world calculations. */
     public int bufferPixels() {
         return this.bufferPixels;
+    }
+
+    /** Copy the mounted HUD state for a frozen settings preview. */
+    public DynamicMinimapRenderer.LiveSnapshot snapshot(byte[] terrain, double selfAngle) {
+        if (!this.built || !this.terrainShown || terrain == null) return null;
+        java.util.List<DynamicMinimapRenderer.PreviewMarker> markers = new java.util.ArrayList<>();
+        for (int i = 0; i < this.slotPath.length; i++) {
+            if (!this.slotVisible[i] || this.slotPath[i] == null) continue;
+            byte[] icon = DynamicAssetPublisher.markerBytes(this.uuid, this.slotPath[i]);
+            if (icon != null) markers.add(new DynamicMinimapRenderer.PreviewMarker(
+                    icon, this.panLeft + this.slotLeft[i], this.panTop + this.slotTop[i],
+                    this.slotSize[i]));
+        }
+        return new DynamicMinimapRenderer.LiveSnapshot(terrain.clone(), this.logicalUiSize,
+                this.bufferPixels, this.panLeft, this.panTop, selfAngle, this.frameAngle,
+                this.coordsText, this.compassText, this.clockText, this.biomeText,
+                java.util.List.copyOf(markers));
     }
 
     public boolean isShown() {
@@ -290,8 +315,17 @@ public final class DynamicMinimapHud extends CustomUIHud {
         if (this.built) {
             UICommandBuilder builder = new UICommandBuilder();
             boolean changed = false;
+            int occupied = 0;
+            if (slots != null) {
+                for (int i = Math.min(slots.length, MARKER_SLOTS) - 1; i >= 0; --i) {
+                    if (slots[i] != null && slots[i].path != null) {
+                        occupied = i + 1;
+                        break;
+                    }
+                }
+            }
 
-            for(int i = 0; i < 48; ++i) {
+            for (int i = 0; i < Math.max(occupied, this.activeMarkerSlots); ++i) {
                 Slot slot = slots != null && i < slots.length ? slots[i] : null;
                 String path = slot != null ? slot.path : null;
                 boolean visible = path != null;
@@ -323,6 +357,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
             if (changed) {
                 this.update(false, builder);
             }
+            this.activeMarkerSlots = occupied;
         }
     }
 
@@ -418,12 +453,15 @@ public final class DynamicMinimapHud extends CustomUIHud {
             builder.remove("#WayfinderMmRoot");
             this.update(false, builder);
             this.built = false;
+            this.overlayGeneration++;
+            this.overlayDirty = false;
             this.terrainShown = false;
 
-            for(int i = 0; i < 48; ++i) {
+            for(int i = 0; i < MARKER_SLOTS; ++i) {
                 this.slotPath[i] = null;
                 this.slotVisible[i] = false;
             }
+            this.activeMarkerSlots = 0;
         }
     }
 
@@ -707,18 +745,57 @@ public final class DynamicMinimapHud extends CustomUIHud {
     }
 
     private void publishOverlayAsset(boolean updateClient) {
-        if (updateClient) this.overlayRevision++;
+        if (updateClient && this.built) {
+            this.overlayDirty = true;
+            this.queueOverlayRender();
+            return;
+        }
+
+        // Structural changes need a valid asset before the HUD subtree is rebuilt.
+        // Invalidate any older in-flight status image before publishing the layout.
+        this.overlayGeneration++;
+        this.overlayDirty = false;
         this.updateStaticAssetPaths();
         byte[] overlay = DynamicMinimapRenderer.renderHudOverlay(
                 this.settings, this.logicalUiSize, READOUT_WIDTH,
                 this.readoutHeight(), this.readoutGap(), this.frameAngle,
                 this.coordsText, this.compassText, this.clockText, this.biomeText);
-        if (overlay != null && DynamicAssetPublisher.deliver(this.ownerRef, this.overlayPath, overlay)
-                && updateClient && this.built) {
-            UICommandBuilder builder = new UICommandBuilder();
-            builder.set("#WayfinderMmRoot #WayfinderMmOverlay.AssetPath", this.overlayPath);
-            this.update(false, builder);
-        }
+        if (overlay != null) DynamicAssetPublisher.deliver(this.ownerRef, this.overlayPath, overlay);
+    }
+
+    /** Render frequent compass and readout changes outside the world tick. */
+    private void queueOverlayRender() {
+        if (!this.overlayDirty || this.overlayRenderQueued || !this.built) return;
+        this.overlayDirty = false;
+        this.overlayRenderQueued = true;
+        this.overlayRevision++;
+        this.updateStaticAssetPaths();
+        String path = this.overlayPath;
+        long generation = ++this.overlayGeneration;
+        DynamicMinimapSetting snapshot = this.settings.copy();
+        int mapSize = this.logicalUiSize;
+        int panelHeight = this.readoutHeight();
+        int gap = this.readoutGap();
+        double angle = this.frameAngle;
+        String coords = this.coordsText;
+        String compass = this.compassText;
+        String clock = this.clockText;
+        String biome = this.biomeText;
+        DynamicMinimapSession.renderAsync(() -> {
+            byte[] image = DynamicMinimapRenderer.renderHudOverlay(
+                    snapshot, mapSize, READOUT_WIDTH, panelHeight, gap, angle,
+                    coords, compass, clock, biome);
+            this.worldExecute.accept(() -> {
+                this.overlayRenderQueued = false;
+                if (this.built && generation == this.overlayGeneration && image != null
+                        && DynamicAssetPublisher.deliver(this.ownerRef, path, image)) {
+                    UICommandBuilder builder = new UICommandBuilder();
+                    builder.set("#WayfinderMmRoot #WayfinderMmOverlay.AssetPath", path);
+                    this.update(false, builder);
+                }
+                this.queueOverlayRender();
+            });
+        });
     }
 
     private String maskFileFor(DynamicMinimapSetting maskSettings) {

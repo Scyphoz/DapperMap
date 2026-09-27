@@ -44,6 +44,11 @@ public final class DynamicMinimapSession {
         thread.setDaemon(true);
         return thread;
     });
+    /** Shared pool for image work that does not need the world thread. */
+    static void renderAsync(Runnable work) {
+        RENDER_POOL.execute(work);
+    }
+
     private final PlayerRef playerRef;
     private final UUID uuid;
     private final String slug;
@@ -71,6 +76,13 @@ public final class DynamicMinimapSession {
     private long lastRotationDeliveryMs = 0L;
     private long terrainGeneration = 0L;
     private byte[] northUpTerrainPng = null;
+    private byte[] displayedTerrainPng = null;
+
+    public DynamicMinimapRenderer.LiveSnapshot capturePreview() {
+        return this.hud == null ? null : this.hud.snapshot(this.displayedTerrainPng,
+                this.lastSelfBucket < 0 ? 0.0D : this.lastSelfBucket * (Math.PI * 2 / SELF_BUCKETS));
+    }
+
     private boolean firstTerrainForHud = false;
     private double bufferCenterX = Double.NaN;
     private double bufferCenterZ = Double.NaN;
@@ -81,6 +93,8 @@ public final class DynamicMinimapSession {
     private long lastTickMs = 0L;
     private long lastSignature = 0L;
     private long lastSignatureMs = 0L;
+    private boolean signatureInFlight = false;
+    private boolean signatureChangedPending = false;
     private BetterMapIntegration.CaveView lastCaveView;
     private long lastMarkerMs = 0L;
     private MinimapColours renderedColours;
@@ -90,6 +104,7 @@ public final class DynamicMinimapSession {
     private int emptyBetterMapScans = 0;
     private int emptyWorldMapScans = 0;
     private long lastBetterMapScanMs = 0L;
+    private long lastWorldMapScanMs = 0L;
     private long lastTerrainMs = 0L;
     private boolean bufferComplete = false;
     private long warmupUntilMs = 0L;
@@ -163,11 +178,19 @@ public final class DynamicMinimapSession {
 
     }
 
+    /** Give Hytale's slow-task warning an actionable name for each world callback. */
+    private static Runnable labelled(String name, Runnable action) {
+        return new Runnable() {
+            @Override public void run() { action.run(); }
+            @Override public String toString() { return "DapperMap " + name; }
+        };
+    }
+
     private void tick() {
         if (this.running) {
             for(World world : Universe.get().getWorlds().values()) {
                 if (world.getPlayerCount() > 0) {
-                    world.execute(() -> {
+                    world.execute(labelled("tick", () -> {
                         if (this.running) {
                             Ref<EntityStore> ref = world.getEntityRef(this.uuid);
                             if (ref != null && ref.isValid()) {
@@ -175,7 +198,7 @@ public final class DynamicMinimapSession {
                             }
                         }
 
-                    });
+                    }));
                 }
             }
         }
@@ -218,6 +241,7 @@ public final class DynamicMinimapSession {
                 }
                 this.lastMarkerMs = 0L;
                 this.lastBetterMapScanMs = 0L;
+                this.lastWorldMapScanMs = 0L;
             }
             Rotation3f rotation = transform.getRotation();
             double yaw = rotation == null ? Double.NaN : (double)rotation.yaw();
@@ -229,7 +253,7 @@ public final class DynamicMinimapSession {
                 return;
             }
 
-            this.ensureHud();
+            this.ensureHud(world);
             if (this.hud == null || !this.hud.isShown()) {
                 return;
             }
@@ -251,6 +275,7 @@ public final class DynamicMinimapSession {
                 this.lastSignatureMs = 0L;
                 this.lastTerrainMs = 0L;
                 this.northUpTerrainPng = null;
+                this.displayedTerrainPng = null;
                 ++this.terrainGeneration;
                 this.rotationSequence.incrementAndGet();
             }
@@ -271,6 +296,7 @@ public final class DynamicMinimapSession {
                 this.lastTerrainMs = 0L;
                 this.lastMarkerMs = 0L;
                 this.northUpTerrainPng = null;
+                this.displayedTerrainPng = null;
                 ++this.terrainGeneration;
             }
 
@@ -362,7 +388,7 @@ public final class DynamicMinimapSession {
                         mapRotationBucket
                 );
 
-                this.lastMarkerMs = 0L;
+                // The cached markers are projected again when the rotated terrain arrives.
             }
 
             this.detectDeath(store, ref, x, z);
@@ -371,14 +397,12 @@ public final class DynamicMinimapSession {
             int bufferPixels = this.hud.bufferPixels();
             int mapCenter = this.settings.sizePixels / 2;
             double panMargin = (double)DynamicMinimapRenderer.panMarginPixels(this.settings);
-            boolean signatureChanged = false;
-            if (!Double.isNaN(this.bufferCenterX) && now - this.lastSignatureMs > this.settings.signatureIntervalMs()) {
+            boolean signatureChanged = this.signatureChangedPending;
+            if (!Double.isNaN(this.bufferCenterX)
+                    && !this.signatureInFlight
+                    && now - this.lastSignatureMs > this.settings.signatureIntervalMs()) {
                 this.lastSignatureMs = now;
-                long signature = DynamicMinimapRenderer.terrainSignature(world.getWorldMapManager(), this.bufferCenterX, this.bufferCenterZ, this.settings, caveView);
-                if (signature != this.lastSignature) {
-                    this.lastSignature = signature;
-                    signatureChanged = true;
-                }
+                this.scheduleSignatureCheck(world, this.bufferCenterX, this.bufferCenterZ, caveView);
             }
 
             boolean noBuffer = Double.isNaN(this.bufferCenterX);
@@ -391,6 +415,7 @@ public final class DynamicMinimapSession {
             boolean warmupRetry = !this.bufferComplete && now < this.warmupUntilMs && !noBuffer && now - this.lastTerrainMs >= 1000L;
             boolean needsTerrain = noBuffer || needsRecenter || signatureChanged || warmupRetry || caveChanged;
             if (needsTerrain && now - this.lastTerrainMs >= this.settings.terrainIntervalMs()) {
+                this.signatureChangedPending = false;
                 if (noBuffer || needsRecenter) {
                     this.warmupUntilMs = now + 15000L;
                     this.bufferComplete = false;
@@ -460,7 +485,7 @@ public final class DynamicMinimapSession {
         };
     }
 
-    private void ensureHud() {
+    private void ensureHud(World world) {
         if (this.hud != null
                 && this.hud.isShown()) {
             if (this.settings.shape != this.builtShape) {
@@ -481,7 +506,7 @@ public final class DynamicMinimapSession {
             }
 
             this.settings.normalize();
-            this.hud = new DynamicMinimapHud(this.playerRef, this.settings);
+            this.hud = new DynamicMinimapHud(this.playerRef, this.settings, world::execute);
             this.builtSize = this.settings.sizePixels;
             this.builtShape = this.settings.shape;
             this.builtZoom = this.settings.zoomBlocks;
@@ -496,6 +521,7 @@ public final class DynamicMinimapSession {
             this.builtRotationMode = -1;
             this.lastMapRotationBucket = -1;
             this.northUpTerrainPng = null;
+            this.displayedTerrainPng = null;
             this.hud.deliverStaticAssets();
             this.hud.show();
             this.renderedColours = this.settings.colours;
@@ -556,6 +582,38 @@ public final class DynamicMinimapSession {
         }
     }
 
+    /** Probe map-image changes on the render pool so cave lookups and image hashing
+     * do not hold up world ticks. Only the latest matching buffer can request a redraw. */
+    private void scheduleSignatureCheck(World world, double centerX, double centerZ,
+                                        BetterMapIntegration.CaveView caveView) {
+        this.signatureInFlight = true;
+        DynamicMinimapSetting probeSettings = this.settings.copy();
+        DynamicMinimapHud probeHud = this.hud;
+        long generation = this.terrainGeneration;
+        RENDER_POOL.execute(() -> {
+            long signature;
+            try {
+                signature = DynamicMinimapRenderer.terrainSignature(
+                        world.getWorldMapManager(), centerX, centerZ, probeSettings, caveView);
+            } catch (Throwable ignored) {
+                signature = 0L;
+            }
+            long result = signature;
+            world.execute(labelled("signature result", () -> {
+                this.signatureInFlight = false;
+                if (!this.running || probeHud != this.hud
+                        || generation != this.terrainGeneration
+                        || Double.compare(centerX, this.bufferCenterX) != 0
+                        || Double.compare(centerZ, this.bufferCenterZ) != 0
+                        || !java.util.Objects.equals(caveView, this.lastCaveView)) return;
+                if (result != 0L && result != this.lastSignature) {
+                    this.lastSignature = result;
+                    this.signatureChangedPending = true;
+                }
+            }));
+        });
+    }
+
     private void scheduleTerrainRender(
             World world,
             double centerX,
@@ -598,7 +656,10 @@ public final class DynamicMinimapSession {
                 return;
             }
 
-            world.execute(() -> {
+            // Hash the stitched map off the world thread as well as rendering its PNG.
+            long renderSignature = DynamicMinimapRenderer.terrainSignature(
+                    world.getWorldMapManager(), centerX, centerZ, renderSettings, caveView);
+            world.execute(labelled("terrain delivery", () -> {
                 if (!this.running
                         || renderHud != this.hud
                         || !java.util.Objects.equals(caveView, this.lastCaveView)
@@ -633,17 +694,12 @@ public final class DynamicMinimapSession {
                     return;
                 }
 
+                this.displayedTerrainPng = displayPng;
                 this.firstTerrainForHud = false;
                 this.bufferComplete = terrain.complete();
                 this.bufferCenterX = centerX;
                 this.bufferCenterZ = centerZ;
-                this.lastSignature = DynamicMinimapRenderer.terrainSignature(
-                        world.getWorldMapManager(),
-                        centerX,
-                        centerZ,
-                        renderSettings,
-                        caveView
-                );
+                this.lastSignature = renderSignature;
                 this.updateRotatingFrame(rotationBucket);
                 this.lastMapRotationBucket = rotationBucket;
                 this.lastRotationDeliveryMs = System.currentTimeMillis();
@@ -670,8 +726,7 @@ public final class DynamicMinimapSession {
                         bufferPixels,
                         Double.NaN
                 );
-                this.lastMarkerMs = 0L;
-            });
+            }));
         });
     }
 
@@ -709,7 +764,7 @@ public final class DynamicMinimapSession {
                 return;
             }
 
-            world.execute(() -> {
+            world.execute(labelled("rotation delivery", () -> {
                 if (!this.running
                         || renderHud != this.hud
                         || generation != this.terrainGeneration
@@ -732,6 +787,7 @@ public final class DynamicMinimapSession {
                     return;
                 }
 
+                this.displayedTerrainPng = displayPng;
                 this.updateRotatingFrame(rotationBucket);
                 this.lastMapRotationBucket = rotationBucket;
                 this.lastRotationDeliveryMs = System.currentTimeMillis();
@@ -759,7 +815,7 @@ public final class DynamicMinimapSession {
                         bufferPixels,
                         Double.NaN
                 );
-            });
+            }));
         });
     }
 
@@ -835,7 +891,9 @@ public final class DynamicMinimapSession {
 
         if (this.settings.showWorldMapMarkers) {
             Player player = store.getComponent(playerRef, Player.getComponentType());
-            if (player != null) {
+            long now = System.currentTimeMillis();
+            if (player != null && now - this.lastWorldMapScanMs >= 1000L) {
+                this.lastWorldMapScanMs = now;
                 try {
                     List<DynamicMinimapMarker> current = NativeWorldMapIntegration.getMarkers(
                             store.getExternalData().getWorld(),
@@ -853,6 +911,7 @@ public final class DynamicMinimapSession {
         } else {
             this.cachedWorldMapMarkers = new ArrayList<>();
             this.emptyWorldMapScans = 0;
+            this.lastWorldMapScanMs = 0L;
         }
 
         if (this.settings.betterMapEnabled && this.settings.betterMapMarkersEnabled

@@ -402,15 +402,18 @@ public final class DynamicMinimapRenderer {
     }
 
 
-    /**
-     * Renders the settings-page preview from the same frame/chrome/telemetry renderer used by
-     * the live HUD. Only the world data is synthetic and frozen; the HUD itself is not rebuilt
-     * in Custom UI markup, preventing the settings preview from drifting from the in-game HUD.
-     */
-    public static byte[] renderSettingsPreview(DynamicMinimapSetting settings) {
+    /** The player HUD's terrain, telemetry and visible marker assets frozen when settings open. */
+    public record PreviewMarker(byte[] image, int x, int y, int size) { }
+    public record LiveSnapshot(byte[] terrain, int mapSize, int bufferSize, int panX, int panY,
+                               double selfAngle, double frameAngle, String coords,
+                               String compass, String clock, String biome,
+                               java.util.List<PreviewMarker> markers) { }
+
+    public static byte[] renderSettingsPreview(DynamicMinimapSetting settings, LiveSnapshot snapshot) {
+        if (snapshot == null || snapshot.terrain() == null) return null;
         DynamicMinimapSetting preview = settings.copy();
         preview.normalize();
-        int mapSize = Math.max(180, Math.min(256, preview.sizePixels));
+        int mapSize = Math.max(120, Math.min(360, preview.sizePixels));
         int panelWidth = 148;
         int gap = preview.isCircle() ? 8 : 16;
         int panelHeight = 24 + 12;
@@ -419,8 +422,8 @@ public final class DynamicMinimapRenderer {
         if (preview.showClock) panelHeight += 43;
         if (preview.showBiome) panelHeight += 43;
 
-        byte[] overlayPng = renderHudOverlay(preview, mapSize, panelWidth, panelHeight, gap, 0.0D,
-                "1,119, 298", "268° W", preview.clock24Hour ? "NIGHT 23:01" : "NIGHT 11:01 PM", "Plains Spawn");
+        byte[] overlayPng = renderHudOverlay(preview, mapSize, panelWidth, panelHeight, gap, snapshot.frameAngle(),
+                snapshot.coords(), snapshot.compass(), snapshot.clock(), snapshot.biome());
         if (overlayPng == null) return null;
         try {
             BufferedImage overlay = ImageIO.read(new ByteArrayInputStream(overlayPng));
@@ -438,29 +441,27 @@ public final class DynamicMinimapRenderer {
             Shape oldClip = g.getClip();
             if (preview.isCircle()) g.setClip(new Ellipse2D.Double(mapX + 3, mapY + 3, mapSize - 6, mapSize - 6));
             else g.setClip(new RoundRectangle2D.Double(mapX + 3, mapY + 3, mapSize - 6, mapSize - 6, 8, 8));
-            // Frozen representative terrain. This is deliberately data-only: all bezel, compass,
-            // panel geometry and typography come from the live HUD renderer below.
-            GradientPaint land = new GradientPaint(mapX, mapY, new Color(38, 83, 48),
-                    mapX + mapSize, mapY + mapSize, new Color(76, 108, 54));
-            g.setPaint(land); g.fillRect(mapX, mapY, mapSize, mapSize);
-            g.setColor(new Color(45, 91, 108));
-            Path2D river = new Path2D.Double();
-            river.moveTo(mapX + mapSize * .08, mapY + mapSize * .78);
-            river.curveTo(mapX + mapSize * .32, mapY + mapSize * .55, mapX + mapSize * .43, mapY + mapSize * .86, mapX + mapSize * .61, mapY + mapSize * .52);
-            river.curveTo(mapX + mapSize * .76, mapY + mapSize * .26, mapX + mapSize * .65, mapY + mapSize * .12, mapX + mapSize * .83, mapY - 4);
-            g.setStroke(new BasicStroke(Math.max(12f, mapSize * .085f), BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
-            g.draw(river);
-            g.setClip(oldClip);
-
-            // Use the same generated marker assets as the live HUD.
-            if (preview.showOtherPlayers)
-                drawPreviewAsset(g, renderDot(preview.colours.rgb(PLAYERS), preview.colours), mapX + mapSize * 35 / 100, mapY + mapSize * 30 / 100, 11);
-            if (preview.showEntities) {
-                drawPreviewAsset(g, renderDot(preview.colours.rgb(HOSTILE), preview.colours), mapX + mapSize * 73 / 100, mapY + mapSize * 35 / 100, 11);
-                drawPreviewAsset(g, renderDot(preview.colours.rgb(FRIENDLY), preview.colours), mapX + mapSize * 69 / 100, mapY + mapSize * 72 / 100, 11);
+            BufferedImage terrain = ImageIO.read(new ByteArrayInputStream(snapshot.terrain()));
+            if (terrain != null) {
+                double ratio = (double)mapSize / snapshot.mapSize();
+                int panX = (int)Math.round(snapshot.panX() * ratio);
+                int panY = (int)Math.round(snapshot.panY() * ratio);
+                int bufferSize = (int)Math.round(snapshot.bufferSize() * ratio);
+                g.drawImage(terrain, mapX + panX, mapY + panY,
+                        mapX + panX + bufferSize, mapY + panY + bufferSize,
+                        0, 0, terrain.getWidth(), terrain.getHeight(), null);
+                for (PreviewMarker marker : snapshot.markers()) {
+                    int x = mapX + (int)Math.round(marker.x() * ratio);
+                    int y = mapY + (int)Math.round(marker.y() * ratio);
+                    int size = Math.max(1, (int)Math.round(marker.size() * ratio));
+                    drawPreviewAsset(g, marker.image(), x, y, size);
+                }
             }
-            if (preview.showDeathMarker) drawPreviewAsset(g, renderDeath(preview.colours), mapX + mapSize * 18 / 100, mapY + mapSize * 54 / 100, 16);
-            drawPreviewAsset(g, renderSelfArrow(0.0D, preview.colours), mapX + mapSize / 2 - 12, mapY + mapSize / 2 - 12, 24);
+            g.setClip(oldClip);
+            int arrowSize = Math.max(18, mapSize / 10);
+            drawPreviewAsset(g, renderSelfArrow(snapshot.selfAngle(), preview.colours),
+                    mapX + (mapSize - arrowSize) / 2, mapY + (mapSize - arrowSize) / 2,
+                    arrowSize);
             g.drawImage(overlay, 0, 0, null);
             g.dispose();
 
@@ -499,8 +500,8 @@ public final class DynamicMinimapRenderer {
      * close-up of the HUD. The HUD image is the same settings preview used by
      * the other tabs, scaled and placed from the draft X/Y percentages.
      */
-    public static byte[] renderPositionPreview(DynamicMinimapSetting settings) {
-        byte[] hudPng = renderSettingsPreview(settings);
+    public static byte[] renderPositionPreview(DynamicMinimapSetting settings, LiveSnapshot snapshot) {
+        byte[] hudPng = renderSettingsPreview(settings, snapshot);
         if (hudPng == null) return null;
         try {
             BufferedImage hud = ImageIO.read(new ByteArrayInputStream(hudPng));
@@ -537,7 +538,7 @@ public final class DynamicMinimapRenderer {
                 // trimming transparent pixels: use the enabled HUD footprint as the scale basis.
                 DynamicMinimapSetting reference = settings.copy();
                 reference.infoPanelEnabled = true;
-                byte[] referencePng = renderSettingsPreview(reference);
+                byte[] referencePng = renderSettingsPreview(reference, snapshot);
                 if (referencePng != null) {
                     BufferedImage referenceHud = ImageIO.read(new ByteArrayInputStream(referencePng));
                     if (referenceHud != null) {
