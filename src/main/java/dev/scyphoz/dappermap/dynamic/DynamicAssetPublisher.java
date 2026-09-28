@@ -64,7 +64,7 @@ public final class DynamicAssetPublisher {
                         && (path.contains("/mk-") || path.contains("/bettermap-")
                         || path.contains("/worldmap-") || path.contains("/death-"))) {
                     Map<String, byte[]> markers = MARKER_BYTES.computeIfAbsent(uuid, ignored -> new ConcurrentHashMap<>());
-                    if (markers.size() < 256 || markers.containsKey(path)) markers.put(path, data.clone());
+                    if (markers.size() < DynamicMinimapHud.MARKER_SLOTS || markers.containsKey(path)) markers.put(path, data.clone());
                 }
                 if (uuid != null) {
                     Map<String, String> delivered = (Map)DELIVERED.get(uuid);

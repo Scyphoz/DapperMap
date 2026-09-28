@@ -403,7 +403,7 @@ public final class DynamicMinimapRenderer {
 
 
     /** The player HUD's terrain, telemetry and visible marker assets frozen when settings open. */
-    public record PreviewMarker(byte[] image, int x, int y, int size) { }
+    public record PreviewMarker(byte[] image, int x, int y, int size, boolean creature) { }
     public record LiveSnapshot(byte[] terrain, int mapSize, int bufferSize, int panX, int panY,
                                double selfAngle, double frameAngle, String coords,
                                String compass, String clock, String biome,
@@ -450,11 +450,68 @@ public final class DynamicMinimapRenderer {
                 g.drawImage(terrain, mapX + panX, mapY + panY,
                         mapX + panX + bufferSize, mapY + panY + bufferSize,
                         0, 0, terrain.getWidth(), terrain.getHeight(), null);
+                java.util.List<double[]> creatureCandidates = new java.util.ArrayList<>();
+                java.util.List<double[]> occupied = new java.util.ArrayList<>();
                 for (PreviewMarker marker : snapshot.markers()) {
                     int x = mapX + (int)Math.round(marker.x() * ratio);
                     int y = mapY + (int)Math.round(marker.y() * ratio);
                     int size = Math.max(1, (int)Math.round(marker.size() * ratio));
-                    drawPreviewAsset(g, marker.image(), x, y, size);
+                    if (marker.creature()) {
+                        double centerX = (marker.x() + marker.size() / 2.0) * ratio;
+                        double centerY = (marker.y() + marker.size() / 2.0) * ratio;
+                        if (centerX >= 10 && centerX <= mapSize - 10
+                                && centerY >= 10 && centerY <= mapSize - 10) {
+                            creatureCandidates.add(new double[]{centerX, centerY});
+                        }
+                    } else {
+                        drawPreviewAsset(g, marker.image(), x, y, size);
+                        occupied.add(new double[]{(marker.x() + marker.size() / 2.0) * ratio,
+                                (marker.y() + marker.size() / 2.0) * ratio});
+                    }
+                }
+                // Keep only four spaced creature examples; the rest of the live
+                // creature pool is intentionally absent from this small preview.
+                if (preview.showEntities) {
+                    MinimapColours.Key[] kinds = {
+                            HOSTILE_ACTIVE, HOSTILE, NEUTRAL, FRIENDLY
+                    };
+                    double[][] positions = {
+                            {0.28, 0.32}, {0.68, 0.34}, {0.30, 0.68}, {0.70, 0.68}
+                    };
+                    java.util.Collections.shuffle(creatureCandidates,
+                            new java.util.Random(snapshot.coords().hashCode()));
+                    java.util.List<double[]> samples = new java.util.ArrayList<>();
+                    double separation = mapSize * 0.18;
+                    for (double[] candidate : creatureCandidates) {
+                        if (samples.size() == kinds.length) break;
+                        if (preview.isCircle() && Math.hypot(candidate[0] - mapSize / 2.0,
+                                candidate[1] - mapSize / 2.0) > mapSize * 0.43) continue;
+                        if (Math.hypot(candidate[0] - mapSize / 2.0,
+                                candidate[1] - mapSize / 2.0) < mapSize * 0.20) continue;
+                        if (previewPositionClear(candidate, occupied, separation * 0.55)
+                                && previewPositionClear(candidate, samples, separation)) {
+                            samples.add(candidate);
+                        }
+                    }
+                    for (double[] fallback : positions) {
+                        if (samples.size() == kinds.length) break;
+                        double[] candidate = {mapSize * fallback[0], mapSize * fallback[1]};
+                        if (previewPositionClear(candidate, occupied, separation * 0.55)
+                                && previewPositionClear(candidate, samples, separation)) samples.add(candidate);
+                    }
+                    for (double[] fallback : positions) {
+                        if (samples.size() == kinds.length) break;
+                        double[] candidate = {mapSize * fallback[0], mapSize * fallback[1]};
+                        if (previewPositionClear(candidate, samples, separation * 0.55)) samples.add(candidate);
+                    }
+                    int dotSize = Math.max(9, (int)Math.round(10 * mapSize / 220.0));
+                    for (int i = 0; i < samples.size(); i++) {
+                        byte[] dot = renderDot(preview.colours.awt(kinds[i], 255).getRGB() & 0xFFFFFF,
+                                preview.colours);
+                        drawPreviewAsset(g, dot,
+                                mapX + samples.get(i)[0] - dotSize / 2.0,
+                                mapY + samples.get(i)[1] - dotSize / 2.0, dotSize);
+                    }
                 }
             }
             g.setClip(oldClip);
@@ -500,6 +557,16 @@ public final class DynamicMinimapRenderer {
      * close-up of the HUD. The HUD image is the same settings preview used by
      * the other tabs, scaled and placed from the draft X/Y percentages.
      */
+    private static boolean previewPositionClear(double[] candidate, java.util.List<double[]> others,
+                                                double minimumDistance) {
+        for (double[] other : others) {
+            if (Math.hypot(candidate[0] - other[0], candidate[1] - other[1]) < minimumDistance) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     public static byte[] renderPositionPreview(DynamicMinimapSetting settings, LiveSnapshot snapshot) {
         byte[] hudPng = renderSettingsPreview(settings, snapshot);
         if (hudPng == null) return null;

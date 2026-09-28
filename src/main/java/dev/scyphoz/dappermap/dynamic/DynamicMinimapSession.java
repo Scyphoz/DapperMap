@@ -27,6 +27,7 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -45,7 +46,7 @@ public final class DynamicMinimapSession {
         return thread;
     });
     /** Shared pool for image work that does not need the world thread. */
-    static void renderAsync(Runnable work) {
+    public static void renderAsync(Runnable work) {
         RENDER_POOL.execute(work);
     }
 
@@ -55,6 +56,7 @@ public final class DynamicMinimapSession {
     private final DynamicMinimapSetting settings;
     private volatile ScheduledFuture<?> task;
     private volatile boolean running = false;
+    private volatile CompletableFuture<Void> staticAssetsReady;
     private DynamicMinimapHud hud;
     private int builtSize = -1;
     private int builtShape = -1;
@@ -138,6 +140,9 @@ public final class DynamicMinimapSession {
     public void start() {
         if (!this.running) {
             this.running = true;
+            DynamicMinimapSetting initialSettings = this.settings.copy();
+            this.staticAssetsReady = CompletableFuture.runAsync(
+                    () -> DynamicMinimapHud.prepareStaticAssets(initialSettings), RENDER_POOL);
             this.task = HytaleServer.SCHEDULED_EXECUTOR.scheduleAtFixedRate(this::tickSafe, 500L, 25L, TimeUnit.MILLISECONDS);
         }
 
@@ -501,6 +506,9 @@ public final class DynamicMinimapSession {
                 this.bufferCenterX = Double.NaN;
             }
         } else {
+            // Prepare PNG masks off the world thread before sending the initial HUD.
+            // Waiting here would itself cause a slow world task.
+            if (this.staticAssetsReady != null && !this.staticAssetsReady.isDone()) return;
             if (this.hud != null && this.hud.isShown()) {
                 this.hud.removeFromClient();
             }
@@ -569,14 +577,29 @@ public final class DynamicMinimapSession {
                 this.lastSelfBucket = bucket;
                 String path = "UI/DapperMap/self-" + this.slug + "-" + this.settings.colours.arrowKey() + "-" + bucket + ".png";
                 byte[] png = this.selfArrowCache[bucket];
-                if (png == null) {
-                    png = DynamicMinimapRenderer.renderSelfArrow(angle, this.settings.colours);
-                    this.selfArrowCache[bucket] = png;
-                }
-
                 if (png != null) {
                     DynamicAssetPublisher.deliver(this.playerRef, path, png);
                     this.hud.setSelf(path);
+                } else {
+                    final int renderBucket = bucket;
+                    final double renderAngle = angle;
+                    MinimapColours colours = this.settings.colours;
+                    DynamicMinimapHud targetHud = this.hud;
+                    World world = this.lastObservedWorld;
+                    if (world == null) return;
+                    RENDER_POOL.execute(() -> {
+                        byte[] rendered = DynamicMinimapRenderer.renderSelfArrow(renderAngle, colours);
+                        if (rendered == null) return;
+                        world.execute(labelled("self arrow delivery", () -> {
+                            if (!this.running || this.hud != targetHud || !targetHud.isShown()
+                                    || this.settings.colours != colours) return;
+                            this.selfArrowCache[renderBucket] = rendered;
+                            if (this.lastSelfBucket == renderBucket
+                                    && DynamicAssetPublisher.deliver(this.playerRef, path, rendered)) {
+                                targetHud.setSelf(path);
+                            }
+                        }));
+                    });
                 }
             }
         }

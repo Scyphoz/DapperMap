@@ -18,10 +18,12 @@ import com.hypixel.hytale.server.core.ui.builder.EventData;
 import com.hypixel.hytale.server.core.ui.builder.UICommandBuilder;
 import com.hypixel.hytale.server.core.ui.builder.UIEventBuilder;
 import com.hypixel.hytale.server.core.universe.PlayerRef;
+import com.hypixel.hytale.server.core.universe.world.World;
 import com.hypixel.hytale.server.core.universe.world.storage.EntityStore;
 import dev.scyphoz.dappermap.config.MinimapConfig;
 import dev.scyphoz.dappermap.dynamic.DynamicMinimapSetting;
 import dev.scyphoz.dappermap.dynamic.DynamicMinimapRenderer;
+import dev.scyphoz.dappermap.dynamic.DynamicMinimapSession;
 import dev.scyphoz.dappermap.dynamic.DynamicAssetPublisher;
 import dev.scyphoz.dappermap.dynamic.MinimapColours;
 import dev.scyphoz.dappermap.dynamic.MinimapColours.Key;
@@ -68,6 +70,9 @@ public final class DapperMapSettingsPage
     private Tab activeTab = Tab.DISPLAY;
     private Key selectedColour = Key.EDGE;
     private int previewRevision = 0;
+    private volatile int previewRequest = 0;
+    private volatile boolean closed = false;
+    private World previewWorld;
     private DynamicMinimapRenderer.LiveSnapshot previewSnapshot;
     /** Unsaved working copy used by the settings UI and live preview. */
     private DynamicMinimapSetting draftSettings;
@@ -114,6 +119,7 @@ public final class DapperMapSettingsPage
             Store<EntityStore> store
     ) {
         if (this.adminMode && !this.playerRef.hasPermission(ADMIN_PERMISSION)) return;
+        this.previewWorld = store.getExternalData().getWorld();
         if (this.draftSettings == null) {
             this.draftSettings = (this.adminMode
                     ? this.sessions.getAdminDefaults(this.config)
@@ -279,6 +285,7 @@ public final class DapperMapSettingsPage
     }
 
     private void updatePreview(UICommandBuilder ui, DynamicMinimapSetting settings) {
+        int request = ++this.previewRequest;
         if (!settings.enabled) {
             ui.set("#PreviewHudImage.Visible", false);
             ui.set("#PreviewDisabled.Text", "MINIMAP DISABLED");
@@ -292,15 +299,35 @@ public final class DapperMapSettingsPage
             ui.set("#PreviewDisabled.Visible", true);
             return;
         }
-        byte[] png = DynamicMinimapRenderer.renderSettingsPreview(settings, this.previewSnapshot);
-        if (png == null) return;
-        String slug = this.playerRef.getUuid() == null ? "anon" : this.playerRef.getUuid().toString().replace("-", "");
-        String path = "UI/DapperMap/settings-preview-" + slug + "-" + (++this.previewRevision) + ".png";
-        if (DynamicAssetPublisher.deliver(this.playerRef, path, png)) {
-            ui.set("#PreviewHudImage.AssetPath", path);
-            ui.set("#PreviewHudImage.Visible", true);
-            ui.set("#PreviewDisabled.Visible", false);
+        if (this.previewRevision == 0) {
+            ui.set("#PreviewHudImage.Visible", false);
+            ui.set("#PreviewDisabled.Text", "PREPARING HUD PREVIEW");
+            ui.set("#PreviewDisabled.Visible", true);
         }
+        World world = this.previewWorld;
+        if (world == null) return;
+        DynamicMinimapSetting draft = settings.copy();
+        DynamicMinimapRenderer.LiveSnapshot snapshot = this.previewSnapshot;
+        boolean position = this.activeTab == Tab.POSITION;
+        DynamicMinimapSession.renderAsync(() -> {
+            if (this.closed || request != this.previewRequest) return;
+            byte[] png = position
+                    ? DynamicMinimapRenderer.renderPositionPreview(draft, snapshot)
+                    : DynamicMinimapRenderer.renderSettingsPreview(draft, snapshot);
+            if (png == null) return;
+            world.execute(() -> {
+                if (this.closed || request != this.previewRequest) return;
+                String slug = this.playerRef.getUuid() == null ? "anon" : this.playerRef.getUuid().toString().replace("-", "");
+                String path = "UI/DapperMap/settings-preview-" + slug + "-" + (++this.previewRevision) + ".png";
+                if (DynamicAssetPublisher.deliver(this.playerRef, path, png)) {
+                    UICommandBuilder update = new UICommandBuilder();
+                    update.set("#PreviewHudImage.AssetPath", path);
+                    update.set("#PreviewHudImage.Visible", true);
+                    update.set("#PreviewDisabled.Visible", false);
+                    this.sendUpdate(update, new UIEventBuilder(), false);
+                }
+            });
+        });
     }
 
     private void updateNavigationLabels(UICommandBuilder builder) {
@@ -624,11 +651,13 @@ public final class DapperMapSettingsPage
             Ev event
     ) {
         String action = event.action;
+        this.previewWorld = store.getExternalData().getWorld();
         this.betterMapCaveAvailable = BetterMapIntegration.isCaveModeEnabled(
                 store.getComponent(ref, Player.getComponentType()));
 
         if (this.adminMode && !this.playerRef.hasPermission(ADMIN_PERMISSION)) return;
         if ("cancel_settings".equals(action)) {
+            this.closed = true;
             Player player = store.getComponent(ref, Player.getComponentType());
             if (player == null) return;
             if (this.adminMode && this.sessions.adminPageOpenedFromPlayerPage(this.playerRef.getUuid())) {
@@ -644,6 +673,7 @@ public final class DapperMapSettingsPage
 
         if ("apply_settings".equals(action)) {
             if (this.draftSettings == null) return;
+            this.closed = true;
             this.draftSettings.normalize();
             if (this.adminMode) {
                 this.sessions.setAdminDefaults(this.draftSettings.copy());
@@ -674,6 +704,7 @@ public final class DapperMapSettingsPage
 
         if ("admin_settings".equals(action)) {
             if (!this.playerRef.hasPermission(ADMIN_PERMISSION)) return;
+            this.closed = true;
             this.sessions.setAdminPageOrigin(this.playerRef.getUuid(), true);
             Player player = store.getComponent(ref, Player.getComponentType());
             if (player != null) player.getPageManager().openCustomPage(ref, store,
@@ -688,6 +719,7 @@ public final class DapperMapSettingsPage
         if (action.startsWith("tab_")) {
             Tab requested = Tab.find(action.substring("tab_".length()));
             if (requested == null || requested == this.activeTab || !this.canOpenTab(requested)) return;
+            boolean previewModeChanged = (this.activeTab == Tab.POSITION) != (requested == Tab.POSITION);
             this.activeTab = requested;
             DynamicMinimapSetting current = this.draftSettings;
             UICommandBuilder navBuilder = new UICommandBuilder();
@@ -695,6 +727,7 @@ public final class DapperMapSettingsPage
             this.renderList(navBuilder, navEvents, current);
             this.refreshColourEditor(navBuilder, current, true);
             this.updatePositionEditor(navBuilder, current, true);
+            if (previewModeChanged) this.updatePreview(navBuilder, current);
             this.updateTabVisibility(navBuilder);
             this.updateEditorAvailability(navBuilder, current);
             this.updateNavigationLabels(navBuilder);
@@ -719,6 +752,7 @@ public final class DapperMapSettingsPage
             this.renderList(resetBuilder, resetEvents, reset);
             this.refreshColourEditor(resetBuilder, reset, true);
             this.updatePositionEditor(resetBuilder, reset, true);
+            this.updatePreview(resetBuilder, reset);
             this.updateEditorAvailability(resetBuilder, reset);
             this.sendUpdate(resetBuilder, resetEvents, false);
             return;
@@ -794,6 +828,7 @@ public final class DapperMapSettingsPage
         this.renderList(builder, events, settings);
         this.refreshColourEditor(builder, settings, !"colour_value".equals(action));
         this.updatePositionEditor(builder, settings, !action.startsWith("position_slider_"));
+        this.updatePreview(builder, settings);
         this.updateEditorAvailability(builder, settings);
 
         this.sendUpdate(builder, events, false);

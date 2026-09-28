@@ -17,7 +17,7 @@ import java.util.function.Consumer;
  */
 public final class DynamicMinimapHud extends CustomUIHud {
     public static final String KEY = "DapperMapDynamicMinimapHud";
-    public static final int MARKER_SLOTS = 256;
+    public static final int MARKER_SLOTS = 128;
 
     // All constants below are logical HUD units. They are converted to display units
     // only when markup/Anchor values are produced.
@@ -112,7 +112,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
             byte[] icon = DynamicAssetPublisher.markerBytes(this.uuid, this.slotPath[i]);
             if (icon != null) markers.add(new DynamicMinimapRenderer.PreviewMarker(
                     icon, this.panLeft + this.slotLeft[i], this.panTop + this.slotTop[i],
-                    this.slotSize[i]));
+                    this.slotSize[i], this.slotPath[i].contains("/mk-") && this.slotSize[i] <= 9));
         }
         return new DynamicMinimapRenderer.LiveSnapshot(terrain.clone(), this.logicalUiSize,
                 this.bufferPixels, this.panLeft, this.panTop, selfAngle, this.frameAngle,
@@ -122,6 +122,21 @@ public final class DynamicMinimapHud extends CustomUIHud {
 
     public boolean isShown() {
         return this.built;
+    }
+
+    /** Populate the renderer's shared mask cache before the first world-thread HUD tick. */
+    public static void prepareStaticAssets(DynamicMinimapSetting settings) {
+        for (int resolution : new int[]{256, 320, 384, 448, 512, 1024}) {
+            for (int shape : new int[]{DynamicMinimapSetting.SHAPE_SQUARE,
+                    DynamicMinimapSetting.SHAPE_CIRCLE}) {
+                DynamicMinimapSetting candidate = settings.copy();
+                candidate.textureResolution = resolution;
+                candidate.shape = shape;
+                candidate.normalize();
+                DynamicMinimapRenderer.renderShapeMask(candidate);
+            }
+        }
+        DynamicMinimapRenderer.renderBlank();
     }
 
     public void deliverStaticAssets() {
