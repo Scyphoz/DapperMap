@@ -292,9 +292,7 @@ public final class DapperMapSettingsPage
             ui.set("#PreviewDisabled.Visible", true);
             return;
         }
-        byte[] png = this.activeTab == Tab.POSITION
-                ? DynamicMinimapRenderer.renderPositionPreview(settings, this.previewSnapshot)
-                : DynamicMinimapRenderer.renderSettingsPreview(settings, this.previewSnapshot);
+        byte[] png = DynamicMinimapRenderer.renderSettingsPreview(settings, this.previewSnapshot);
         if (png == null) return;
         String slug = this.playerRef.getUuid() == null ? "anon" : this.playerRef.getUuid().toString().replace("-", "");
         String path = "UI/DapperMap/settings-preview-" + slug + "-" + (++this.previewRevision) + ".png";
@@ -498,9 +496,7 @@ public final class DapperMapSettingsPage
         builder.append("#DapperMapSettingsList", "Pages/DapperMapDisabledDropdownRow.ui");
         builder.set(selector + " #RowLabel.Text", row.label);
         builder.set(selector + " #RowDescription.Text", wrappedDescription(row.id));
-        builder.set(selector + " #ValueLabel.Text",
-                this.hasSettingPermission(permissionForSetting(row.id))
-                        ? disabledValue(row.id, settings) : "Permission denied");
+        builder.set(selector + " #ValueLabel.Text", "Disabled");
     }
 
     private void actionRow(UICommandBuilder builder, UIEventBuilder events,
@@ -510,7 +506,7 @@ public final class DapperMapSettingsPage
             builder.append("#DapperMapSettingsList", "Pages/DapperMapDisabledDropdownRow.ui");
             builder.set(selector + " #RowLabel.Text", row.label);
             builder.set(selector + " #RowDescription.Text", wrappedDescription(row.id));
-            builder.set(selector + " #ValueLabel.Text", settings.enabled ? "Permission denied" : row.label);
+            builder.set(selector + " #ValueLabel.Text", "Disabled");
             return;
         }
         builder.append("#DapperMapSettingsList", "Pages/DapperMapMoveRow.ui");
@@ -588,7 +584,7 @@ public final class DapperMapSettingsPage
             builder.append("#DapperMapSettingsList", "Pages/DapperMapDisabledDropdownRow.ui");
             builder.set(selector + " #RowLabel.Text", row.label);
             builder.set(selector + " #RowDescription.Text", wrappedDescription(row.id));
-            builder.set(selector + " #ValueLabel.Text", disabledValue(row.id, settings));
+            builder.set(selector + " #ValueLabel.Text", "Disabled");
             return;
         }
 
@@ -699,7 +695,6 @@ public final class DapperMapSettingsPage
             this.renderList(navBuilder, navEvents, current);
             this.refreshColourEditor(navBuilder, current, true);
             this.updatePositionEditor(navBuilder, current, true);
-            this.updatePreview(navBuilder, current);
             this.updateTabVisibility(navBuilder);
             this.updateEditorAvailability(navBuilder, current);
             this.updateNavigationLabels(navBuilder);
@@ -724,7 +719,6 @@ public final class DapperMapSettingsPage
             this.renderList(resetBuilder, resetEvents, reset);
             this.refreshColourEditor(resetBuilder, reset, true);
             this.updatePositionEditor(resetBuilder, reset, true);
-            this.updatePreview(resetBuilder, reset);
             this.updateEditorAvailability(resetBuilder, reset);
             this.sendUpdate(resetBuilder, resetEvents, false);
             return;
@@ -800,7 +794,6 @@ public final class DapperMapSettingsPage
         this.renderList(builder, events, settings);
         this.refreshColourEditor(builder, settings, !"colour_value".equals(action));
         this.updatePositionEditor(builder, settings, !action.startsWith("position_slider_"));
-        this.updatePreview(builder, settings);
         this.updateEditorAvailability(builder, settings);
 
         this.sendUpdate(builder, events, false);
@@ -929,26 +922,6 @@ public final class DapperMapSettingsPage
             length += word.length();
         }
         return lines.toString();
-    }
-
-    private static String disabledValue(String id, DynamicMinimapSetting settings) {
-        if ("bettermap".equals(id) && !BetterMapIntegration.isAvailable()) {
-            return "Not detected";
-        }
-        return switch (id) {
-            case "zoom" -> settings.zoomBlocks + " blocks";
-            case "size" -> settings.sizePixels + " px";
-            case "interface_scale" -> settings.interfaceScalePercent + "%";
-            case "texture_resolution" -> settings.textureResolution + " px";
-            case "speed" -> displaySpeed(settings.updateSpeed);
-            case "panel_position" -> displayPanelPosition(settings.infoPanelPosition);
-            case "panel_alignment" -> displayPanelAlignment(settings.infoPanelTextAlignment);
-            case "shape" -> settings.isCircle() ? "Circle" : "Square";
-            case "rotation" -> settings.rotationMode == 0 ? "Disabled" : "Enabled";
-            case "vrange" -> settings.mobVerticalRange + " blocks";
-            case "clock_format" -> settings.clock24Hour ? "24-hour" : "12-hour";
-            default -> "true".equals(dropdownValue(id, settings)) ? "Enabled" : "Disabled";
-        };
     }
 
     private boolean isDropdownDisabled(String id, DynamicMinimapSetting settings) {
