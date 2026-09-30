@@ -8,7 +8,11 @@ final class DynamicMinimapAsset extends CommonAsset {
     private final byte[] data;
 
     DynamicMinimapAsset(String path, byte[] data) {
-        super(path, CommonAsset.hash(data), data);
+        this(path, CommonAsset.hash(data), data);
+    }
+
+    DynamicMinimapAsset(String path, String hash, byte[] data) {
+        super(path, hash, data);
         this.data = data;
     }
 

@@ -36,27 +36,46 @@ public final class MinimapColours {
             return null;
         }
     }
+    private static final MinimapColours DEFAULT = new MinimapColours();
+    public static MinimapColours defaults() { return DEFAULT; }
+
     private final int[] values;
+    private final String[] hexValues;
+    private final Color[] opaqueColours;
+    private final String frameKey;
+    private final String arrowKey;
+
     public MinimapColours() {
-        values = Arrays.stream(Key.values()).mapToInt(key -> key.defaultRgb).toArray();
+        this(Arrays.stream(Key.values()).mapToInt(key -> key.defaultRgb).toArray());
     }
-    private MinimapColours(int[] values) { this.values = values; }
+
+    private MinimapColours(int[] values) {
+        this.values = values;
+        this.hexValues = new String[values.length];
+        this.opaqueColours = new Color[values.length];
+        for (int i = 0; i < values.length; i++) {
+            this.hexValues[i] = String.format(Locale.ROOT, "#%06X", values[i]);
+            this.opaqueColours[i] = new Color(0xFF000000 | values[i], true);
+        }
+        this.frameKey = hexValues[Key.EDGE.ordinal()].substring(1)
+                + hexValues[Key.TICKS.ordinal()].substring(1)
+                + hexValues[Key.CARDINAL_TEXT.ordinal()].substring(1);
+        this.arrowKey = hexValues[Key.SELF.ordinal()].substring(1);
+    }
+
     public int rgb(Key key) { return values[key.ordinal()]; }
-    public String hex(Key key) { return String.format(Locale.ROOT, "#%06X", rgb(key)); }
-    public Color awt(Key key, int alpha) { return new Color((alpha << 24) | rgb(key), true); }
+    public String hex(Key key) { return hexValues[key.ordinal()]; }
+    public Color awt(Key key, int alpha) {
+        return alpha == 255 ? opaqueColours[key.ordinal()] : new Color((alpha << 24) | rgb(key), true);
+    }
     public MinimapColours with(Key key, int rgb) {
         if (key == null || rgb < 0 || rgb > 0xffffff) throw new IllegalArgumentException("Invalid RGB colour");
         if (rgb(key) == rgb) return this;
         int[] next = values.clone(); next[key.ordinal()] = rgb; return new MinimapColours(next);
     }
     public MinimapColours reset(Key key) { return with(key, key.defaultRgb); }
-    public String frameKey() {
-        StringBuilder out = new StringBuilder();
-        for (Key key : new Key[]{Key.EDGE, Key.TICKS, Key.CARDINAL_TEXT})
-            out.append(hex(key).substring(1));
-        return out.toString();
-    }
-    public String arrowKey() { return hex(Key.SELF).substring(1); }
+    public String frameKey() { return frameKey; }
+    public String arrowKey() { return arrowKey; }
     /** Accept #RRGGBB, RRGGBB, or three decimal channels separated by spaces/commas. */
     public static int parse(String input) {
         if (input == null) throw new IllegalArgumentException("Missing colour");

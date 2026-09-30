@@ -68,13 +68,14 @@ public final class NativeWorldMapIntegration {
     }
 
     /** Publishes a tinted copy of Hytale's own world-map marker image for this HUD. */
-    public static String resolveIconAsset(
-            PlayerRef playerRef,
-            String assetPath,
-            java.awt.Color tint,
-            String playerSlug
-    ) {
-        if (playerRef == null || playerSlug == null || playerSlug.isBlank()) return null;
+    public static String resolveIconAsset(PlayerRef playerRef, String assetPath, java.awt.Color tint, String playerSlug) {
+        DynamicAssetPublisher.PreparedAsset prepared = prepareIconAsset(assetPath, tint, playerSlug);
+        return DynamicAssetPublisher.deliver(playerRef, prepared) ? prepared.path() : null;
+    }
+
+    public static DynamicAssetPublisher.PreparedAsset prepareIconAsset(
+            String assetPath, java.awt.Color tint, String playerSlug) {
+        if (playerSlug == null || playerSlug.isBlank()) return null;
 
         String image = markerImage(assetPath);
         if (image == null) return null;
@@ -85,8 +86,9 @@ public final class NativeWorldMapIntegration {
             try {
                 CommonAsset asset = CommonAssetRegistry.getByName(sourcePath);
                 if (asset == null) return null;
-                source = asset.getBlob().join();
+                source = asset.getBlob().getNow(null);
                 if (source == null || source.length == 0) return null;
+                if (ICON_BYTES.size() >= 256) ICON_BYTES.clear();
                 ICON_BYTES.put(sourcePath, source);
             } catch (RuntimeException ignored) {
                 return null;
@@ -101,6 +103,7 @@ public final class NativeWorldMapIntegration {
             if (published == null) {
                 published = BetterMapIntegration.tintPng(source, rgb);
                 if (published == null || published.length == 0) return null;
+                if (TINTED_ICON_BYTES.size() >= 256) TINTED_ICON_BYTES.clear();
                 TINTED_ICON_BYTES.put(cacheKey, published);
             }
         }
@@ -108,7 +111,7 @@ public final class NativeWorldMapIntegration {
         String baseName = image.substring(0, image.length() - 4);
         String path = "UI/DapperMap/worldmap-" + playerSlug + "-"
                 + baseName + "-" + String.format("%06X", rgb) + ".png";
-        return DynamicAssetPublisher.deliver(playerRef, path, published) ? path : null;
+        return DynamicAssetPublisher.prepare(path, published);
     }
 
     private static String markerImage(String image) {
