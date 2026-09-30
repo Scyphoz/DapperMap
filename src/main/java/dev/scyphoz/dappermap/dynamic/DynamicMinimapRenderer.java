@@ -44,6 +44,19 @@ public final class DynamicMinimapRenderer {
      */
     private static final int STATIC_ASSET_LOGICAL_SIZE = 220;
     public static final int ROTATION_BUCKETS = 360;
+    private static final Font HUD_BRAND_FONT = trackedFont(10, true, 0.035F);
+    private static final Font HUD_CAPTION_FONT = trackedFont(9, false, 0.105F);
+    private static final Font HUD_VALUE_FONT = trackedFont(11, false, 0.015F);
+    private static Font trackedFont(int size, boolean bold, float tracking) {
+        return new Font("SansSerif", bold ? Font.BOLD : Font.PLAIN, size)
+                .deriveFont(Map.of(TextAttribute.TRACKING, tracking));
+    }
+    private static Font hudFont(int size, boolean bold, float tracking) {
+        if (size == 10 && bold && tracking == 0.035F) return HUD_BRAND_FONT;
+        if (size == 9 && !bold && tracking == 0.105F) return HUD_CAPTION_FONT;
+        if (size == 11 && !bold && tracking == 0.015F) return HUD_VALUE_FONT;
+        return trackedFont(size, bold, tracking);
+    }
     private static final Font CARDINAL_FONT = new Font("SansSerif", 1, 15);
     private static final Map<String, byte[]> MASK_CACHE = new ConcurrentHashMap();
     private static final Map<String, byte[]> FRAME_CACHE = new ConcurrentHashMap();
@@ -320,6 +333,11 @@ public final class DynamicMinimapRenderer {
      */
     public static byte[] renderHudChrome(DynamicMinimapSetting settings, int mapSize,
                                          int sidePanelWidth, int panelHeight, int gap) {
+        return toPng(renderHudChromeImage(settings, mapSize, sidePanelWidth, panelHeight, gap));
+    }
+
+    private static BufferedImage renderHudChromeImage(DynamicMinimapSetting settings, int mapSize,
+                                                      int sidePanelWidth, int panelHeight, int gap) {
         boolean side = settings.infoPanelPosition == DynamicMinimapSetting.INFO_LEFT
                 || settings.infoPanelPosition == DynamicMinimapSetting.INFO_RIGHT;
         int panelWidth = sidePanelWidth;
@@ -362,7 +380,7 @@ public final class DynamicMinimapRenderer {
         // The remaining perimeter stays as the faint glass boundary above.
         drawMapFacingPanelEdge(graphics, settings, panelX, panelY, panelWidth, panelHeight);
         graphics.dispose();
-        return toPng(image);
+        return image;
     }
 
     /**
@@ -375,10 +393,164 @@ public final class DynamicMinimapRenderer {
                                           int sidePanelWidth, int panelHeight, int gap,
                                           double frameAngle, String coords, String compass,
                                           String clock, String biome) {
+        BufferedImage image = renderHudOverlayImage(settings, mapSize, sidePanelWidth, panelHeight, gap,
+                frameAngle, coords, compass, clock, biome);
+        return image == null ? null : toPng(image);
+    }
+
+    private record OverlayLayout(int mapSize, int width, int height, int panelHeight, int gap,
+                                 int shape, int position, int alignment, int flags, MinimapColours colours) {}
+    private record RowLayerKey(OverlayLayout layout, int row, String value) {}
+    private record FrameLayerKey(int mapSize, int width, int height, int mapX, int mapY,
+                                 int resolution, int shape, boolean panel, int angle, String colours) {}
+    private static final PngCache OVERLAY_LAYERS = new PngCache(64, 4 * 1024 * 1024);
+    /** Bound encoded-byte retention, with gradual eviction instead of cache-wide clearing. */
+    static final class PngCache {
+        private final java.util.LinkedHashMap<Object, byte[]> entries = new java.util.LinkedHashMap<>(16, .75F, true);
+        private final int capacity, byteLimit;
+        private int bytes;
+        PngCache(int capacity, int byteLimit) { this.capacity = capacity; this.byteLimit = byteLimit; }
+        synchronized byte[] get(Object key) { return entries.get(key); }
+        synchronized void put(Object key, byte[] value) {
+            if (value == null || value.length > byteLimit) return;
+            byte[] old = entries.put(key, value);
+            bytes += value.length - (old == null ? 0 : old.length);
+            var iterator = entries.entrySet().iterator();
+            while (entries.size() > capacity || bytes > byteLimit) {
+                bytes -= iterator.next().getValue().length; iterator.remove();
+            }
+        }
+        synchronized int bytes() { return bytes; }
+        synchronized int size() { return entries.size(); }
+    }
+
+    public record OverlayRow(byte[] png, int top, int width, int height) {}
+    public record HudOverlayParts(byte[] frame, byte[] readout, OverlayRow[] rows) {}
+
+    /** Disjoint rasters preserve the original coordinate space and exact pixels.
+     * Only the part whose content changed needs another client asset transfer. */
+    public static HudOverlayParts renderHudOverlayParts(DynamicMinimapSetting settings, int mapSize,
+                                                        int sidePanelWidth, int panelHeight, int gap, double frameAngle,
+                                                        String coords, String compass, String clock, String biome) {
+        BufferedImage image = renderHudOverlayImage(settings, mapSize, sidePanelWidth, panelHeight, gap,
+                frameAngle, coords, compass, clock, biome, false);
+        if (image == null) return null;
+        boolean side = settings.infoPanelPosition == DynamicMinimapSetting.INFO_LEFT
+                || settings.infoPanelPosition == DynamicMinimapSetting.INFO_RIGHT;
+        int mapX = !settings.infoPanelEnabled ? 0 : settings.infoPanelPosition == DynamicMinimapSetting.INFO_LEFT
+                ? sidePanelWidth + gap : side ? 0 : Math.max(0, (image.getWidth() - mapSize) / 2);
+        int mapY = !settings.infoPanelEnabled ? 0 : settings.infoPanelPosition == DynamicMinimapSetting.INFO_ABOVE
+                ? panelHeight + gap : settings.infoPanelPosition == DynamicMinimapSetting.INFO_BELOW
+                ? 0 : Math.max(0, (image.getHeight() - mapSize) / 2);
+        boolean spill = false;
+        int[] mapRow = new int[mapSize];
+        for (int y = mapY; y < mapY + mapSize && !spill; y++) {
+            image.getRGB(mapX, y, mapSize, 1, mapRow, 0, mapSize);
+            for (int pixel : mapRow) if (pixel != 0) { spill = true; break; }
+        }
+        byte[] framePng;
+        if (spill) {
+            // Long left-panel text can extend into the map. Preserve its exact
+            // original compositing order instead of caching an unrelated frame.
+            BufferedImage original = renderHudOverlayImage(settings, mapSize, sidePanelWidth, panelHeight, gap,
+                    frameAngle, coords, compass, clock, biome);
+            if (original == null) return null;
+            BufferedImage frame = new BufferedImage(image.getWidth(), image.getHeight(), BufferedImage.TYPE_INT_ARGB);
+            for (int y = mapY; y < mapY + mapSize; y++) {
+                original.getRGB(mapX, y, mapSize, 1, mapRow, 0, mapSize);
+                frame.setRGB(mapX, y, mapSize, 1, mapRow, 0, mapSize);
+            }
+            framePng = toPng(frame);
+        } else {
+            var key = new FrameLayerKey(mapSize, image.getWidth(), image.getHeight(), mapX, mapY,
+                    settings.textureResolution, settings.shape, settings.infoPanelEnabled,
+                    rotationBucket(frameAngle), settings.colours.frameKey());
+            framePng = OVERLAY_LAYERS.get(key);
+            if (framePng == null) {
+                BufferedImage frame = new BufferedImage(image.getWidth(), image.getHeight(), BufferedImage.TYPE_INT_ARGB);
+                byte[] source = renderFrame(settings, frameAngle);
+                if (source == null) return null;
+                try {
+                    BufferedImage decoded = ImageIO.read(new ByteArrayInputStream(source));
+                    if (decoded == null) return null;
+                    Graphics2D graphics = frame.createGraphics();
+                    if (!settings.infoPanelEnabled)
+                        graphics.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC);
+                    else {
+                        graphics.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                        graphics.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+                        graphics.setRenderingHint(RenderingHints.KEY_FRACTIONALMETRICS, RenderingHints.VALUE_FRACTIONALMETRICS_ON);
+                        graphics.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
+                    }
+                    graphics.drawImage(decoded, mapX, mapY, mapSize, mapSize, null);
+                    graphics.dispose();
+                } catch (IOException ignored) { return null; }
+                framePng = toPng(frame);
+                OVERLAY_LAYERS.put(key, framePng);
+            }
+        }
+        Graphics2D clear = image.createGraphics();
+        clear.setComposite(java.awt.AlphaComposite.Clear);
+        clear.fillRect(mapX, mapY, mapSize, mapSize);
+        clear.dispose();
+        int flags = (settings.infoPanelEnabled ? 16 : 0) | (settings.showCoordinates ? 1 : 0)
+                | (settings.showCompass ? 2 : 0) | (settings.showClock ? 4 : 0) | (settings.showBiome ? 8 : 0);
+        var layout = new OverlayLayout(mapSize, image.getWidth(), image.getHeight(), panelHeight, gap,
+                settings.shape, settings.infoPanelPosition, settings.infoPanelTextAlignment, flags, settings.colours);
+        String[] values = {coords, compass, clock, biome};
+        OverlayRow[] rows = new OverlayRow[4];
+        boolean[] enabled = {settings.showCoordinates, settings.showCompass, settings.showClock, settings.showBiome};
+        int panelY = settings.infoPanelPosition == DynamicMinimapSetting.INFO_BELOW ? mapSize + gap
+                : settings.infoPanelPosition == DynamicMinimapSetting.INFO_ABOVE ? 0
+                : Math.max(0, (image.getHeight() - panelHeight) / 2);
+        int cursor = panelY + 30;
+        for (int i = 0; i < rows.length; i++) {
+            if (!settings.infoPanelEnabled || !enabled[i]) {
+                rows[i] = new OverlayRow(BLANK_PNG, 0, 0, 0);
+                continue;
+            }
+            var key = new RowLayerKey(layout, i, values[i]);
+            byte[] png = OVERLAY_LAYERS.get(key);
+            if (png == null) {
+                BufferedImage rowImage = new BufferedImage(image.getWidth(), 43, BufferedImage.TYPE_INT_ARGB);
+                int[] pixels = image.getRGB(0, cursor, image.getWidth(), 43, null, 0, image.getWidth());
+                rowImage.setRGB(0, 0, image.getWidth(), 43, pixels, 0, image.getWidth());
+                png = toPng(rowImage);
+                OVERLAY_LAYERS.put(key, png);
+            }
+            clear = image.createGraphics();
+            clear.setComposite(java.awt.AlphaComposite.Clear);
+            clear.fillRect(0, cursor, image.getWidth(), 43);
+            clear.dispose();
+            if (png == null) return null;
+            rows[i] = new OverlayRow(png, cursor, image.getWidth(), 43);
+            cursor += 43;
+        }
+        var chromeKey = new RowLayerKey(layout, -1, "");
+        byte[] readoutPng = OVERLAY_LAYERS.get(chromeKey);
+        if (readoutPng == null) {
+            readoutPng = toPng(image);
+            OVERLAY_LAYERS.put(chromeKey, readoutPng);
+        }
+        return framePng == null || readoutPng == null ? null : new HudOverlayParts(framePng, readoutPng, rows);
+    }
+
+    private static BufferedImage renderHudOverlayImage(DynamicMinimapSetting settings, int mapSize,
+                                                       int sidePanelWidth, int panelHeight, int gap,
+                                                       double frameAngle, String coords, String compass,
+                                                       String clock, String biome) {
+        return renderHudOverlayImage(settings, mapSize, sidePanelWidth, panelHeight, gap,
+                frameAngle, coords, compass, clock, biome, true);
+    }
+
+    private static BufferedImage renderHudOverlayImage(DynamicMinimapSetting settings, int mapSize,
+                                                       int sidePanelWidth, int panelHeight, int gap,
+                                                       double frameAngle, String coords, String compass,
+                                                       String clock, String biome, boolean includeFrame) {
         if (!settings.infoPanelEnabled) {
             try {
                 BufferedImage overlay = new BufferedImage(mapSize, mapSize, BufferedImage.TYPE_INT_ARGB);
-                byte[] framePng = renderFrame(settings, frameAngle);
+                byte[] framePng = includeFrame ? renderFrame(settings, frameAngle) : null;
                 if (framePng != null) {
                     BufferedImage frame = ImageIO.read(new ByteArrayInputStream(framePng));
                     Graphics2D g = overlay.createGraphics();
@@ -386,14 +558,13 @@ public final class DynamicMinimapRenderer {
                     g.drawImage(frame, 0, 0, mapSize, mapSize, null);
                     g.dispose();
                 }
-                return toPng(overlay);
+                return overlay;
             } catch (Exception ignored) { return null; }
         }
-        byte[] chromePng = renderHudChrome(settings, mapSize, sidePanelWidth, panelHeight, gap);
-        if (chromePng == null) return null;
-
         try {
-            BufferedImage overlay = ImageIO.read(new ByteArrayInputStream(chromePng));
+            // Chrome is an intermediate raster, not a transfer asset. Paint onto
+            // it directly instead of encoding, decoding and expanding a PNG.
+            BufferedImage overlay = renderHudChromeImage(settings, mapSize, sidePanelWidth, panelHeight, gap);
             Graphics2D graphics = overlay.createGraphics();
             graphics.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
             graphics.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
@@ -415,7 +586,7 @@ public final class DynamicMinimapRenderer {
                     ? mapSize + gap : (settings.infoPanelPosition == DynamicMinimapSetting.INFO_ABOVE
                     ? 0 : Math.max(0, (overlay.getHeight() - panelHeight) / 2));
 
-            byte[] framePng = renderFrame(settings, frameAngle);
+            byte[] framePng = includeFrame ? renderFrame(settings, frameAngle) : null;
             BufferedImage frame = framePng == null ? null
                     : ImageIO.read(new ByteArrayInputStream(framePng));
             if (frame != null) {
@@ -425,7 +596,7 @@ public final class DynamicMinimapRenderer {
             drawTelemetry(graphics, settings, panelX, panelY, panelWidth,
                     coords, compass, clock, biome);
             graphics.dispose();
-            return toPng(overlay);
+            return overlay;
         } catch (Exception ignored) {
             return null;
         }
@@ -830,8 +1001,7 @@ public final class DynamicMinimapRenderer {
                                            String value, int panelX, int panelWidth,
                                            int leftInset, int rightInset, int baseline,
                                            int size, Color color, boolean bold, float tracking) {
-        Font font = new Font("SansSerif", bold ? Font.BOLD : Font.PLAIN, size);
-        graphics.setFont(font.deriveFont(Map.of(TextAttribute.TRACKING, tracking)));
+        graphics.setFont(hudFont(size, bold, tracking));
         int textWidth = graphics.getFontMetrics().stringWidth(value);
         int left = panelX + leftInset;
         int right = panelX + panelWidth - rightInset;
@@ -845,8 +1015,7 @@ public final class DynamicMinimapRenderer {
 
     private static void drawHudText(Graphics2D graphics, String value, int x, int baseline,
                                     int size, Color color, boolean bold, float tracking) {
-        Font font = new Font("SansSerif", bold ? Font.BOLD : Font.PLAIN, size);
-        graphics.setFont(font.deriveFont(Map.of(TextAttribute.TRACKING, tracking)));
+        graphics.setFont(hudFont(size, bold, tracking));
         graphics.setColor(new Color(0, 0, 0, 105));
         graphics.drawString(value, x + 1, baseline + 1);
         graphics.setColor(color);
@@ -1301,12 +1470,48 @@ public final class DynamicMinimapRenderer {
             // bytes up front and avoid ImageIO's default temporary-file output cache.
             ByteArrayOutputStream out = new ByteArrayOutputStream(Math.max(1024, Math.min(32768, image.getWidth() * image.getHeight())));
             try (var output = new javax.imageio.stream.MemoryCacheImageOutputStream(out)) {
-                if (!ImageIO.write(image, "PNG", output)) return null;
+                if (!ImageIO.write(paletteImage(image), "PNG", output)) return null;
             }
             return out.toByteArray();
         } catch (Exception var2) {
             return null;
         }
+    }
+
+    /** Exact palette encoding; images with more than 256 ARGB values stay true-colour. */
+    private static BufferedImage paletteImage(BufferedImage source) {
+        if ((long)source.getWidth() * source.getHeight() < 4096L) return source;
+        int[] keys = new int[512], values = new int[512], colours = new int[256];
+        java.util.Arrays.fill(values, -1);
+        int[] row = new int[source.getWidth()];
+        int count = 0;
+        for (int y = 0; y < source.getHeight(); ++y) {
+            source.getRGB(0, y, row.length, 1, row, 0, row.length);
+            for (int argb : row) {
+                int slot = (argb * 0x9E3779B9) >>> 23;
+                while (values[slot] >= 0 && keys[slot] != argb) slot = (slot + 1) & 511;
+                if (values[slot] < 0) {
+                    if (count == 256) return source;
+                    keys[slot] = argb;
+                    values[slot] = count;
+                    colours[count++] = argb;
+                }
+            }
+        }
+        var model = new java.awt.image.IndexColorModel(8, count, colours, 0, true, -1,
+                java.awt.image.DataBuffer.TYPE_BYTE);
+        var indexed = new BufferedImage(source.getWidth(), source.getHeight(), BufferedImage.TYPE_BYTE_INDEXED, model);
+        byte[] pixels = ((java.awt.image.DataBufferByte) indexed.getRaster().getDataBuffer()).getData();
+        int offset = 0;
+        for (int y = 0; y < source.getHeight(); ++y) {
+            source.getRGB(0, y, row.length, 1, row, 0, row.length);
+            for (int argb : row) {
+                int slot = (argb * 0x9E3779B9) >>> 23;
+                while (keys[slot] != argb || values[slot] < 0) slot = (slot + 1) & 511;
+                pixels[offset++] = (byte) values[slot];
+            }
+        }
+        return indexed;
     }
 
     private static int[] decodePixels(MapImage image) {
@@ -1351,33 +1556,27 @@ public final class DynamicMinimapRenderer {
     }
 
     private static long sampleHash(byte[] bytes) {
-        if (bytes != null && bytes.length != 0) {
-            long hash = (long)bytes.length;
-            int[] samples = new int[]{0, bytes.length / 4, bytes.length / 2, bytes.length * 3 / 4, bytes.length - 1};
-
-            for(int sample : samples) {
-                hash = 31L * hash + (long)Byte.toUnsignedInt(bytes[sample]);
-            }
-
-            return hash;
-        } else {
-            return 0L;
-        }
+        if (bytes == null || bytes.length == 0) return 0L;
+        int length = bytes.length;
+        long hash = length;
+        hash = 31L * hash + (long)Byte.toUnsignedInt(bytes[0]);
+        hash = 31L * hash + (long)Byte.toUnsignedInt(bytes[length / 4]);
+        hash = 31L * hash + (long)Byte.toUnsignedInt(bytes[length / 2]);
+        hash = 31L * hash + (long)Byte.toUnsignedInt(bytes[length * 3 / 4]);
+        hash = 31L * hash + (long)Byte.toUnsignedInt(bytes[length - 1]);
+        return hash;
     }
 
     private static long sampleHash(int[] ints) {
-        if (ints != null && ints.length != 0) {
-            long hash = (long)ints.length;
-            int[] samples = new int[]{0, ints.length / 4, ints.length / 2, ints.length * 3 / 4, ints.length - 1};
-
-            for(int sample : samples) {
-                hash = 31L * hash + (long)ints[sample];
-            }
-
-            return hash;
-        } else {
-            return 0L;
-        }
+        if (ints == null || ints.length == 0) return 0L;
+        int length = ints.length;
+        long hash = length;
+        hash = 31L * hash + (long)ints[0];
+        hash = 31L * hash + (long)ints[length / 4];
+        hash = 31L * hash + (long)ints[length / 2];
+        hash = 31L * hash + (long)ints[length * 3 / 4];
+        hash = 31L * hash + (long)ints[length - 1];
+        return hash;
     }
 
     public static final class Terrain {

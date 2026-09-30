@@ -47,6 +47,7 @@ public final class MoveMinimapPage
 
     private int pendingX;
     private int pendingY;
+    private int gridX, gridY;
     private final int previewShape;
     private final int previewPanelPosition;
 
@@ -146,6 +147,8 @@ public final class MoveMinimapPage
             UICommandBuilder builder,
             UIEventBuilder events
     ) {
+        this.gridX = nearestStop(this.pendingX);
+        this.gridY = nearestStop(this.pendingY);
         for (int row = 0; row < STOPS.length; ++row) {
             int y = STOPS[row];
 
@@ -240,8 +243,14 @@ public final class MoveMinimapPage
         }
 
         if ("slider_x".equals(action) || "slider_y".equals(action)) {
-            if ("slider_x".equals(action)) this.pendingX = clamp(event.sliderValue);
-            else this.pendingY = clamp(event.sliderValue);
+            int value = clamp(event.sliderValue);
+            if ("slider_x".equals(action)) {
+                if (this.pendingX == value) return;
+                this.pendingX = value;
+            } else {
+                if (this.pendingY == value) return;
+                this.pendingY = value;
+            }
             refreshPreview(false);
             return;
         }
@@ -300,28 +309,11 @@ public final class MoveMinimapPage
 
         int selectedX = nearestStop(this.pendingX);
         int selectedY = nearestStop(this.pendingY);
-
-        // Update the visible placement markers without rebuilding/rebinding the
-        // buttons. '+' means available target; yellow 'X' is the current choice.
-        for (int row = 0; row < STOPS.length; ++row) {
-            int y = STOPS[row];
-
-            for (int column = 0; column < STOPS.length; ++column) {
-                int x = STOPS[column];
-                String button =
-                        "#MovePreviewSlot" + row + column + "[0]";
-                boolean selected =
-                        x == selectedX && y == selectedY;
-
-                builder.set(
-                        button + ".TextSpans",
-                        Message.raw(selected ? "X" : "+")
-                                .color(selected ? GOLD : BLUE)
-                );
-            }
+        if (selectedX != this.gridX || selectedY != this.gridY) {
+            updateGridButton(builder, this.gridX, this.gridY, false);
+            updateGridButton(builder, selectedX, selectedY, true);
+            this.gridX = selectedX; this.gridY = selectedY;
         }
-
-        // Move the preview widget using the same flex-spacer idea as the HUD.
         builder.clear("#MovePreviewCanvas");
         builder.appendInline(
                 "#MovePreviewCanvas",
@@ -329,6 +321,13 @@ public final class MoveMinimapPage
         );
 
         this.sendUpdate(builder, events, false);
+    }
+
+    private static void updateGridButton(UICommandBuilder builder, int x, int y, boolean selected) {
+        int row = java.util.Arrays.binarySearch(STOPS, y), column = java.util.Arrays.binarySearch(STOPS, x);
+        if (row < 0 || column < 0) return;
+        builder.set("#MovePreviewSlot" + row + column + "[0].TextSpans",
+                Message.raw(selected ? "X" : "+").color(selected ? GOLD : BLUE));
     }
 
     private boolean canEdit() {

@@ -38,6 +38,7 @@ public final class DynamicMinimapSetting {
     public int shape = 1;
     public boolean showOtherPlayers = true;
     public boolean showEntities = true;
+    public int creatureMarkerLimit = 16;
     public boolean showDeathMarker = true;
     public boolean showWorldMapMarkers = true;
     public boolean limitMobHeight = true;
@@ -103,6 +104,7 @@ public final class DynamicMinimapSetting {
         copy.shape = this.shape;
         copy.showOtherPlayers = this.showOtherPlayers;
         copy.showEntities = this.showEntities;
+        copy.creatureMarkerLimit = this.creatureMarkerLimit;
         copy.showDeathMarker = this.showDeathMarker;
         copy.showWorldMapMarkers = this.showWorldMapMarkers;
         copy.limitMobHeight = this.limitMobHeight;
@@ -139,6 +141,9 @@ public final class DynamicMinimapSetting {
         this.sizePixels = clamp(this.sizePixels, 120, 360);
         this.textureResolution = clamp(this.textureResolution, 256, 1024);
         this.interfaceScalePercent = clamp(this.interfaceScalePercent, 75, 160);
+        if (this.creatureMarkerLimit != 16 && this.creatureMarkerLimit != 32 && this.creatureMarkerLimit != 64) {
+            this.creatureMarkerLimit = 16;
+        }
         this.mobVerticalRange = clamp(this.mobVerticalRange, 4, 256);
         if (this.position < 0 || this.position > 3) {
             this.position = POS_TOP_RIGHT;
