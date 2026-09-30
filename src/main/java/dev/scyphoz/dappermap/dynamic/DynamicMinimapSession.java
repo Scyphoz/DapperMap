@@ -20,6 +20,7 @@ import dev.scyphoz.dappermap.integration.BetterMapIntegration;
 import dev.scyphoz.dappermap.integration.NativeWorldMapIntegration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
@@ -146,9 +147,9 @@ public final class DynamicMinimapSession {
     private int lastMapRotationBucket = -1;
     private long lastRotationDeliveryMs = 0L;
     private long terrainGeneration = 0L;
-    private byte[] northUpTerrainPng = null;
+    private DynamicMinimapRenderer.RotationSource rotationSource = null;
     private byte[] displayedTerrainPng = null;
-    private final ImagePublicationCache terrainPublications = new ImagePublicationCache();
+    private final DynamicAssetPublisher.ImagePublicationCache terrainPublications = new DynamicAssetPublisher.ImagePublicationCache();
 
     public DynamicMinimapRenderer.LiveSnapshot capturePreview() {
         return this.hud == null ? null : this.hud.snapshot(this.displayedTerrainPng,
@@ -296,7 +297,7 @@ public final class DynamicMinimapSession {
 
         if (this.hud != null) this.hud.detach();
         this.hud = null;
-        this.northUpTerrainPng = null;
+        this.rotationSource = null;
         this.displayedTerrainPng = null;
         this.terrainPublications.clear();
         this.lastObservedWorld = null;
@@ -390,7 +391,7 @@ public final class DynamicMinimapSession {
                     if (this.hud != null) this.hud.detach();
                     this.hud = null;
                     this.lastCaveView = null;
-                    this.northUpTerrainPng = null;
+                    this.rotationSource = null;
                     this.displayedTerrainPng = null;
                     this.terrainPublications.clear();
                     this.bufferCenterX = Double.NaN;
@@ -440,7 +441,7 @@ public final class DynamicMinimapSession {
                 this.lastSignature = 0L;
                 this.lastSignatureMs = 0L;
                 this.lastTerrainMs = 0L;
-                this.northUpTerrainPng = null;
+                this.rotationSource = null;
                 this.displayedTerrainPng = null;
                 this.terrainPublications.clear();
                 ++this.terrainGeneration;
@@ -462,7 +463,7 @@ public final class DynamicMinimapSession {
                 this.lastSignatureMs = 0L;
                 this.lastTerrainMs = 0L;
                 this.lastMarkerMs = 0L;
-                this.northUpTerrainPng = null;
+                this.rotationSource = null;
                 this.displayedTerrainPng = null;
                 this.terrainPublications.clear();
                 ++this.terrainGeneration;
@@ -536,6 +537,15 @@ public final class DynamicMinimapSession {
 
             if (this.settings.rotationMode != this.builtRotationMode) {
                 this.builtRotationMode = this.settings.rotationMode;
+                // Changing mode also changes raster quality. Force new terrain;
+                // the previous decoded source must not survive the transition.
+                this.rotationSource = null;
+                this.bufferCenterX = Double.NaN;
+                this.bufferCenterZ = Double.NaN;
+                this.bufferComplete = false;
+                this.lastTerrainMs = 0L;
+                this.lastSignatureMs = 0L;
+                ++this.terrainGeneration;
                 this.lastMapRotationBucket = -1;
                 this.lastSelfBucket = -1;
                 this.lastMarkerMs = 0L;
@@ -704,7 +714,7 @@ public final class DynamicMinimapSession {
             this.builtTextureResolution = this.settings.textureResolution;
             this.builtRotationMode = -1;
             this.lastMapRotationBucket = -1;
-            this.northUpTerrainPng = null;
+            this.rotationSource = null;
             this.displayedTerrainPng = null;
             this.terrainPublications.clear();
             this.hud.deliverStaticAssets();
@@ -848,8 +858,10 @@ public final class DynamicMinimapSession {
                 return;
             }
 
+            DynamicMinimapRenderer.RotationSource source = renderSettings.rotationMode == 1
+                    ? DynamicMinimapRenderer.prepareRotationSource(northUpPng) : null;
             byte[] displayPng = renderSettings.rotationMode == 1
-                    ? DynamicMinimapRenderer.rotateTerrain(northUpPng, mapAngle, renderSettings.colours)
+                    ? DynamicMinimapRenderer.rotateTerrain(source, mapAngle)
                     : northUpPng;
 
             if (displayPng == null || displayPng.length == 0) {
@@ -866,7 +878,8 @@ public final class DynamicMinimapSession {
                         || renderHud != this.hud
                         || !java.util.Objects.equals(caveView, this.lastCaveView)
                         || sequence <= this.deliveredSequence
-                        || this.settings.textureResolution != renderSettings.textureResolution) {
+                        || this.settings.textureResolution != renderSettings.textureResolution
+                        || this.settings.rotationMode != renderSettings.rotationMode) {
                     return;
                 }
 
@@ -880,7 +893,7 @@ public final class DynamicMinimapSession {
                 }
 
                 this.deliveredSequence = sequence;
-                this.northUpTerrainPng = northUpPng;
+                this.rotationSource = source;
                 ++this.terrainGeneration;
 
                 this.displayedTerrainPng = displayPng;
@@ -929,14 +942,14 @@ public final class DynamicMinimapSession {
             int rotationBucket
     ) {
         long rotationRequest = this.rotationSequence.get();
-        if (this.northUpTerrainPng == null
+        if (this.rotationSource == null
                 || Double.isNaN(this.bufferCenterX)
                 || this.hud == null
                 || !this.hud.isShown()) {
             return;
         }
 
-        byte[] basePng = this.northUpTerrainPng;
+        DynamicMinimapRenderer.RotationSource base = this.rotationSource;
         long generation = this.terrainGeneration;
         DynamicMinimapHud renderHud = this.hud;
         DynamicMinimapSetting renderSettings = this.settings.copy();
@@ -948,7 +961,7 @@ public final class DynamicMinimapSession {
         submitRender("rotation", () -> {
             if (rotationRequest != this.rotationSequence.get()) return;
             byte[] displayPng =
-                    DynamicMinimapRenderer.rotateTerrain(basePng, mapAngle, renderSettings.colours);
+                    DynamicMinimapRenderer.rotateTerrain(base, mapAngle);
             if (displayPng == null || displayPng.length == 0) {
                 return;
             }
@@ -1078,7 +1091,7 @@ public final class DynamicMinimapSession {
         if (this.settings.showWorldMapMarkers) {
             Player player = store.getComponent(playerRef, Player.getComponentType());
             long now = System.currentTimeMillis();
-            if (player != null && now - this.lastWorldMapScanMs >= 1000L) {
+            if (player != null && now - this.lastWorldMapScanMs >= 2000L) {
                 this.lastWorldMapScanMs = now;
                 try {
                     List<DynamicMinimapMarker> current = NativeWorldMapIntegration.getMarkers(
@@ -1088,12 +1101,12 @@ public final class DynamicMinimapSession {
                             && ++this.emptyWorldMapScans < 3) {
                         // A provider can briefly return no markers during a map refresh.
                     } else {
-                        this.cachedWorldMapMarkers = current;
+                        if (!current.equals(this.cachedWorldMapMarkers)) this.cachedWorldMapMarkers = current;
                         this.emptyWorldMapScans = 0;
                     }
                 } catch (Throwable ignored) { }
             }
-            markers.addAll(this.cachedWorldMapMarkers);
+
         } else {
             this.cachedWorldMapMarkers = new ArrayList<>();
             this.emptyWorldMapScans = 0;
@@ -1103,7 +1116,10 @@ public final class DynamicMinimapSession {
         if (this.settings.betterMapEnabled && this.settings.betterMapMarkersEnabled
                 && BetterMapIntegration.isAvailable()) {
             long now = System.currentTimeMillis();
-            if (now - this.lastBetterMapScanMs >= 750L) {
+            // Stagger integration scans; projection/rotation still uses cached markers.
+            if (this.lastBetterMapScanMs == 0L && this.settings.showWorldMapMarkers)
+                this.lastBetterMapScanMs = now - 1000L;
+            if (now - this.lastBetterMapScanMs >= 2000L) {
                 this.lastBetterMapScanMs = now;
                 Player player = store.getComponent(playerRef, Player.getComponentType());
                 List<DynamicMinimapMarker> current = BetterMapIntegration.getMarkers(player);
@@ -1112,19 +1128,19 @@ public final class DynamicMinimapSession {
                             && ++this.emptyBetterMapScans < 3) {
                         // Wait for a repeated empty snapshot before removing visible waypoints.
                     } else {
-                        this.cachedBetterMapMarkers = new ArrayList<>(current);
+                        if (!current.equals(this.cachedBetterMapMarkers)) this.cachedBetterMapMarkers = current;
                         this.emptyBetterMapScans = 0;
                     }
                 }
             }
-            markers.addAll(this.cachedBetterMapMarkers);
+
         } else {
             this.cachedBetterMapMarkers = new ArrayList<>();
             this.emptyBetterMapScans = 0;
             this.lastBetterMapScanMs = 0L;
         }
 
-        this.cachedMarkers = markers;
+        if (!markers.equals(this.cachedMarkers)) this.cachedMarkers = markers;
     }
 
     /**
@@ -1153,7 +1169,8 @@ public final class DynamicMinimapSession {
         // useful display order. Select nearby markers before the fixed HUD slots
         // are exhausted by distant POIs clamped to the edge.
         List<DynamicMinimapMarker> orderedMarkers = this.markerOrder.get(
-                this.cachedMarkers, this.bufferCenterX, this.bufferCenterZ);
+                this.cachedMarkers, this.cachedWorldMapMarkers, this.cachedBetterMapMarkers,
+                this.bufferCenterX, this.bufferCenterZ);
 
         for (DynamicMinimapMarker marker : orderedMarkers) {
             if (slot >= slots.length) {
@@ -1417,6 +1434,75 @@ public final class DynamicMinimapSession {
             return out.toString();
         } else {
             return "Unknown";
+        }
+    }
+
+    /** Static integration ordering is independent of frequently moving entity snapshots. */
+    static final class MarkerOrder {
+        private List<DynamicMinimapMarker> source;
+        private List<DynamicMinimapMarker> nativeSource, betterSource;
+        private List<DynamicMinimapMarker> integrations = List.of();
+        private List<DynamicMinimapMarker> ordered = List.of();
+        private double centerX = Double.NaN, centerZ = Double.NaN;
+
+        private static Comparator<DynamicMinimapMarker> comparator(double x, double z) {
+            return Comparator.comparingInt((DynamicMinimapMarker marker) -> switch (marker.style) {
+                case DEATH -> 0;
+                case BETTERMAP, NATIVE_WORLDMAP -> 1;
+                case DOT -> 2;
+            }).thenComparingDouble(marker -> {
+                double dx = marker.x - x, dz = marker.z - z;
+                return dx * dx + dz * dz;
+            });
+        }
+
+        List<DynamicMinimapMarker> get(List<DynamicMinimapMarker> snapshot, double x, double z) {
+            return get(snapshot, List.of(), List.of(), x, z);
+        }
+
+        List<DynamicMinimapMarker> get(List<DynamicMinimapMarker> snapshot,
+                                       List<DynamicMinimapMarker> nativeMarkers, List<DynamicMinimapMarker> betterMarkers,
+                                       double x, double z) {
+            boolean recentered = Double.compare(centerX, x) != 0 || Double.compare(centerZ, z) != 0;
+            boolean integrationChanged = recentered
+                    || (nativeMarkers != nativeSource && !nativeMarkers.equals(nativeSource))
+                    || (betterMarkers != betterSource && !betterMarkers.equals(betterSource));
+            boolean movingChanged = snapshot != source && !snapshot.equals(source);
+            if (integrationChanged || movingChanged) {
+                Comparator<DynamicMinimapMarker> compare = comparator(x, z);
+                if (integrationChanged) {
+                    var sorted = new ArrayList<DynamicMinimapMarker>(nativeMarkers.size() + betterMarkers.size());
+                    sorted.addAll(nativeMarkers);
+                    sorted.addAll(betterMarkers);
+                    sorted.sort(compare);
+                    integrations = sorted;
+                }
+                var moving = new ArrayList<>(snapshot);
+                moving.sort(compare);
+                // Merge two sorted lists without sorting all world-wide markers
+                // whenever one creature or player moves. Ties retain scan order.
+                var merged = new ArrayList<DynamicMinimapMarker>(moving.size() + integrations.size());
+                int local = 0, integration = 0;
+                while (local < moving.size() || integration < integrations.size()) {
+                    if (integration >= integrations.size() || (local < moving.size()
+                            && compare.compare(moving.get(local), integrations.get(integration)) <= 0))
+                        merged.add(moving.get(local++));
+                    else merged.add(integrations.get(integration++));
+                }
+                ordered = merged;
+            }
+            source = snapshot;
+            nativeSource = nativeMarkers;
+            betterSource = betterMarkers;
+            centerX = x;
+            centerZ = z;
+            return ordered;
+        }
+
+        void clear() {
+            source = nativeSource = betterSource = null;
+            ordered = integrations = List.of();
+            centerX = centerZ = Double.NaN;
         }
     }
 }

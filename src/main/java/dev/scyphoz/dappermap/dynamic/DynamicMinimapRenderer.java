@@ -81,6 +81,9 @@ public final class DynamicMinimapRenderer {
     /** Actual PNG width/height used for the terrain buffer. */
     public static int textureBufferPixels(DynamicMinimapSetting settings) {
         int pixels = (int)Math.round((double)bufferPixels(settings) * textureScale(settings));
+        // Rotation already delivers at most 512 pixels. Stitch directly at that
+        // resolution instead of creating and downsampling up to a 2048px PNG.
+        if (settings.rotationMode == 1) pixels = Math.min(512, pixels);
         return Math.max(2, (pixels & 1) == 0 ? pixels : pixels + 1);
     }
 
@@ -110,35 +113,57 @@ public final class DynamicMinimapRenderer {
             double worldSize = (double)logicalBuffer / logicalPixelsPerBlock;
             int minChunkX = ChunkUtil.chunkCoordinate((int)Math.floor(originX));
             int minChunkZ = ChunkUtil.chunkCoordinate((int)Math.floor(originZ));
-            int maxChunkX = ChunkUtil.chunkCoordinate((int)Math.ceil(originX + worldSize));
-            int maxChunkZ = ChunkUtil.chunkCoordinate((int)Math.ceil(originZ + worldSize));
+            int maxChunkX = ChunkUtil.chunkCoordinate((int)Math.ceil(originX + worldSize) - 1);
+            int maxChunkZ = ChunkUtil.chunkCoordinate((int)Math.ceil(originZ + worldSize) - 1);
             int chunkPixels = (int)Math.ceil((double)CHUNK_SIZE * texturePixelsPerBlock);
 
-            for(int chunkZ = minChunkZ; chunkZ <= maxChunkZ; ++chunkZ) {
-                for(int chunkX = minChunkX; chunkX <= maxChunkX; ++chunkX) {
-                    ++total;
+            java.util.List<int[]> chunks = new java.util.ArrayList<>();
+            for (int z = minChunkZ; z <= maxChunkZ; ++z)
+                for (int x = minChunkX; x <= maxChunkX; ++x) chunks.add(new int[]{x, z});
+            chunks.sort(java.util.Comparator.comparingDouble(chunk -> {
+                double dx = (chunk[0] + 0.5) * CHUNK_SIZE - centerX;
+                double dz = (chunk[1] + 0.5) * CHUNK_SIZE - centerZ;
+                return dx * dx + dz * dz;
+            }));
+            int requests = 0;
+            for (int[] coordinate : chunks) {
+                int chunkX = coordinate[0], chunkZ = coordinate[1];
+                ++total;
 
-                    try {
-                        MapImage image = caveImages != null ? caveImages.apply(chunkX, chunkZ)
-                                : worldMapManager.getImageAsync(chunkX, chunkZ).getNow(null);
-                        if (image != null && image.width > 0 && image.height > 0) {
-                            int[] pixels = decodePixels(image);
-                            if (pixels != null) {
-                                BufferedImage chunk = new BufferedImage(image.width, image.height, 2);
-                                chunk.setRGB(0, 0, image.width, image.height, pixels, 0, image.width);
-                                int drawX = (int)Math.round(((double)chunkX * (double)CHUNK_SIZE - originX) * texturePixelsPerBlock);
-                                int drawZ = (int)Math.round(((double)chunkZ * (double)CHUNK_SIZE - originZ) * texturePixelsPerBlock);
-                                // Preserve detail when BetterMap supplies more samples per chunk.
-                                graphics.setRenderingHint(RenderingHints.KEY_INTERPOLATION,
-                                        image.width > chunkPixels || image.height > chunkPixels
-                                                ? RenderingHints.VALUE_INTERPOLATION_BILINEAR
-                                                : RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR);
-                                graphics.drawImage(chunk, drawX, drawZ, chunkPixels, chunkPixels, (ImageObserver)null);
-                                ++present;
-                            }
+                try {
+                    MapImage image;
+                    if (caveImages instanceof dev.scyphoz.dappermap.integration.BetterMapIntegration.CaveView view) {
+                        image = view.peek(chunkX, chunkZ);
+                        if (image == null && requests < 16) {
+                            ++requests;
+                            image = view.apply(chunkX, chunkZ);
                         }
-                    } catch (Throwable ignored) {
+                    } else if (caveImages != null) {
+                        image = caveImages.apply(chunkX, chunkZ);
+                    } else {
+                        image = worldMapManager.getImageIfInMemory(chunkX, chunkZ);
+                        if (image == null && requests < 16) {
+                            ++requests;
+                            image = worldMapManager.getImageAsync(chunkX, chunkZ).getNow(null);
+                        }
                     }
+                    if (image != null && image.width > 0 && image.height > 0) {
+                        int[] pixels = decodePixels(image);
+                        if (pixels != null) {
+                            BufferedImage chunk = new BufferedImage(image.width, image.height, 2);
+                            chunk.setRGB(0, 0, image.width, image.height, pixels, 0, image.width);
+                            int drawX = (int)Math.round(((double)chunkX * (double)CHUNK_SIZE - originX) * texturePixelsPerBlock);
+                            int drawZ = (int)Math.round(((double)chunkZ * (double)CHUNK_SIZE - originZ) * texturePixelsPerBlock);
+                            // Preserve detail when BetterMap supplies more samples per chunk.
+                            graphics.setRenderingHint(RenderingHints.KEY_INTERPOLATION,
+                                    image.width > chunkPixels || image.height > chunkPixels
+                                            ? RenderingHints.VALUE_INTERPOLATION_BILINEAR
+                                            : RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR);
+                            graphics.drawImage(chunk, drawX, drawZ, chunkPixels, chunkPixels, (ImageObserver)null);
+                            ++present;
+                        }
+                    }
+                } catch (Throwable ignored) {
                 }
             }
         }
@@ -162,8 +187,8 @@ public final class DynamicMinimapRenderer {
             double worldSize = (double)buffer / pixelsPerBlock;
             int minChunkX = ChunkUtil.chunkCoordinate((int)Math.floor(originX));
             int minChunkZ = ChunkUtil.chunkCoordinate((int)Math.floor(originZ));
-            int maxChunkX = ChunkUtil.chunkCoordinate((int)Math.ceil(originX + worldSize));
-            int maxChunkZ = ChunkUtil.chunkCoordinate((int)Math.ceil(originZ + worldSize));
+            int maxChunkX = ChunkUtil.chunkCoordinate((int)Math.ceil(originX + worldSize) - 1);
+            int maxChunkZ = ChunkUtil.chunkCoordinate((int)Math.ceil(originZ + worldSize) - 1);
             long hash = 1469598103934665603L;
 
             for(int chunkZ = minChunkZ; chunkZ <= maxChunkZ; ++chunkZ) {
@@ -171,7 +196,9 @@ public final class DynamicMinimapRenderer {
                     long chunkHash = 1L;
 
                     try {
-                        MapImage image = caveImages != null ? caveImages.apply(chunkX, chunkZ)
+                        MapImage image = caveImages instanceof dev.scyphoz.dappermap.integration.BetterMapIntegration.CaveView view
+                                ? view.peek(chunkX, chunkZ)
+                                : caveImages != null ? caveImages.apply(chunkX, chunkZ)
                                 : worldMapManager.getImageIfInMemory(chunkX, chunkZ);
                         if (image != null) {
                             chunkHash = 31L * chunkHash + (long)image.width;
@@ -1014,11 +1041,57 @@ public final class DynamicMinimapRenderer {
         }
 
         try {
-            BufferedImage source = ImageIO.read(new ByteArrayInputStream(northUpPng));
-            if (source == null) {
-                return null;
-            }
+            return rotateTerrain(new RotationSource(ImageIO.read(new ByteArrayInputStream(northUpPng)), northUpPng), mapAngle);
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
 
+    /** One immutable decoded source per accepted terrain, never a cache of angles. */
+    public static final class RotationSource {
+        private final BufferedImage image;
+        private final byte[] png;
+
+        private RotationSource(BufferedImage image, byte[] png) {
+            this.image = image;
+            this.png = png;
+        }
+    }
+
+    /** Cap rotating uploads at 512 square pixels without changing logical map coverage. */
+    public static RotationSource prepareRotationSource(byte[] png) {
+        if (png == null || png.length == 0) return null;
+        try {
+            BufferedImage image = ImageIO.read(new ByteArrayInputStream(png));
+            if (image == null) return null;
+            int largest = Math.max(image.getWidth(), image.getHeight());
+            if (largest > 512) {
+                double scale = 512.0 / largest;
+                BufferedImage reduced = new BufferedImage(
+                        Math.max(1, (int)Math.round(image.getWidth() * scale)),
+                        Math.max(1, (int)Math.round(image.getHeight() * scale)), BufferedImage.TYPE_INT_ARGB);
+                Graphics2D graphics = reduced.createGraphics();
+                try {
+                    graphics.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR);
+                    graphics.drawImage(image, 0, 0, reduced.getWidth(), reduced.getHeight(), null);
+                } finally {
+                    graphics.dispose();
+                }
+                image = reduced;
+                png = toPng(image);
+            }
+            return new RotationSource(image, png);
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    public static byte[] rotateTerrain(RotationSource base, double mapAngle) {
+        if (base == null || base.image == null) return null;
+        int bucket = rotationBucket(mapAngle);
+        if (bucket == 0) return base.png;
+        try {
+            BufferedImage source = base.image;
             int width = source.getWidth();
             int height = source.getHeight();
             BufferedImage rotated = new BufferedImage(width, height, 2);
