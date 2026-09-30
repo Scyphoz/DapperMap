@@ -315,10 +315,10 @@ public final class DapperMapSettingsPage
                     ? DynamicMinimapRenderer.renderPositionPreview(draft, snapshot)
                     : DynamicMinimapRenderer.renderSettingsPreview(draft, snapshot);
             if (png == null) return;
-            world.execute(() -> {
+            try { world.execute(() -> {
                 if (this.closed || request != this.previewRequest) return;
                 String slug = this.playerRef.getUuid() == null ? "anon" : this.playerRef.getUuid().toString().replace("-", "");
-                String path = "UI/DapperMap/settings-preview-" + slug + "-" + (++this.previewRevision) + ".png";
+                String path = "UI/DapperMap/settings-preview-" + slug + "-" + ((++this.previewRevision) & 15) + ".png";
                 if (DynamicAssetPublisher.deliver(this.playerRef, path, png)) {
                     UICommandBuilder update = new UICommandBuilder();
                     update.set("#PreviewHudImage.AssetPath", path);
@@ -326,7 +326,9 @@ public final class DapperMapSettingsPage
                     update.set("#PreviewDisabled.Visible", false);
                     this.sendUpdate(update, new UIEventBuilder(), false);
                 }
-            });
+            }); } catch (RuntimeException failure) {
+                if (!DynamicMinimapSession.isStoppedWorldException(failure)) throw failure;
+            }
         });
     }
 

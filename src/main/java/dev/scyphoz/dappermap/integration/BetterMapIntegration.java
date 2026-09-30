@@ -99,9 +99,13 @@ public final class BetterMapIntegration {
      * not perform for DapperMap's dynamically-created HUD elements.
      */
     public static String resolveIconAsset(PlayerRef playerRef, String icon, java.awt.Color tint, String playerSlug) {
-        if (playerRef == null || playerSlug == null || playerSlug.isBlank()) {
-            return null;
-        }
+        DynamicAssetPublisher.PreparedAsset prepared = prepareIconAsset(icon, tint, playerSlug);
+        return DynamicAssetPublisher.deliver(playerRef, prepared) ? prepared.path() : null;
+    }
+
+    public static DynamicAssetPublisher.PreparedAsset prepareIconAsset(
+            String icon, java.awt.Color tint, String playerSlug) {
+        if (playerSlug == null || playerSlug.isBlank()) return null;
 
         String filename = sanitizeIcon(icon);
         if (filename == null) {
@@ -125,6 +129,7 @@ public final class BetterMapIntegration {
                 if (bytes.length == 0) {
                     return null;
                 }
+                if (ICON_BYTES.size() >= 256) ICON_BYTES.clear();
                 ICON_BYTES.put(filename, bytes);
             } catch (IOException | RuntimeException ignored) {
                 return null;
@@ -145,13 +150,14 @@ public final class BetterMapIntegration {
                 if (publishedBytes == null || publishedBytes.length == 0) {
                     return null;
                 }
+                if (TINTED_ICON_BYTES.size() >= 256) TINTED_ICON_BYTES.clear();
                 TINTED_ICON_BYTES.put(tintKey, publishedBytes);
             }
         }
 
         String path = "UI/DapperMap/bettermap-" + playerSlug + "-"
                 + stripExtension(filename) + "-" + String.format("%06X", rgb) + ".png";
-        return DynamicAssetPublisher.deliver(playerRef, path, publishedBytes) ? path : null;
+        return DynamicAssetPublisher.prepare(path, publishedBytes);
     }
 
     private static Method resolve() {
@@ -339,10 +345,29 @@ public final class BetterMapIntegration {
         caveLoader = current;
     }
 
+    public static void clearWorld(World world) {
+        if (world != null) IMAGES.keySet().removeIf(key -> key.world == world);
+    }
+
+    private static final java.util.concurrent.atomic.AtomicLong lastImagePrune = new java.util.concurrent.atomic.AtomicLong();
+
+    public static void pruneImages() {
+        long now = System.currentTimeMillis();
+        long previous = lastImagePrune.get();
+        if (now - previous >= 1000L && lastImagePrune.compareAndSet(previous, now)) {
+            IMAGES.entrySet().removeIf(entry -> !entry.getKey().world.isAlive()
+                    || now - entry.getValue().created > 5000L);
+        }
+    }
+
+    public static void clearImages() { IMAGES.clear(); }
+
     public record CaveView(World world, int y, int range, int pixels) implements BiFunction<Integer, Integer, MapImage> {
         @Override public MapImage apply(Integer x, Integer z) {
             Key key = new Key(world, y, range, pixels, x, z);
             long now = System.currentTimeMillis();
+            if (!world.isAlive()) return null;
+            pruneImages();
             Pending pending = IMAGES.get(key);
             if (pending == null || now - pending.created > 5000L) {
                 try {

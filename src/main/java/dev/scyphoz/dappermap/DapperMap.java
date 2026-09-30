@@ -20,6 +20,7 @@ import javax.annotation.Nonnull;
 public class DapperMap extends JavaPlugin {
     private static Config<MinimapConfig> config = null;
     private final MinimapSessionManager sessions;
+    private java.util.concurrent.ScheduledFuture<?> imageCleanup;
 
     public DapperMap(@Nonnull JavaPluginInit init) {
         super(init);
@@ -31,8 +32,14 @@ public class DapperMap extends JavaPlugin {
     protected void setup() {
         config.save();
         DapperMapPermissions.register(config.get().isGrantPlayerSettingsByDefault());
+        this.imageCleanup = com.hypixel.hytale.server.core.HytaleServer.SCHEDULED_EXECUTOR.scheduleAtFixedRate(
+                dev.scyphoz.dappermap.integration.BetterMapIntegration::pruneImages,
+                5L, 5L, java.util.concurrent.TimeUnit.SECONDS);
         this.sessions.setDataDirectory(this.getDataDirectory());
         this.getCommandRegistry().registerCommand(new MinimapCommand("dappermap", "Configure DapperMap", this.sessions));
+        this.getEventRegistry().registerGlobal(
+                com.hypixel.hytale.server.core.universe.world.events.RemoveWorldEvent.class,
+                event -> dev.scyphoz.dappermap.integration.BetterMapIntegration.clearWorld(event.getWorld()));
         PlayerReadyListener readyListener = new PlayerReadyListener(this.sessions);
         this.getEventRegistry().registerGlobal(PlayerReadyEvent.class, readyListener::onPlayerReady);
         this.getEventRegistry().registerGlobal(PlayerDisconnectEvent.class, (event) -> this.sessions.onDisconnect(event.getPlayerRef()));
@@ -40,7 +47,10 @@ public class DapperMap extends JavaPlugin {
 
     @Override
     protected void shutdown() {
+        if (this.imageCleanup != null) this.imageCleanup.cancel(false);
         this.sessions.stopAll();
+        dev.scyphoz.dappermap.integration.BetterMapIntegration.clearImages();
+        dev.scyphoz.dappermap.dynamic.DynamicMinimapSession.shutdownRendering();
     }
 
     public static Config<MinimapConfig> getConfig() {

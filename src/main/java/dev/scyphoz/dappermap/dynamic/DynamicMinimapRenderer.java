@@ -47,6 +47,9 @@ public final class DynamicMinimapRenderer {
     private static final Font CARDINAL_FONT = new Font("SansSerif", 1, 15);
     private static final Map<String, byte[]> MASK_CACHE = new ConcurrentHashMap();
     private static final Map<String, byte[]> FRAME_CACHE = new ConcurrentHashMap();
+    private record ArrowKey(long angle, int rgb) {}
+    private static final Map<ArrowKey, byte[]> ARROW_CACHE = new ConcurrentHashMap<>();
+    private static final byte[] BLANK_PNG = toPng(new BufferedImage(1, 1, BufferedImage.TYPE_INT_ARGB));
 
     private DynamicMinimapRenderer() {
     }
@@ -926,6 +929,9 @@ public final class DynamicMinimapRenderer {
     }
 
     public static byte[] renderSelfArrow(double angle, MinimapColours colours) {
+        ArrowKey key = new ArrowKey(Double.doubleToLongBits(angle), colours.rgb(MinimapColours.Key.SELF));
+        byte[] cached = ARROW_CACHE.get(key);
+        if (cached != null) return cached;
         BufferedImage image = new BufferedImage(40, 40, 2);
         Graphics2D graphics = image.createGraphics();
         graphics.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
@@ -949,11 +955,16 @@ public final class DynamicMinimapRenderer {
         graphics.draw(arrow);
         graphics.setTransform(previous);
         graphics.dispose();
-        return toPng(image);
+        byte[] png = toPng(image);
+        if (png != null) {
+            if (ARROW_CACHE.size() >= 512) ARROW_CACHE.clear();
+            ARROW_CACHE.put(key, png);
+        }
+        return png;
     }
 
     public static byte[] renderBlank() {
-        return toPng(new BufferedImage(1, 1, 2));
+        return BLANK_PNG;
     }
 
     /**
@@ -989,7 +1000,7 @@ public final class DynamicMinimapRenderer {
      * the viewport remains covered while the square buffer rotates.
      */
     public static byte[] rotateTerrain(byte[] northUpPng, double mapAngle) {
-        return rotateTerrain(northUpPng, mapAngle, new MinimapColours());
+        return rotateTerrain(northUpPng, mapAngle, MinimapColours.defaults());
     }
 
     public static byte[] rotateTerrain(byte[] northUpPng, double mapAngle, MinimapColours colours) {
@@ -1213,8 +1224,12 @@ public final class DynamicMinimapRenderer {
 
     private static byte[] toPng(BufferedImage image) {
         try {
-            ByteArrayOutputStream out = new ByteArrayOutputStream(Math.max(1024, image.getWidth() * image.getHeight()));
-            ImageIO.write(image, "PNG", out);
+            // Most map PNGs are much smaller than the raster. Avoid allocating width*height
+            // bytes up front and avoid ImageIO's default temporary-file output cache.
+            ByteArrayOutputStream out = new ByteArrayOutputStream(Math.max(1024, Math.min(32768, image.getWidth() * image.getHeight())));
+            try (var output = new javax.imageio.stream.MemoryCacheImageOutputStream(out)) {
+                if (!ImageIO.write(image, "PNG", output)) return null;
+            }
             return out.toByteArray();
         } catch (Exception var2) {
             return null;

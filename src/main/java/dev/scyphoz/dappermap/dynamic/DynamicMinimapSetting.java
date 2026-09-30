@@ -21,7 +21,7 @@ public final class DynamicMinimapSetting {
     public static final int INFO_ALIGN_LEFT = 0;
     public static final int INFO_ALIGN_CENTER = 1;
     public static final int INFO_ALIGN_RIGHT = 2;
-    public volatile MinimapColours colours = new MinimapColours();
+    public volatile MinimapColours colours = MinimapColours.defaults();
     public boolean enabled = true;
     public int rotationMode = 0;
     public int zoomBlocks = 96;
