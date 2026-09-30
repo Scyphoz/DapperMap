@@ -120,6 +120,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
     private String clockText = "Sun 06:00";
     private String biomeText = "Biome: unknown";
     private final String[] slotPath = new String[MARKER_SLOTS];
+    private final boolean[] slotFixed = new boolean[MARKER_SLOTS];
     private final boolean[] slotVisible = new boolean[MARKER_SLOTS];
     private final int[] slotLeft = new int[MARKER_SLOTS];
     private final int[] slotTop = new int[MARKER_SLOTS];
@@ -161,7 +162,8 @@ public final class DynamicMinimapHud extends CustomUIHud {
             if (!this.slotVisible[i] || this.slotPath[i] == null) continue;
             byte[] icon = DynamicAssetPublisher.markerBytes(this.uuid, this.slotPath[i]);
             if (icon != null) markers.add(new DynamicMinimapRenderer.PreviewMarker(
-                    icon, this.panLeft + this.slotLeft[i], this.panTop + this.slotTop[i],
+                    icon, (this.slotFixed[i] ? 0 : this.panLeft) + this.slotLeft[i],
+                    (this.slotFixed[i] ? 0 : this.panTop) + this.slotTop[i],
                     this.slotSize[i], this.slotPath[i].contains("/mk-") && this.slotSize[i] <= 9));
         }
         return new DynamicMinimapRenderer.LiveSnapshot(terrain.clone(), this.logicalUiSize,
@@ -405,10 +407,18 @@ public final class DynamicMinimapHud extends CustomUIHud {
                 int left = visible ? slot.left : 0;
                 int top = visible ? slot.top : 0;
                 int size = visible ? slot.size : 0;
-                String selector = "#WayfinderMmRoot #WayfinderMmClip #WayfinderMmMarkers #WayfinderMmMk" + i;
+                boolean fixed = visible ? slot.fixed : this.slotFixed[i];
+                boolean layerChanged = fixed != this.slotFixed[i];
+                if (layerChanged && this.slotVisible[i]) {
+                    builder.set(markerSelector(i, this.slotFixed[i]) + ".Visible", false);
+                    changed = true;
+                }
+                String selector = markerSelector(i, fixed);
                 if (appendMarkerDelta(builder, selector, this.settings, this.blankPath,
-                        this.slotPath[i], this.slotVisible[i], this.slotLeft[i], this.slotTop[i], this.slotSize[i],
+                        layerChanged ? null : this.slotPath[i], layerChanged ? false : this.slotVisible[i],
+                        this.slotLeft[i], this.slotTop[i], this.slotSize[i],
                         path, visible, left, top, size)) {
+                    this.slotFixed[i] = fixed;
                     this.slotPath[i] = path;
                     this.slotVisible[i] = visible;
                     this.slotLeft[i] = left;
@@ -423,6 +433,11 @@ public final class DynamicMinimapHud extends CustomUIHud {
             }
             this.activeMarkerSlots = occupied;
         }
+    }
+
+    static String markerSelector(int slot, boolean fixed) {
+        return fixed ? "#WayfinderMmRoot #WayfinderMmClip #WayfinderMmEdges #WayfinderMmEdge" + slot
+                : "#WayfinderMmRoot #WayfinderMmClip #WayfinderMmMarkers #WayfinderMmMk" + slot;
     }
 
     /** Moving an existing icon must not rebind its texture or visibility. */
@@ -782,21 +797,10 @@ public final class DynamicMinimapHud extends CustomUIHud {
                 .append(", Width: ").append(displayBuffer)
                 .append(", Height: ").append(displayBuffer).append("); ");
 
-        for (int i = 0; i < MARKER_SLOTS; ++i) {
-            boolean visible = this.slotVisible[i] && this.slotPath[i] != null;
-            out.append("AssetImage #WayfinderMmMk").append(i).append(" { Anchor: (Left: ")
-                    .append(visible ? this.displayCoordinate(this.slotLeft[i]) : 0)
-                    .append(", Top: ")
-                    .append(visible ? this.displayCoordinate(this.slotTop[i]) : 0)
-                    .append(", Width: ")
-                    .append(visible ? this.displaySize(this.slotSize[i]) : 0)
-                    .append(", Height: ")
-                    .append(visible ? this.displaySize(this.slotSize[i]) : 0)
-                    .append("); AssetPath: \"")
-                    .append(visible ? this.slotPath[i] : this.blankPath)
-                    .append("\"; Visible: ").append(visible).append("; } ");
-        }
-
+        appendMarkerLayer(out, false);
+        out.append("} ");
+        out.append("Group #WayfinderMmEdges { Anchor: (Full: 0); ");
+        appendMarkerLayer(out, true);
         out.append("} } ");
 
         out.append("AssetImage #WayfinderMmSelf { Anchor: (Left: ")
@@ -817,6 +821,19 @@ public final class DynamicMinimapHud extends CustomUIHud {
      * circle/square mask and nautical frame can be reused at every map size.
      * This avoids introducing a new mask resource during live map-size changes.
      */
+    private void appendMarkerLayer(StringBuilder out, boolean fixed) {
+        for (int i = 0; i < MARKER_SLOTS; ++i) {
+            boolean visible = this.slotFixed[i] == fixed && this.slotVisible[i] && this.slotPath[i] != null;
+            out.append("AssetImage #").append(fixed ? "WayfinderMmEdge" : "WayfinderMmMk").append(i)
+                    .append(" { Anchor: (Left: ").append(visible ? this.displayCoordinate(this.slotLeft[i]) : 0)
+                    .append(", Top: ").append(visible ? this.displayCoordinate(this.slotTop[i]) : 0)
+                    .append(", Width: ").append(visible ? this.displaySize(this.slotSize[i]) : 0)
+                    .append(", Height: ").append(visible ? this.displaySize(this.slotSize[i]) : 0)
+                    .append("); AssetPath: ").append('"').append(visible ? this.slotPath[i] : this.blankPath)
+                    .append('"').append("; Visible: ").append(visible).append("; } ");
+        }
+    }
+
     private void updateStaticAssetPaths() {
         String shape = this.settings.isCircle() ? "circle" : "square";
         // The clip mask depends only on shape and texture resolution.
@@ -1046,12 +1063,18 @@ public final class DynamicMinimapHud extends CustomUIHud {
         public final int left;
         public final int top;
         public final int size;
+        public final boolean fixed;
 
         public Slot(String path, int left, int top, int size) {
+            this(path, left, top, size, false);
+        }
+
+        public Slot(String path, int left, int top, int size, boolean fixed) {
             this.path = path;
             this.left = left;
             this.top = top;
             this.size = size;
+            this.fixed = fixed;
         }
     }
 }
