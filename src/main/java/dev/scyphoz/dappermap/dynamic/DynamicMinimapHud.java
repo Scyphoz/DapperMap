@@ -62,7 +62,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
     private long overlayGeneration;
     private long lastOverlaySubmitMs;
     private String displayedOverlayPath;
-    private final ImagePublicationCache overlayPublications = new ImagePublicationCache();
+    private final DynamicAssetPublisher.ImagePublicationCache overlayPublications = new DynamicAssetPublisher.ImagePublicationCache();
 
     /** Called on normal world ticks so throttled changes eventually publish the latest state. */
     public void flushPendingVisuals(int updateSpeed) {
@@ -405,24 +405,15 @@ public final class DynamicMinimapHud extends CustomUIHud {
                 int left = visible ? slot.left : 0;
                 int top = visible ? slot.top : 0;
                 int size = visible ? slot.size : 0;
-                if (!Objects.equals(this.slotPath[i], path)
-                        || this.slotVisible[i] != visible
-                        || this.slotLeft[i] != left
-                        || this.slotTop[i] != top
-                        || this.slotSize[i] != size) {
+                String selector = "#WayfinderMmRoot #WayfinderMmClip #WayfinderMmMarkers #WayfinderMmMk" + i;
+                if (appendMarkerDelta(builder, selector, this.settings, this.blankPath,
+                        this.slotPath[i], this.slotVisible[i], this.slotLeft[i], this.slotTop[i], this.slotSize[i],
+                        path, visible, left, top, size)) {
                     this.slotPath[i] = path;
                     this.slotVisible[i] = visible;
                     this.slotLeft[i] = left;
                     this.slotTop[i] = top;
                     this.slotSize[i] = size;
-                    String selector = "#WayfinderMmRoot #WayfinderMmClip #WayfinderMmMarkers #WayfinderMmMk" + i;
-                    builder.setObject(selector + ".Anchor", anchor(
-                            this.displayCoordinate(left),
-                            this.displayCoordinate(top),
-                            this.displaySize(size),
-                            this.displaySize(size)));
-                    builder.set(selector + ".AssetPath", visible ? path : this.blankPath);
-                    builder.set(selector + ".Visible", visible);
                     changed = true;
                 }
             }
@@ -432,6 +423,22 @@ public final class DynamicMinimapHud extends CustomUIHud {
             }
             this.activeMarkerSlots = occupied;
         }
+    }
+
+    /** Moving an existing icon must not rebind its texture or visibility. */
+    static boolean appendMarkerDelta(UICommandBuilder builder, String selector,
+                                     DynamicMinimapSetting settings, String blankPath,
+                                     String oldPath, boolean oldVisible, int oldLeft, int oldTop, int oldSize,
+                                     String path, boolean visible, int left, int top, int size) {
+        boolean imageChanged = !Objects.equals(oldPath, path);
+        boolean visibilityChanged = oldVisible != visible;
+        boolean anchorChanged = visible && (!oldVisible || oldLeft != left || oldTop != top || oldSize != size);
+        if (anchorChanged) builder.setObject(selector + ".Anchor", anchor(
+                settings.displayCoordinate(left), settings.displayCoordinate(top),
+                settings.displaySize(size), settings.displaySize(size)));
+        if (imageChanged) builder.set(selector + ".AssetPath", visible ? path : blankPath);
+        if (visibilityChanged) builder.set(selector + ".Visible", visible);
+        return anchorChanged || imageChanged || visibilityChanged;
     }
 
     public void setColours(MinimapColours colours) {

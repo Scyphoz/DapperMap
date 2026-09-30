@@ -22,6 +22,10 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.LinkedHashMap;
+import java.util.function.LongSupplier;
+import java.util.function.Predicate;
+import java.util.function.Supplier;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.BiFunction;
@@ -288,7 +292,8 @@ public final class BetterMapIntegration {
         return normalized;
     }
 
-    private static final ConcurrentHashMap<Key, Pending> IMAGES = new ConcurrentHashMap<>();
+    private static final BoundedImageRequests<Key, MapImage> IMAGES =
+            new BoundedImageRequests<>(512, 16, 8, 100L, 30000L, System::currentTimeMillis);
     private static volatile ClassLoader caveLoader;
     private static volatile Method managerInstance, enabled, state, underground, renderY, verticalRange, build, image;
 
@@ -346,7 +351,7 @@ public final class BetterMapIntegration {
     }
 
     public static void clearWorld(World world) {
-        if (world != null) IMAGES.keySet().removeIf(key -> key.world == world);
+        if (world != null) IMAGES.removeIf(key -> key.world == world);
     }
 
     private static final java.util.concurrent.atomic.AtomicLong lastImagePrune = new java.util.concurrent.atomic.AtomicLong();
@@ -355,41 +360,108 @@ public final class BetterMapIntegration {
         long now = System.currentTimeMillis();
         long previous = lastImagePrune.get();
         if (now - previous >= 1000L && lastImagePrune.compareAndSet(previous, now)) {
-            IMAGES.entrySet().removeIf(entry -> !entry.getKey().world.isAlive()
-                    || now - entry.getValue().created > 5000L);
+            IMAGES.prune(key -> !key.world.isAlive());
         }
     }
 
     public static void clearImages() { IMAGES.clear(); }
 
     public record CaveView(World world, int y, int range, int pixels) implements BiFunction<Integer, Integer, MapImage> {
+        /** Signature checks inspect ready images without starting chunk loads. */
+        public MapImage peek(Integer x, Integer z) {
+            return IMAGES.peek(new Key(world, y, range, pixels, x, z));
+        }
+
         @Override public MapImage apply(Integer x, Integer z) {
-            Key key = new Key(world, y, range, pixels, x, z);
-            long now = System.currentTimeMillis();
             if (!world.isAlive()) return null;
             pruneImages();
-            Pending pending = IMAGES.get(key);
-            if (pending == null || now - pending.created > 5000L) {
+            Key key = new Key(world, y, range, pixels, x, z);
+            return IMAGES.request(key, () -> {
                 try {
-                    if (IMAGES.size() > 512) IMAGES.clear();
-                    Object result = build.invoke(null, ChunkUtil.indexChunk(x, z), pixels, pixels, world, y, range);
-                    Pending fresh = new Pending((CompletableFuture<?>) result, now);
-                    IMAGES.put(key, fresh);
-                    pending = fresh;
-                } catch (ReflectiveOperationException | RuntimeException | LinkageError ignored) {
-                    return null;
+                    CompletableFuture<?> builder = (CompletableFuture<?>) build.invoke(
+                            null, ChunkUtil.indexChunk(x, z), pixels, pixels, world, y, range);
+                    // The builder retains WorldChunk and sections. Store only its
+                    // finished MapImage, releasing those references on completion.
+                    return builder.thenApply(result -> {
+                        if (result == null) return null;
+                        try { return (MapImage) image.invoke(result); }
+                        catch (ReflectiveOperationException e) { throw new java.util.concurrent.CompletionException(e); }
+                    });
+                } catch (ReflectiveOperationException | LinkageError e) {
+                    throw new java.util.concurrent.CompletionException(e);
                 }
-            }
-            try {
-                Object builder = pending.future.getNow(null);
-                return builder == null ? null : (MapImage) image.invoke(builder);
-            } catch (ReflectiveOperationException | RuntimeException | LinkageError ignored) {
-                IMAGES.remove(key, pending);
-                return null;
-            }
+            });
         }
     }
 
     private record Key(World world, int y, int range, int pixels, int x, int z) {}
-    private record Pending(CompletableFuture<?> future, long created) {}
+
+    /** Shared admission limits; completed values retain images, never rendering builders. */
+    public static final class BoundedImageRequests<K, V> {
+        private final LinkedHashMap<K, Entry<V>> entries = new LinkedHashMap<>();
+        private final LongSupplier clock;
+        private final int capacity, maxPending, startsPerWindow;
+        private final long ttlMs, windowMs;
+        private int pending, starts;
+        private long windowStart;
+
+        public BoundedImageRequests(int capacity, int maxPending, int startsPerWindow,
+                                    long windowMs, long ttlMs, LongSupplier clock) {
+            this.capacity=capacity; this.maxPending=maxPending; this.startsPerWindow=startsPerWindow;
+            this.windowMs=windowMs; this.ttlMs=ttlMs; this.clock=clock;
+        }
+
+        public synchronized V peek(K key) {
+            Entry<V> entry=entries.get(key);
+            if(entry==null || !entry.future.isDone()) return null;
+            if(entry.future.isCompletedExceptionally() || entry.future.isCancelled()
+                    || clock.getAsLong()-entry.completedAt >= ttlMs) {
+                entries.remove(key); return null;
+            }
+            return entry.future.getNow(null);
+        }
+
+        public synchronized V request(K key, Supplier<CompletableFuture<V>> start) {
+            V cached=peek(key);
+            if(cached!=null || entries.containsKey(key)) return cached;
+            long now=clock.getAsLong();
+            if(now-windowStart>=windowMs) { windowStart=now; starts=0; }
+            if(pending>=maxPending || starts>=startsPerWindow) return null;
+            if(entries.size()>=capacity) {
+                var iterator=entries.entrySet().iterator();
+                boolean removed=false;
+                while(iterator.hasNext()) {
+                    if(iterator.next().getValue().future.isDone()) {iterator.remove();removed=true;break;}
+                }
+                if(!removed) return null;
+            }
+            ++starts; ++pending;
+            CompletableFuture<V> future;
+            try { future=start.get(); if(future==null) throw new IllegalStateException("Missing image future"); }
+            catch(RuntimeException e) {--pending;return null;}
+            Entry<V> entry=new Entry<>(future);
+            entries.put(key,entry);
+            future.whenComplete((value,error)-> {
+                synchronized(this) {
+                    --pending;
+                    entry.completedAt=clock.getAsLong();
+                    if(error!=null || value==null) entries.remove(key,entry);
+                }
+            });
+            return peek(key);
+        }
+
+        public synchronized void prune(Predicate<K> dead) {
+            long now=clock.getAsLong();
+            entries.entrySet().removeIf(e->dead.test(e.getKey())
+                    || (e.getValue().future.isDone() && now-e.getValue().completedAt>=ttlMs));
+        }
+        public synchronized void removeIf(Predicate<K> predicate) { entries.keySet().removeIf(predicate); }
+        public synchronized void clear() { entries.clear(); }
+        private static final class Entry<V> {
+            final CompletableFuture<V> future;
+            long completedAt;
+            Entry(CompletableFuture<V> future) {this.future=future;}
+        }
+    }
 }

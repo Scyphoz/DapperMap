@@ -59,6 +59,20 @@ public final class DynamicMinimapMarker {
         return new DynamicMinimapMarker(x, z, color, size, Style.NATIVE_WORLDMAP, assetPath, true);
     }
 
+    /** Marker scans create fresh objects even when their map data is unchanged. */
+    @Override public boolean equals(Object other) {
+        if (this == other) return true;
+        if (!(other instanceof DynamicMinimapMarker marker)) return false;
+        return Double.compare(x, marker.x) == 0 && Double.compare(z, marker.z) == 0
+                && size == marker.size && style == marker.style && clampToEdge == marker.clampToEdge
+                && java.util.Objects.equals(color, marker.color)
+                && java.util.Objects.equals(assetPath, marker.assetPath);
+    }
+
+    @Override public int hashCode() {
+        return java.util.Objects.hash(x, z, color, size, style, assetPath, clampToEdge);
+    }
+
     public enum Style {
         DOT,
         DEATH,

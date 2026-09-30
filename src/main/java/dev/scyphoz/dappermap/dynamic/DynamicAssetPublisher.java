@@ -9,6 +9,7 @@ import com.hypixel.hytale.protocol.packets.setup.RequestCommonAssetsRebuild;
 import com.hypixel.hytale.server.core.io.PacketHandler;
 import com.hypixel.hytale.server.core.universe.PlayerRef;
 import java.util.Map;
+import java.util.LinkedHashMap;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
@@ -153,5 +154,37 @@ public final class DynamicAssetPublisher {
 
             return parts;
         }
+    }
+
+    /** World-thread bookkeeping for the bounded image paths already sent to this client. */
+    static final class ImagePublicationCache {
+        private String activePath;
+        private static final java.util.regex.Pattern SLOT = java.util.regex.Pattern.compile("(.*?)([0-9]+)(\\.png)$");
+        private final Map<String, String> hashesByPath = new LinkedHashMap<>();
+
+        String pathFor(String hash) {
+            for (var entry : hashesByPath.entrySet())
+                if (entry.getValue().equals(hash)) {
+                    activePath = entry.getKey();
+                    return activePath;
+                }
+            return null;
+        }
+
+        void remember(String path, String hash) {
+            activePath = path;
+            hashesByPath.remove(path); // Replacing a slot invalidates its previous content.
+            hashesByPath.put(path, hash);
+            if (hashesByPath.size() > 16) hashesByPath.remove(hashesByPath.keySet().iterator().next());
+        }
+
+        String nonActivePath(String candidate) {
+            if (!candidate.equals(activePath)) return candidate;
+            var match = SLOT.matcher(candidate);
+            if (!match.matches()) throw new IllegalArgumentException("Image path lacks a rotating slot: " + candidate);
+            return match.group(1) + ((Integer.parseInt(match.group(2)) + 1) & 15) + match.group(3);
+        }
+
+        void clear() { hashesByPath.clear(); activePath = null; }
     }
 }
