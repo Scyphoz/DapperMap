@@ -170,6 +170,7 @@ public final class DynamicMinimapSession {
     private long lastMarkerMs = 0L;
     private MinimapColours renderedColours;
     private List<DynamicMinimapMarker> cachedMarkers = new ArrayList<>();
+    private final EdgeTracker edgeTracker = new EdgeTracker();
     private final MarkerOrder markerOrder = new MarkerOrder();
     private record MarkerAssetKey(Style style, String source, int rgb) {}
     private final java.util.concurrent.ConcurrentMap<MarkerAssetKey, String> markerAssets = new java.util.concurrent.ConcurrentHashMap<>();
@@ -303,6 +304,7 @@ public final class DynamicMinimapSession {
         this.lastObservedWorld = null;
         this.lastCaveView = null;
         this.markerOrder.clear();
+        this.edgeTracker.clear();
         this.worldPending.clear();
         this.invalidateMarkerAssets();
         DynamicAssetPublisher.clear(this.uuid);
@@ -369,6 +371,7 @@ public final class DynamicMinimapSession {
             lastObservedX = x;
             lastObservedZ = z;
             if (teleported) {
+                this.edgeTracker.clear();
                 // A teleport can reset the client's dynamic assets without ending
                 // the DapperMap session. Re-send integration icons and force HUD
                 // slot paths to be rebound rather than relying on cached values.
@@ -1188,13 +1191,22 @@ public final class DynamicMinimapSession {
             int size = Math.max(8, marker.size);
 
             if (marker.clampToEdge) {
-                double[] clamped = this.clampMarkerToVisibleMap(
-                        markerX + panLeft,
-                        markerZ + panTop,
-                        size
-                );
-                markerX = clamped[0] - panLeft;
-                markerZ = clamped[1] - panTop;
+                // Edge bearings belong to the viewport, not the stitched map's
+                // integer pan offset or its changing buffer center.
+                double playerX = Double.isNaN(this.lastObservedX) ? this.bufferCenterX : this.lastObservedX;
+                double playerZ = Double.isNaN(this.lastObservedZ) ? this.bufferCenterZ : this.lastObservedZ;
+                double relativeX = (marker.x - playerX) * pixelsPerBlock;
+                double relativeZ = (marker.z - playerZ) * pixelsPerBlock;
+                double center = this.settings.sizePixels / 2.0;
+                double visibleX = center + relativeX * cos - relativeZ * sin;
+                double visibleZ = center + relativeX * sin + relativeZ * cos;
+                double[] clamped = this.clampMarkerToVisibleMap(visibleX, visibleZ, size);
+                boolean outside = Math.abs(clamped[0] - visibleX) > 0.001
+                        || Math.abs(clamped[1] - visibleZ) > 0.001;
+                double[] stable = this.edgeTracker.update(marker, clamped[0], clamped[1], outside,
+                        this.settings.sizePixels, this.settings.shape, size, System.currentTimeMillis());
+                markerX = stable[0];
+                markerZ = stable[1];
             } else if (markerX < 0.0D
                     || markerX > (double)bufferPixels
                     || markerZ < 0.0D
@@ -1216,7 +1228,7 @@ public final class DynamicMinimapSession {
                             path,
                             left,
                             top,
-                            size
+                            size, marker.clampToEdge
                     );
         }
 
@@ -1229,43 +1241,7 @@ public final class DynamicMinimapSession {
      * ordinary position markers once the player gets close enough.
      */
     private double[] clampMarkerToVisibleMap(double x, double z, int markerSize) {
-        double mapSize = this.settings.sizePixels;
-        double center = mapSize / 2.0D;
-        double inset = Math.max(3.0D, markerSize / 2.0D + 2.0D);
-        double dx = x - center;
-        double dz = z - center;
-
-        if (this.settings.isCircle()) {
-            double radius = Math.max(1.0D, center - inset);
-            double distance = Math.hypot(dx, dz);
-            if (distance <= radius || distance < 0.0001D) {
-                return new double[]{x, z};
-            }
-
-            double scale = radius / distance;
-            return new double[]{
-                    center + dx * scale,
-                    center + dz * scale
-            };
-        }
-
-        double halfExtent = Math.max(1.0D, center - inset);
-        if (Math.abs(dx) <= halfExtent && Math.abs(dz) <= halfExtent) {
-            return new double[]{x, z};
-        }
-
-        double scaleX = Math.abs(dx) < 0.0001D
-                ? Double.POSITIVE_INFINITY
-                : halfExtent / Math.abs(dx);
-        double scaleZ = Math.abs(dz) < 0.0001D
-                ? Double.POSITIVE_INFINITY
-                : halfExtent / Math.abs(dz);
-        double scale = Math.min(scaleX, scaleZ);
-
-        return new double[]{
-                center + dx * scale,
-                center + dz * scale
-        };
+        return EdgeTracker.clamp(this.settings, x, z, markerSize);
     }
 
     /**
@@ -1435,6 +1411,69 @@ public final class DynamicMinimapSession {
         } else {
             return "Unknown";
         }
+    }
+
+    /** Small edge movements do not need another client anchor update. */
+    static final class EdgeTracker {
+        private final java.util.Map<DynamicMinimapMarker, Position> positions = new java.util.HashMap<>();
+        double[] update(DynamicMinimapMarker key, double x, double z, boolean outside,
+                        int mapSize, int shape, int iconSize, long now) {
+            if (!outside) {
+                positions.remove(key);
+                return new double[]{x, z};
+            }
+            Position previous = positions.get(key);
+            if (previous != null && previous.mapSize == mapSize && previous.shape == shape
+                    && previous.iconSize == iconSize) {
+                if (now - previous.time < 200L || Math.hypot(x - previous.x, z - previous.z) < 2.0)
+                    return new double[]{previous.x, previous.z};
+            }
+            if (positions.size() >= 256 && previous == null) positions.clear();
+            positions.put(key, new Position(x, z, mapSize, shape, iconSize, now));
+            return new double[]{x, z};
+        }
+        static double[] clamp(DynamicMinimapSetting settings, double x, double z, int markerSize) {
+            double mapSize = settings.sizePixels;
+            double center = mapSize / 2.0D;
+            double inset = Math.max(3.0D, markerSize / 2.0D + 2.0D);
+            double dx = x - center;
+            double dz = z - center;
+
+            if (settings.isCircle()) {
+                double radius = Math.max(1.0D, center - inset);
+                double distance = Math.hypot(dx, dz);
+                if (distance <= radius || distance < 0.0001D) {
+                    return new double[]{x, z};
+                }
+
+                double scale = radius / distance;
+                return new double[]{
+                        center + dx * scale,
+                        center + dz * scale
+                };
+            }
+
+            double halfExtent = Math.max(1.0D, center - inset);
+            if (Math.abs(dx) <= halfExtent && Math.abs(dz) <= halfExtent) {
+                return new double[]{x, z};
+            }
+
+            double scaleX = Math.abs(dx) < 0.0001D
+                    ? Double.POSITIVE_INFINITY
+                    : halfExtent / Math.abs(dx);
+            double scaleZ = Math.abs(dz) < 0.0001D
+                    ? Double.POSITIVE_INFINITY
+                    : halfExtent / Math.abs(dz);
+            double scale = Math.min(scaleX, scaleZ);
+
+            return new double[]{
+                    center + dx * scale,
+                    center + dz * scale
+            };
+        }
+
+        void clear() { positions.clear(); }
+        private record Position(double x, double z, int mapSize, int shape, int iconSize, long time) {}
     }
 
     /** Static integration ordering is independent of frequently moving entity snapshots. */
