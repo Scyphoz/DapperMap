@@ -70,7 +70,13 @@ public final class DynamicMinimapMarker {
     }
 
     @Override public int hashCode() {
-        return java.util.Objects.hash(x, z, color, size, style, assetPath, clampToEdge);
+        int hash = 31 + Double.hashCode(x);
+        hash = 31 * hash + Double.hashCode(z);
+        hash = 31 * hash + java.util.Objects.hashCode(color);
+        hash = 31 * hash + size;
+        hash = 31 * hash + java.util.Objects.hashCode(style);
+        hash = 31 * hash + java.util.Objects.hashCode(assetPath);
+        return 31 * hash + Boolean.hashCode(clampToEdge);
     }
 
     public enum Style {

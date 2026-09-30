@@ -72,6 +72,8 @@ public final class DapperMapSettingsPage
     private int previewRevision = 0;
     private volatile int previewRequest = 0;
     private volatile boolean closed = false;
+    private final java.util.concurrent.atomic.AtomicBoolean previewQueued = new java.util.concurrent.atomic.AtomicBoolean();
+    private String lastPreviewHash, lastPreviewPath;
     private World previewWorld;
     private DynamicMinimapRenderer.LiveSnapshot previewSnapshot;
     /** Unsaved working copy used by the settings UI and live preview. */
@@ -305,31 +307,55 @@ public final class DapperMapSettingsPage
             ui.set("#PreviewDisabled.Visible", true);
         }
         World world = this.previewWorld;
-        if (world == null) return;
+        if (world == null || this.closed || !this.previewQueued.compareAndSet(false, true)) return;
         DynamicMinimapSetting draft = settings.copy();
         DynamicMinimapRenderer.LiveSnapshot snapshot = this.previewSnapshot;
         boolean position = this.activeTab == Tab.POSITION;
-        DynamicMinimapSession.renderAsync(() -> {
-            if (this.closed || request != this.previewRequest) return;
-            byte[] png = position
-                    ? DynamicMinimapRenderer.renderPositionPreview(draft, snapshot)
-                    : DynamicMinimapRenderer.renderSettingsPreview(draft, snapshot);
-            if (png == null) return;
-            try { world.execute(() -> {
-                if (this.closed || request != this.previewRequest) return;
-                String slug = this.playerRef.getUuid() == null ? "anon" : this.playerRef.getUuid().toString().replace("-", "");
-                String path = "UI/DapperMap/settings-preview-" + slug + "-" + ((++this.previewRevision) & 15) + ".png";
-                if (DynamicAssetPublisher.deliver(this.playerRef, path, png)) {
-                    UICommandBuilder update = new UICommandBuilder();
-                    update.set("#PreviewHudImage.AssetPath", path);
-                    update.set("#PreviewHudImage.Visible", true);
-                    update.set("#PreviewDisabled.Visible", false);
-                    this.sendUpdate(update, new UIEventBuilder(), false);
-                }
-            }); } catch (RuntimeException failure) {
+        String slug = this.playerRef.getUuid() == null ? "anon" : this.playerRef.getUuid().toString().replace("-", "");
+        String path = "UI/DapperMap/settings-preview-" + slug + "-" + ((++this.previewRevision) & 15) + ".png";
+        if (!DynamicMinimapSession.renderAsync(() -> {
+            if (this.closed) { this.previewQueued.set(false); return; }
+            try {
+                byte[] png = position
+                        ? DynamicMinimapRenderer.renderPositionPreview(draft, snapshot)
+                        : DynamicMinimapRenderer.renderSettingsPreview(draft, snapshot);
+                var prepared = DynamicAssetPublisher.prepare(path, png);
+                world.execute(() -> {
+                    this.previewQueued.set(false);
+                    if (this.closed || this.previewWorld != world) return;
+                    if (request != this.previewRequest) {
+                        // One admitted render per page; rapid edits replace the pending
+                        // request, and the newest draft is rendered after this one finishes.
+                        this.updatePreview(new UICommandBuilder(), this.draftSettings);
+                        return;
+                    }
+                    if (prepared == null) return;
+                    boolean reused = prepared.hash().equals(this.lastPreviewHash);
+                    if (reused || DynamicAssetPublisher.deliver(this.playerRef, prepared)) {
+                        if (!reused) {
+                            this.lastPreviewHash = prepared.hash();
+                            this.lastPreviewPath = prepared.path();
+                        }
+                        UICommandBuilder update = new UICommandBuilder();
+                        update.set("#PreviewHudImage.AssetPath", this.lastPreviewPath);
+                        update.set("#PreviewHudImage.Visible", true);
+                        update.set("#PreviewDisabled.Visible", false);
+                        this.sendUpdate(update, new UIEventBuilder(), false);
+                    }
+                });
+            } catch (RuntimeException failure) {
+                this.previewQueued.set(false);
                 if (!DynamicMinimapSession.isStoppedWorldException(failure)) throw failure;
             }
-        });
+        })) this.previewQueued.set(false);
+    }
+
+    @Override public void onDismiss(Ref<EntityStore> ref, Store<EntityStore> store) {
+        this.closed = true;
+        ++this.previewRequest;
+        this.previewSnapshot = null;
+        this.previewWorld = null;
+        super.onDismiss(ref, store);
     }
 
     private void updateNavigationLabels(UICommandBuilder builder) {
@@ -410,7 +436,7 @@ public final class DapperMapSettingsPage
             case "texture_resolution" -> "resolution";
             case "info_panel" -> "info";
             case "panel_position", "panel_alignment" -> "panel";
-            case "players", "entities", "death" -> "markers";
+            case "players", "entities", "death", "creature_limit" -> "markers";
             case "vrange" -> "height-range";
             case "clock_format" -> "clock";
             case "worldmap", "bettermap", "bettermap_markers", "bettermap_caves" -> "integration";
@@ -459,6 +485,7 @@ public final class DapperMapSettingsPage
         if (this.hasSettingPermission("markers")) {
             target.showOtherPlayers = source.showOtherPlayers;
             target.showEntities = source.showEntities;
+            target.creatureMarkerLimit = source.creatureMarkerLimit;
             target.showDeathMarker = source.showDeathMarker;
         }
         if (this.hasSettingPermission("height")) target.limitMobHeight = source.limitMobHeight;
@@ -783,9 +810,13 @@ public final class DapperMapSettingsPage
                 return;
             }
         } else if ("position_slider_x".equals(action)) {
-            settings.hudPositionX = clampPercent(event.sliderValue);
+            int value = clampPercent(event.sliderValue);
+            if (settings.hudPositionX == value) return;
+            settings.hudPositionX = value;
         } else if ("position_slider_y".equals(action)) {
-            settings.hudPositionY = clampPercent(event.sliderValue);
+            int value = clampPercent(event.sliderValue);
+            if (settings.hudPositionY == value) return;
+            settings.hudPositionY = value;
         } else if ("colour_target".equals(action)) {
             Key key = Key.find(event.target);
             if (key == null || !VISIBLE_COLOUR_KEYS.contains(key)) return;
@@ -799,6 +830,7 @@ public final class DapperMapSettingsPage
             int rgb = (Byte.toUnsignedInt(event.colour.red) << 16)
                     | (Byte.toUnsignedInt(event.colour.green) << 8)
                     | Byte.toUnsignedInt(event.colour.blue);
+            if (settings.colours.rgb(this.selectedColour) == rgb) return;
             settings.colours = settings.colours.with(this.selectedColour, rgb);
         } else if ("colour_reset".equals(action)) {
             settings.colours = settings.colours.reset(this.selectedColour);
@@ -811,6 +843,9 @@ public final class DapperMapSettingsPage
             );
 
         } else if (action.startsWith("dropdown_")) {
+            if (event.value != null && dropdownEntries(action.substring("dropdown_".length()), settings).stream()
+                    .anyMatch(entry -> entry.value().equals(event.value))
+                    && event.value.equals(dropdownValue(action.substring("dropdown_".length()), settings))) return;
             applyDropdown(
                     settings,
                     action.substring("dropdown_".length()),
@@ -827,11 +862,15 @@ public final class DapperMapSettingsPage
         UICommandBuilder builder = new UICommandBuilder();
         UIEventBuilder events = new UIEventBuilder();
 
-        this.renderList(builder, events, settings);
-        this.refreshColourEditor(builder, settings, !"colour_value".equals(action));
-        this.updatePositionEditor(builder, settings, !action.startsWith("position_slider_"));
+        if (action.startsWith("colour_")) {
+            this.refreshColourEditor(builder, settings, !"colour_value".equals(action));
+        } else if (action.startsWith("position_")) {
+            this.updatePositionEditor(builder, settings, !action.startsWith("position_slider_"));
+        } else {
+            this.renderList(builder, events, settings);
+            this.updateEditorAvailability(builder, settings);
+        }
         this.updatePreview(builder, settings);
-        this.updateEditorAvailability(builder, settings);
 
         this.sendUpdate(builder, events, false);
     }
@@ -923,6 +962,7 @@ public final class DapperMapSettingsPage
             case "panel_alignment" -> "Align the information panel text left, centre or right.";
             case "players" -> "Show nearby players on your minimap.";
             case "entities" -> "Show nearby creatures on your minimap.";
+            case "creature_limit" -> "Show up to 16, 32 or 64 nearby creatures, prioritising the nearest.";
             case "death" -> "Mark the location of your last death.";
             case "worldmap" -> "Show Hytale personal, shared, POI, spawn and respawn world-map markers.";
             case "height" -> "Hide creatures far above or below you.";
@@ -968,7 +1008,7 @@ public final class DapperMapSettingsPage
                 || (id.startsWith("bettermap_") && (!settings.betterMapEnabled
                 || !BetterMapIntegration.isAvailable()))
                 || ("bettermap_caves".equals(id) && !this.betterMapCaveAvailable)
-                || (("height".equals(id) || "vrange".equals(id)) && !settings.showEntities)
+                || (("height".equals(id) || "vrange".equals(id) || "creature_limit".equals(id)) && !settings.showEntities)
                 || ("vrange".equals(id) && !settings.limitMobHeight)
                 || ("clock_format".equals(id) && !settings.showClock);
     }
@@ -1001,6 +1041,7 @@ public final class DapperMapSettingsPage
             case "shape" -> settings.shape = Integer.parseInt(value);
             case "rotation" -> settings.rotationMode = Integer.parseInt(value);
             case "vrange" -> settings.mobVerticalRange = Integer.parseInt(value);
+            case "creature_limit" -> settings.creatureMarkerLimit = Integer.parseInt(value);
             case "players" -> settings.showOtherPlayers = Boolean.parseBoolean(value);
             case "entities" -> settings.showEntities = Boolean.parseBoolean(value);
             case "death" -> settings.showDeathMarker = Boolean.parseBoolean(value);
@@ -1023,6 +1064,9 @@ public final class DapperMapSettingsPage
         switch (id) {
             case "zoom" -> addNumericEntries(entries, settings.zoomBlocks, 16, 256, 16, " blocks");
             case "size" -> addNumericEntries(entries, settings.sizePixels, 120, 360, 20, " px");
+            case "creature_limit" -> {
+                for (int limit : new int[]{16, 32, 64}) entries.add(entry(Integer.toString(limit), Integer.toString(limit)));
+            }
             case "vrange" -> {
                 TreeSet<Integer> values = new TreeSet<>(List.of(4));
                 for (int value = 8; value <= 256; value += 8) values.add(value);
@@ -1098,6 +1142,7 @@ public final class DapperMapSettingsPage
             case "shape" -> Integer.toString(settings.shape);
             case "rotation" -> Integer.toString(settings.rotationMode);
             case "vrange" -> Integer.toString(settings.mobVerticalRange);
+            case "creature_limit" -> Integer.toString(settings.creatureMarkerLimit);
             case "players" -> Boolean.toString(settings.showOtherPlayers);
             case "entities" -> Boolean.toString(settings.showEntities);
             case "death" -> Boolean.toString(settings.showDeathMarker);
@@ -1169,7 +1214,7 @@ public final class DapperMapSettingsPage
 
     private static Tab tabFor(String id) {
         return switch (id) {
-            case "players", "death", "entities", "height", "vrange" -> Tab.MARKERS;
+            case "players", "death", "entities", "height", "vrange", "creature_limit" -> Tab.MARKERS;
             case "section_4", "section_5", "worldmap", "bettermap", "bettermap_markers",
                  "bettermap_caves" -> Tab.INTEGRATIONS;
             case "info_panel", "panel_position", "panel_alignment", "section_3",
@@ -1195,6 +1240,7 @@ public final class DapperMapSettingsPage
                 new Row("players", "Player Markers", Kind.DROPDOWN),
                 new Row("death", "Death Marker", Kind.DROPDOWN),
                 new Row("entities", "Creature Markers", Kind.DROPDOWN),
+                new Row("creature_limit", "Creature Marker Limit", Kind.DROPDOWN),
                 new Row("height", "Creature Height Detection", Kind.DROPDOWN),
                 new Row("vrange", "Creature Height Range", Kind.DROPDOWN),
                 new Row("section_3", "INFORMATION", Kind.HEADER),

@@ -89,12 +89,6 @@ public final class DynamicAssetPublisher {
                 DynamicMinimapAsset asset = prepared.asset;
 
                 String hash = asset.getHash();
-                if (uuid != null && path.startsWith("UI/DapperMap/")
-                        && (path.contains("/mk-") || path.contains("/bettermap-")
-                        || path.contains("/worldmap-") || path.contains("/death-"))) {
-                    Map<String, byte[]> markers = MARKER_BYTES.computeIfAbsent(uuid, ignored -> new ConcurrentHashMap<>());
-                    if (markers.size() < DynamicMinimapHud.MARKER_SLOTS || markers.containsKey(path)) markers.put(path, data.clone());
-                }
                 if (uuid != null) {
                     Map<String, String> delivered = DELIVERED.get(uuid);
                     if (delivered != null && hash.equals(delivered.get(path))) {
@@ -115,6 +109,14 @@ public final class DynamicAssetPublisher {
 
                     for(Packet packet : packets) {
                         packetHandler.writeNoCache((ToClientPacket)packet);
+                    }
+
+                    if (uuid != null && path.startsWith("UI/DapperMap/")
+                            && (path.contains("/mk-") || path.contains("/bettermap-")
+                            || path.contains("/worldmap-") || path.contains("/death-"))) {
+                        Map<String, byte[]> markers = MARKER_BYTES.computeIfAbsent(uuid, ignored -> new ConcurrentHashMap<>());
+                        if (markers.size() < DynamicMinimapHud.MARKER_SLOTS || markers.containsKey(path))
+                            markers.put(path, data.clone());
                     }
 
                     if (rebuildCommonAssets) {

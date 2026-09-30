@@ -71,6 +71,7 @@ public final class DynamicMinimapSettingsStore {
                                 + "  \"shape\": %d,\n"
                                 + "  \"showOtherPlayers\": %s,\n"
                                 + "  \"showEntities\": %s,\n"
+                                + "  \"creatureMarkerLimit\": %d,\n"
                                 + "  \"showDeathMarker\": %s,\n"
                                 + "  \"showWorldMapMarkers\": %s,\n"
                                 + "  \"limitMobHeight\": %s,\n"
@@ -100,6 +101,7 @@ public final class DynamicMinimapSettingsStore {
                                 settings.shape,
                                 settings.showOtherPlayers,
                                 settings.showEntities,
+                                settings.creatureMarkerLimit,
                                 settings.showDeathMarker,
                                 settings.showWorldMapMarkers,
                                 settings.limitMobHeight,
@@ -153,6 +155,7 @@ public final class DynamicMinimapSettingsStore {
                     Boolean showDeathMarker = extractBool(json, "showDeathMarker");
                     Boolean showWorldMapMarkers = extractBool(json, "showWorldMapMarkers");
                     Boolean limitMobHeight = extractBool(json, "limitMobHeight");
+                    Integer creatureMarkerLimit = extractInt(json, "creatureMarkerLimit");
                     Integer mobVerticalRange = extractInt(json, "mobVerticalRange");
                     Integer position = extractInt(json, "position");
                     Integer hudPositionX = extractInt(json, "hudPositionX");
@@ -217,6 +220,7 @@ public final class DynamicMinimapSettingsStore {
                         settings.limitMobHeight = limitMobHeight;
                     }
 
+                    if (creatureMarkerLimit != null) settings.creatureMarkerLimit = creatureMarkerLimit;
                     if (mobVerticalRange != null) {
                         settings.mobVerticalRange = mobVerticalRange;
                     }

@@ -18,6 +18,13 @@ import java.util.function.Consumer;
 public final class DynamicMinimapHud extends CustomUIHud {
     public static final String KEY = "DapperMapDynamicMinimapHud";
     public static final int MARKER_SLOTS = 128;
+    private static final String[][] MARKER_SELECTORS = new String[2][MARKER_SLOTS];
+    static {
+        for (int i = 0; i < MARKER_SLOTS; i++) {
+            MARKER_SELECTORS[0][i] = "#WayfinderMmRoot #WayfinderMmClip #WayfinderMmMarkers #WayfinderMmMk" + i;
+            MARKER_SELECTORS[1][i] = "#WayfinderMmRoot #WayfinderMmClip #WayfinderMmEdges #WayfinderMmEdge" + i;
+        }
+    }
 
     // All constants below are logical HUD units. They are converted to display units
     // only when markup/Anchor values are produced.
@@ -35,17 +42,17 @@ public final class DynamicMinimapHud extends CustomUIHud {
     private record InitialOverlayKey(int size, int shape, int resolution, boolean panel, int position,
                                      int alignment, boolean coords, boolean compass, boolean clock,
                                      boolean biome, MinimapColours colours) {}
-    private static final java.util.concurrent.ConcurrentMap<InitialOverlayKey, byte[]> INITIAL_OVERLAYS
+    private static final java.util.concurrent.ConcurrentMap<InitialOverlayKey, DynamicMinimapRenderer.HudOverlayParts> INITIAL_OVERLAYS
             = new java.util.concurrent.ConcurrentHashMap<>();
 
-    private static byte[] initialOverlay(DynamicMinimapSetting settings) {
+    private static DynamicMinimapRenderer.HudOverlayParts initialOverlay(DynamicMinimapSetting settings) {
         InitialOverlayKey key = new InitialOverlayKey(settings.sizePixels, settings.shape,
                 settings.textureResolution, settings.infoPanelEnabled, settings.infoPanelPosition,
                 settings.infoPanelTextAlignment, settings.showCoordinates, settings.showCompass,
                 settings.showClock, settings.showBiome, settings.colours);
-        byte[] ready = INITIAL_OVERLAYS.get(key);
+        var ready = INITIAL_OVERLAYS.get(key);
         if (ready != null) return ready;
-        byte[] png = DynamicMinimapRenderer.renderHudOverlay(settings, settings.sizePixels,
+        var png = DynamicMinimapRenderer.renderHudOverlayParts(settings, settings.sizePixels,
                 READOUT_WIDTH, readoutHeight(settings), readoutGap(settings), 0.0D,
                 "X: ?  Y: ?  Z: ?", "N 0 deg", "Sun 06:00", "Biome: unknown");
         if (png != null) {
@@ -57,24 +64,77 @@ public final class DynamicMinimapHud extends CustomUIHud {
 
     private final PlayerRef ownerRef;
     private final Consumer<Runnable> worldExecute;
-    private boolean overlayRenderQueued;
-    private boolean overlayDirty;
+    private volatile boolean overlayRenderQueued;
+    private volatile boolean overlayDirty;
     private long overlayGeneration;
     private long lastOverlaySubmitMs;
     private String displayedOverlayPath;
+    private String displayedFramePath;
+    private String framePath;
+    private final String[] rowPaths = new String[4], displayedRowPaths = new String[4];
+    private DynamicMinimapRenderer.OverlayRow[] overlayRows;
+    private final DynamicAssetPublisher.ImagePublicationCache[] rowPublications = {
+            new DynamicAssetPublisher.ImagePublicationCache(), new DynamicAssetPublisher.ImagePublicationCache(),
+            new DynamicAssetPublisher.ImagePublicationCache(), new DynamicAssetPublisher.ImagePublicationCache()};
+    private final DynamicAssetPublisher.ImagePublicationCache framePublications = new DynamicAssetPublisher.ImagePublicationCache();
     private final DynamicAssetPublisher.ImagePublicationCache overlayPublications = new DynamicAssetPublisher.ImagePublicationCache();
+
+    private final HudCommandBatch pendingCommands = new HudCommandBatch();
+
+    /** Coalesce normal property updates, while tree changes keep their exact ordering. */
+    @Override public void update(boolean clear, UICommandBuilder builder) {
+        var commands = builder.getCommands();
+        boolean structural = clear;
+        for (var command : commands)
+            structural |= command.type != com.hypixel.hytale.protocol.packets.interface_.CustomUICommandType.Set;
+        if (structural) {
+            if (clear) pendingCommands.clear(); else flushPendingCommands();
+            super.update(clear, builder);
+        } else {
+            pendingCommands.add(commands);
+            if (pendingCommands.size() >= 2048) flushPendingCommands();
+        }
+    }
+
+    void flushPendingCommands() {
+        if (pendingCommands.size() == 0) return;
+        var commands = pendingCommands.drain();
+        if (commands.length > 0) this.getPlayerRef().getPacketHandler().writeNoCache(
+                new com.hypixel.hytale.protocol.packets.interface_.CustomHud(
+                        this.getKey(), this.getZOrder(), false, commands));
+    }
+
+    static final class HudCommandBatch {
+        private final java.util.LinkedHashMap<String, com.hypixel.hytale.protocol.packets.interface_.CustomUICommand> latest
+                = new java.util.LinkedHashMap<>();
+        void add(com.hypixel.hytale.protocol.packets.interface_.CustomUICommand[] commands) {
+            for (var command : commands) latest.put(command.selector, command);
+        }
+        int size() { return latest.size(); }
+        void clear() { latest.clear(); }
+        com.hypixel.hytale.protocol.packets.interface_.CustomUICommand[] drain() {
+            var result = latest.values().toArray(com.hypixel.hytale.protocol.packets.interface_.CustomUICommand[]::new);
+            clear();
+            return result;
+        }
+    }
 
     /** Called on normal world ticks so throttled changes eventually publish the latest state. */
     public void flushPendingVisuals(int updateSpeed) {
         this.settings.updateSpeed = updateSpeed;
         this.queueOverlayRender();
+        this.flushPendingCommands();
     }
 
     public void invalidateVisualAssets() {
         ++this.overlayGeneration;
         this.displayedOverlayPath = null;
+        this.displayedFramePath = null;
         this.terrainShown = false;
         this.overlayPublications.clear();
+        this.framePublications.clear();
+        for (var cache : this.rowPublications) cache.clear();
+        java.util.Arrays.fill(this.displayedRowPaths, null);
         this.lastOverlaySubmitMs = 0L;
         this.overlayDirty = true;
     }
@@ -388,7 +448,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
     /** Slot coordinates and sizes are logical minimap values, converted here for display. */
     public void setMarkers(Slot[] slots) {
         if (this.built) {
-            UICommandBuilder builder = new UICommandBuilder();
+            UICommandBuilder builder = null;
             boolean changed = false;
             int occupied = 0;
             if (slots != null) {
@@ -409,6 +469,10 @@ public final class DynamicMinimapHud extends CustomUIHud {
                 int size = visible ? slot.size : 0;
                 boolean fixed = visible ? slot.fixed : this.slotFixed[i];
                 boolean layerChanged = fixed != this.slotFixed[i];
+                if (!layerChanged && Objects.equals(path, this.slotPath[i])
+                        && visible == this.slotVisible[i] && (!visible
+                        || (left == this.slotLeft[i] && top == this.slotTop[i] && size == this.slotSize[i]))) continue;
+                if (builder == null) builder = new UICommandBuilder();
                 if (layerChanged && this.slotVisible[i]) {
                     builder.set(markerSelector(i, this.slotFixed[i]) + ".Visible", false);
                     changed = true;
@@ -436,8 +500,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
     }
 
     static String markerSelector(int slot, boolean fixed) {
-        return fixed ? "#WayfinderMmRoot #WayfinderMmClip #WayfinderMmEdges #WayfinderMmEdge" + slot
-                : "#WayfinderMmRoot #WayfinderMmClip #WayfinderMmMarkers #WayfinderMmMk" + slot;
+        return MARKER_SELECTORS[fixed ? 1 : 0][slot];
     }
 
     /** Moving an existing icon must not rebind its texture or visibility. */
@@ -544,6 +607,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
 
     /** Invalidate detached HUD work without sending updates to a previous world. */
     public void detach() {
+        this.pendingCommands.clear();
         this.built = false;
         this.overlayGeneration++;
         this.overlayDirty = false;
@@ -740,8 +804,20 @@ public final class DynamicMinimapHud extends CustomUIHud {
                 .append("); LayoutMode: Full; ");
 
         out.append(this.buildMapMarkup());
+        out.append("AssetImage #WayfinderMmFrame { Anchor: (Full: 0); AssetPath: \"")
+                .append(this.framePath).append("\"; Visible: true; } ");
         out.append("AssetImage #WayfinderMmOverlay { Anchor: (Full: 0); AssetPath: \"")
                 .append(this.overlayPath).append("\"; Visible: true; } ");
+        for (int i = 0; i < 4; i++) {
+            var row = this.overlayRows == null ? null : this.overlayRows[i];
+            boolean visible = row != null && row.height() > 0;
+            out.append("AssetImage #WayfinderMmReadout").append(i)
+                    .append(" { Anchor: (Left: 0, Top: ").append(visible ? this.displayCoordinate(row.top()) : 0)
+                    .append(", Width: ").append(visible ? this.displaySize(row.width()) : 0)
+                    .append(", Height: ").append(visible ? this.displayCoordinate(row.top() + row.height()) - this.displayCoordinate(row.top()) : 0)
+                    .append("); AssetPath: \"").append(this.rowPaths[i] == null ? this.blankPath : this.rowPaths[i])
+                    .append("\"; Visible: ").append(visible).append("; } ");
+        }
         out.append("} ");
 
         if (this.hudPositionX < 100) {
@@ -846,6 +922,8 @@ public final class DynamicMinimapHud extends CustomUIHud {
                 + "-" + this.settings.colours.frameKey()
                 + this.settings.colours.hex(PANEL).substring(1)
                 + "-v" + (this.overlayRevision & 15) + ".png";
+        this.framePath = this.overlayPath.replace("-v", "-frame-v");
+        for (int i = 0; i < 4; i++) this.rowPaths[i] = this.overlayPath.replace("-v", "-row" + i + "-v");
     }
 
     private void publishOverlayAsset(boolean updateClient) {
@@ -863,15 +941,34 @@ public final class DynamicMinimapHud extends CustomUIHud {
         boolean initial = this.frameAngle == 0.0D
                 && "X: ?  Y: ?  Z: ?".equals(this.coordsText) && "N 0 deg".equals(this.compassText)
                 && "Sun 06:00".equals(this.clockText) && "Biome: unknown".equals(this.biomeText);
-        byte[] overlay = initial ? initialOverlay(this.settings) : DynamicMinimapRenderer.renderHudOverlay(
+        var overlay = initial ? initialOverlay(this.settings) : DynamicMinimapRenderer.renderHudOverlayParts(
                 this.settings, this.logicalUiSize, READOUT_WIDTH,
                 this.readoutHeight(), this.readoutGap(), this.frameAngle,
                 this.coordsText, this.compassText, this.clockText, this.biomeText);
-        DynamicAssetPublisher.PreparedAsset prepared = DynamicAssetPublisher.prepare(this.overlayPath, overlay);
-        if (prepared != null && DynamicAssetPublisher.deliver(this.ownerRef, prepared)) {
-            this.overlayPublications.remember(prepared.path(), prepared.hash());
-            this.displayedOverlayPath = prepared.path();
+        if (overlay == null) return;
+        this.overlayRows = overlay.rows();
+        for (int i = 0; i < 4; i++) {
+            var prepared = DynamicAssetPublisher.prepare(this.rowPaths[i], overlay.rows()[i].png());
+            String published = publishPart(this.rowPublications[i], prepared);
+            if (published != null) this.displayedRowPaths[i] = this.rowPaths[i] = published;
         }
+        var readout = DynamicAssetPublisher.prepare(this.overlayPath, overlay.readout());
+        var frame = DynamicAssetPublisher.prepare(this.framePath, overlay.frame());
+        String readoutPath = publishPart(this.overlayPublications, readout);
+        String framePath = publishPart(this.framePublications, frame);
+        if (readoutPath != null) this.displayedOverlayPath = this.overlayPath = readoutPath;
+        if (framePath != null) this.displayedFramePath = this.framePath = framePath;
+    }
+
+    private String publishPart(DynamicAssetPublisher.ImagePublicationCache publications,
+                               DynamicAssetPublisher.PreparedAsset prepared) {
+        if (prepared == null) return null;
+        String existing = publications.pathFor(prepared.hash());
+        if (existing != null) return existing;
+        var publication = prepared.withPath(publications.nonActivePath(prepared.path()));
+        if (!DynamicAssetPublisher.deliver(this.ownerRef, publication)) return null;
+        publications.remember(publication.path(), publication.hash());
+        return publication.path();
     }
 
     /** Render frequent compass and readout changes outside the world tick. */
@@ -884,6 +981,8 @@ public final class DynamicMinimapHud extends CustomUIHud {
         this.overlayRevision++;
         this.updateStaticAssetPaths();
         String path = this.overlayPath;
+        String framePath = this.framePath;
+        String[] rowPaths = this.rowPaths.clone();
         long generation = ++this.overlayGeneration;
         DynamicMinimapSetting snapshot = this.settings.copy();
         int mapSize = this.logicalUiSize;
@@ -895,35 +994,59 @@ public final class DynamicMinimapHud extends CustomUIHud {
         String clock = this.clockText;
         String biome = this.biomeText;
         if (!DynamicMinimapSession.renderAsync(() -> {
-            if (!this.built) return;
-            byte[] image = DynamicMinimapRenderer.renderHudOverlay(
-                    snapshot, mapSize, READOUT_WIDTH, panelHeight, gap, angle,
-                    coords, compass, clock, biome);
-            DynamicAssetPublisher.PreparedAsset prepared = DynamicAssetPublisher.prepare(path, image);
-            this.worldExecute.accept(() -> {
+            try {
+                if (!this.built) return;
+                var image = DynamicMinimapRenderer.renderHudOverlayParts(
+                        snapshot, mapSize, READOUT_WIDTH, panelHeight, gap, angle,
+                        coords, compass, clock, biome);
+                var prepared = image == null ? null : DynamicAssetPublisher.prepare(path, image.readout());
+                var preparedFrame = image == null ? null : DynamicAssetPublisher.prepare(framePath, image.frame());
+                var preparedRows = new DynamicAssetPublisher.PreparedAsset[4];
+                if (image != null) for (int i = 0; i < 4; i++)
+                    preparedRows[i] = DynamicAssetPublisher.prepare(rowPaths[i], image.rows()[i].png());
+                this.worldExecute.accept(() -> {
+                    this.overlayRenderQueued = false;
+                    if (this.built && generation == this.overlayGeneration && prepared != null) {
+                        String publishedPath = this.publishPart(this.overlayPublications, prepared);
+                        String publishedFrame = this.publishPart(this.framePublications, preparedFrame);
+                        UICommandBuilder builder = new UICommandBuilder();
+                        boolean changed = false;
+                        if (publishedPath != null) {
+                            this.overlayPath = publishedPath;
+                            if (!publishedPath.equals(this.displayedOverlayPath)) {
+                                builder.set("#WayfinderMmRoot #WayfinderMmOverlay.AssetPath", publishedPath);
+                                changed = true;
+                            }
+                            this.displayedOverlayPath = publishedPath;
+                        }
+                        if (publishedFrame != null) {
+                            this.framePath = publishedFrame;
+                            if (!publishedFrame.equals(this.displayedFramePath)) {
+                                builder.set("#WayfinderMmRoot #WayfinderMmFrame.AssetPath", publishedFrame);
+                                changed = true;
+                            }
+                            this.displayedFramePath = publishedFrame;
+                        }
+                        for (int i = 0; i < 4; i++) {
+                            String published = this.publishPart(this.rowPublications[i], preparedRows[i]);
+                            if (published != null) {
+                                this.rowPaths[i] = published;
+                                if (!published.equals(this.displayedRowPaths[i])) {
+                                    builder.set("#WayfinderMmRoot #WayfinderMmReadout" + i + ".AssetPath", published);
+                                    changed = true;
+                                }
+                                this.displayedRowPaths[i] = published;
+                            }
+                        }
+                        if (changed) this.update(false, builder);
+                    }
+                    // The normal tick admits the next dirty overlay after this callback exits.
+                });
+            } catch (RuntimeException failure) {
+                this.overlayDirty = true;
                 this.overlayRenderQueued = false;
-                if (this.built && generation == this.overlayGeneration && prepared != null) {
-                    String publishedPath = this.overlayPublications.pathFor(prepared.hash());
-                    if (publishedPath == null) {
-                        DynamicAssetPublisher.PreparedAsset publication = prepared.withPath(
-                                this.overlayPublications.nonActivePath(prepared.path()));
-                        if (DynamicAssetPublisher.deliver(this.ownerRef, publication)) {
-                            publishedPath = publication.path();
-                            this.overlayPublications.remember(publishedPath, publication.hash());
-                        }
-                    }
-                    if (publishedPath != null) {
-                        this.overlayPath = publishedPath;
-                        if (!publishedPath.equals(this.displayedOverlayPath)) {
-                            UICommandBuilder builder = new UICommandBuilder();
-                            builder.set("#WayfinderMmRoot #WayfinderMmOverlay.AssetPath", publishedPath);
-                            this.update(false, builder);
-                        }
-                        this.displayedOverlayPath = publishedPath;
-                    }
-                }
-                this.queueOverlayRender();
-            });
+                if (!DynamicMinimapSession.isStoppedWorldException(failure)) throw failure;
+            }
         })) {
             this.overlayRenderQueued = false;
             this.overlayDirty = true;

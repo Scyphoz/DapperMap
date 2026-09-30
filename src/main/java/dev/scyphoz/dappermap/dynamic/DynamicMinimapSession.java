@@ -247,7 +247,7 @@ public final class DynamicMinimapSession {
     private int lastSelfBucket = -1;
     private int requestedSelfBucket = -1;
     private final byte[][] selfArrowCache = new byte[SELF_BUCKETS][];
-    private String lastCoords = null;
+    private final ReadoutCache readouts = new ReadoutCache();
     private boolean wasAlive = true;
     private boolean hasDeath = false;
     private double deathX;
@@ -365,7 +365,7 @@ public final class DynamicMinimapSession {
             boolean worldChanged = lastObservedWorld != null && lastObservedWorld != world;
             boolean teleported = lastObservedWorld != null
                     && (worldChanged
-                    || Math.pow(x - lastObservedX, 2) + Math.pow(z - lastObservedZ, 2)
+                    || (x - lastObservedX) * (x - lastObservedX) + (z - lastObservedZ) * (z - lastObservedZ)
                     > TELEPORT_DISTANCE_SQUARED);
             lastObservedWorld = world;
             lastObservedX = x;
@@ -404,8 +404,8 @@ public final class DynamicMinimapSession {
                     ++this.terrainGeneration;
                     this.rotationSequence.incrementAndGet();
                     this.cachedMarkers = new ArrayList<>();
-                    this.cachedBetterMapMarkers = new ArrayList<>();
-                    this.cachedWorldMapMarkers = new ArrayList<>();
+                    this.cachedBetterMapMarkers = List.of();
+                    this.cachedWorldMapMarkers = List.of();
                     this.emptyBetterMapScans = 0;
                     this.emptyWorldMapScans = 0;
                 }
@@ -625,15 +625,12 @@ public final class DynamicMinimapSession {
                 this.projectCachedMarkers(pixelsPerBlock, bufferPixels, yaw);
             }
 
-            String coords = this.settings.showCoordinates ? coordsText(x, y, z) : "";
-            String compass = this.settings.showCompass ? compassText(yaw) : "";
-            String clock = this.settings.showClock ? clockText(world, this.settings.clock24Hour) : "";
-            String biome = this.settings.showBiome ? biomeText(player, this.settings.sizePixels) : "";
-            String statusKey = coords + "|" + compass + "|" + clock + "|" + biome;
-            if (!statusKey.equals(this.lastCoords)) {
-                this.lastCoords = statusKey;
-                this.hud.setStatus(coords, compass, clock, biome);
-            }
+            boolean panel = this.settings.infoPanelEnabled;
+            String coords = panel && this.settings.showCoordinates ? this.readouts.coords(x, y, z) : "";
+            String compass = panel && this.settings.showCompass ? this.readouts.compass(yaw) : "";
+            String clock = panel && this.settings.showClock ? clockText(world, this.settings.clock24Hour, this.readouts) : "";
+            String biome = panel && this.settings.showBiome ? this.readouts.biome(rawBiome(player)) : "";
+            this.hud.setStatus(coords, compass, clock, biome);
             this.hud.flushPendingVisuals(this.settings.updateSpeed);
         } catch (Throwable var34) {
         }
@@ -727,7 +724,7 @@ public final class DynamicMinimapSession {
             this.bufferCenterZ = Double.NaN;
             this.lastTerrainMs = 0L;
             this.lastSelfBucket = -1;
-            this.lastCoords = null;
+            this.readouts.clear();
         }
 
     }
@@ -1111,7 +1108,7 @@ public final class DynamicMinimapSession {
             }
 
         } else {
-            this.cachedWorldMapMarkers = new ArrayList<>();
+            this.cachedWorldMapMarkers = List.of();
             this.emptyWorldMapScans = 0;
             this.lastWorldMapScanMs = 0L;
         }
@@ -1138,7 +1135,7 @@ public final class DynamicMinimapSession {
             }
 
         } else {
-            this.cachedBetterMapMarkers = new ArrayList<>();
+            this.cachedBetterMapMarkers = List.of();
             this.emptyBetterMapScans = 0;
             this.lastBetterMapScanMs = 0L;
         }
@@ -1165,8 +1162,7 @@ public final class DynamicMinimapSession {
         DynamicMinimapHud.Slot[] slots =
                 new DynamicMinimapHud.Slot[DynamicMinimapHud.MARKER_SLOTS];
         int slot = 0;
-        int panLeft = this.hud.panLeft();
-        int panTop = this.hud.panTop();
+        long projectionTime = System.currentTimeMillis();
 
         // The native POI provider returns world-wide markers from a map with no
         // useful display order. Select nearby markers before the fixed HUD slots
@@ -1204,7 +1200,7 @@ public final class DynamicMinimapSession {
                 boolean outside = Math.abs(clamped[0] - visibleX) > 0.001
                         || Math.abs(clamped[1] - visibleZ) > 0.001;
                 double[] stable = this.edgeTracker.update(marker, clamped[0], clamped[1], outside,
-                        this.settings.sizePixels, this.settings.shape, size, System.currentTimeMillis());
+                        this.settings.sizePixels, this.settings.shape, size, projectionTime);
                 markerX = stable[0];
                 markerZ = stable[1];
             } else if (markerX < 0.0D
@@ -1298,27 +1294,29 @@ public final class DynamicMinimapSession {
     }
 
     private static String coordsText(double x, double y, double z) {
-        return String.format("%d, %d, %d", (int)Math.floor(x), (int)Math.floor(y), (int)Math.floor(z));
+        return (int)Math.floor(x) + ", " + (int)Math.floor(y) + ", " + (int)Math.floor(z);
     }
+
+    private static final String[] COMPASS_DIRECTIONS = {"N", "NE", "E", "SE", "S", "SW", "W", "NW"};
 
     private static String compassText(double yaw) {
         if (Double.isNaN(yaw)) {
             return "—°  ?";
         } else {
             int degrees = Math.floorMod((int)Math.round(Math.toDegrees(yaw)), 360);
-            String[] directions = new String[]{"N", "NE", "E", "SE", "S", "SW", "W", "NW"};
+            String[] directions = COMPASS_DIRECTIONS;
             int index = (int)Math.floor(((double)degrees + (double)22.5F) / (double)45.0F) & 7;
             return degrees + "°  " + directions[index];
         }
     }
 
-    private static String clockText(World world, boolean twentyFourHour) {
+    private static String clockText(World world, boolean twentyFourHour, ReadoutCache cache) {
         WorldTimeResource worldTime = getWorldTime(world);
         if (worldTime != null) {
             LocalDateTime gameDateTime = worldTime.getGameDateTime();
             if (gameDateTime != null) {
-                int secondsOfDay = gameDateTime.toLocalTime().toSecondOfDay();
-                return formatClock(gameDateTime.getHour(), gameDateTime.getMinute(), isSunlit(secondsOfDay), twentyFourHour);
+                int secondsOfDay = gameDateTime.getHour() * 3600 + gameDateTime.getMinute() * 60 + gameDateTime.getSecond();
+                return cache.clock(gameDateTime.getHour(), gameDateTime.getMinute(), isSunlit(secondsOfDay), twentyFourHour);
             }
         }
 
@@ -1331,7 +1329,7 @@ public final class DynamicMinimapSession {
         int hour = (minutes / 60 + 6) % 24;
         int minute = minutes % 60;
         boolean isDay = tickOfDay < (long)daySeconds * 20L;
-        return formatClock(hour, minute, isDay, twentyFourHour);
+        return cache.clock(hour, minute, isDay, twentyFourHour);
     }
 
     private static WorldTimeResource getWorldTime(World world) {
@@ -1352,37 +1350,60 @@ public final class DynamicMinimapSession {
     private static String formatClock(int hour, int minute, boolean isDay, boolean twentyFourHour) {
         String body;
         if (twentyFourHour) {
-            body = String.format("%02d:%02d", hour, minute);
+            body = twoDigits(hour) + ":" + twoDigits(minute);
         } else {
             int displayHour = hour % 12;
             if (displayHour == 0) {
                 displayHour = 12;
             }
 
-            body = String.format("%d:%02d %s", displayHour, minute, hour < 12 ? "AM" : "PM");
+            body = displayHour + ":" + twoDigits(minute) + " " + (hour < 12 ? "AM" : "PM");
         }
 
         return (isDay ? "DAY  " : "NIGHT  ") + body;
     }
 
-    private static String biomeText(Player player, int mapSize) {
-        String biome = null;
+    private static String twoDigits(int value) { return value < 10 ? "0" + value : Integer.toString(value); }
 
+    private static String rawBiome(Player player) {
         try {
-            if (player != null && player.getWorldMapTracker() != null) {
-                biome = player.getWorldMapTracker().getCurrentBiomeName();
-            }
-        } catch (RuntimeException var6) {
-        }
+            if (player != null && player.getWorldMapTracker() != null)
+                return player.getWorldMapTracker().getCurrentBiomeName();
+        } catch (RuntimeException ignored) { }
+        return null;
+    }
 
-        String label = prettyName(biome);
-        int maxChars = 22;
-        if (label.length() <= maxChars) {
-            return label;
-        } else {
-            String var10000 = label.substring(0, Math.max(0, maxChars - 3));
-            return var10000 + "...";
+    /** Readouts change only at displayed precision, with no periodic refresh penalty. */
+    static final class ReadoutCache {
+        private int x, y, z, degrees, hour, minute;
+        private boolean day, format;
+        private String coords, compass, clock, rawBiome, biome;
+        String coords(double px, double py, double pz) {
+            int nx = (int)Math.floor(px), ny = (int)Math.floor(py), nz = (int)Math.floor(pz);
+            if (coords == null || nx != x || ny != y || nz != z) {
+                x = nx; y = ny; z = nz; coords = coordsText(px, py, pz);
+            }
+            return coords;
         }
+        String compass(double yaw) {
+            int next = Double.isNaN(yaw) ? -1 : Math.floorMod((int)Math.round(Math.toDegrees(yaw)), 360);
+            if (compass == null || degrees != next) { degrees = next; compass = compassText(yaw); }
+            return compass;
+        }
+        String clock(int nh, int nm, boolean nd, boolean nf) {
+            if (clock == null || nh != hour || nm != minute || nd != day || nf != format) {
+                hour = nh; minute = nm; day = nd; format = nf; clock = formatClock(nh, nm, nd, nf);
+            }
+            return clock;
+        }
+        String biome(String raw) {
+            if (biome == null || !java.util.Objects.equals(raw, rawBiome)) {
+                rawBiome = raw; String label = prettyName(raw);
+                biome = label.length() <= 22 ? label : label.substring(0, 19) + "...";
+            }
+            return biome;
+        }
+        void clear() { coords = compass = clock = biome = rawBiome = null; }
     }
 
     private static String prettyName(String raw) {
@@ -1425,7 +1446,7 @@ public final class DynamicMinimapSession {
             Position previous = positions.get(key);
             if (previous != null && previous.mapSize == mapSize && previous.shape == shape
                     && previous.iconSize == iconSize) {
-                if (now - previous.time < 200L || Math.hypot(x - previous.x, z - previous.z) < 2.0)
+                if (now - previous.time < 200L || (x - previous.x) * (x - previous.x) + (z - previous.z) * (z - previous.z) < 4.0)
                     return new double[]{previous.x, previous.z};
             }
             if (positions.size() >= 256 && previous == null) positions.clear();
@@ -1518,17 +1539,27 @@ public final class DynamicMinimapSession {
                 }
                 var moving = new ArrayList<>(snapshot);
                 moving.sort(compare);
-                // Merge two sorted lists without sorting all world-wide markers
-                // whenever one creature or player moves. Ties retain scan order.
-                var merged = new ArrayList<DynamicMinimapMarker>(moving.size() + integrations.size());
-                int local = 0, integration = 0;
-                while (local < moving.size() || integration < integrations.size()) {
-                    if (integration >= integrations.size() || (local < moving.size()
-                            && compare.compare(moving.get(local), integrations.get(integration)) <= 0))
-                        merged.add(moving.get(local++));
-                    else merged.add(integrations.get(integration++));
+                // Normal local snapshots contain deaths and dots. Reuse the entire
+                // immutable integration segment rather than copying every waypoint
+                // whenever a creature moves. General mixed snapshots keep stable merge.
+                int deaths = 0;
+                while (deaths < moving.size() && moving.get(deaths).style == DynamicMinimapMarker.Style.DEATH) deaths++;
+                boolean localOnly = true;
+                for (int i = deaths; i < moving.size(); i++)
+                    localOnly &= moving.get(i).style == DynamicMinimapMarker.Style.DOT;
+                if (integrations.isEmpty()) ordered = moving;
+                else if (localOnly) ordered = new SegmentedMarkers(moving, integrations, deaths);
+                else {
+                    var merged = new ArrayList<DynamicMinimapMarker>(moving.size() + integrations.size());
+                    int local = 0, integration = 0;
+                    while (local < moving.size() || integration < integrations.size()) {
+                        if (integration >= integrations.size() || (local < moving.size()
+                                && compare.compare(moving.get(local), integrations.get(integration)) <= 0))
+                            merged.add(moving.get(local++));
+                        else merged.add(integrations.get(integration++));
+                    }
+                    ordered = merged;
                 }
-                ordered = merged;
             }
             source = snapshot;
             nativeSource = nativeMarkers;
@@ -1536,6 +1567,22 @@ public final class DynamicMinimapSession {
             centerX = x;
             centerZ = z;
             return ordered;
+        }
+
+        private static final class SegmentedMarkers extends java.util.AbstractList<DynamicMinimapMarker>
+                implements java.util.RandomAccess {
+            private final List<DynamicMinimapMarker> moving, integrations;
+            private final int deaths;
+            SegmentedMarkers(List<DynamicMinimapMarker> moving, List<DynamicMinimapMarker> integrations, int deaths) {
+                this.moving = moving; this.integrations = integrations; this.deaths = deaths;
+            }
+            @Override public int size() { return moving.size() + integrations.size(); }
+            @Override public DynamicMinimapMarker get(int index) {
+                java.util.Objects.checkIndex(index, size());
+                if (index < deaths) return moving.get(index);
+                if (index < deaths + integrations.size()) return integrations.get(index - deaths);
+                return moving.get(index - integrations.size());
+            }
         }
 
         void clear() {

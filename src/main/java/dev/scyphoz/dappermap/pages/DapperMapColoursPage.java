@@ -27,20 +27,12 @@ import dev.scyphoz.dappermap.service.MinimapSessionManager;
 
 import java.util.Arrays;
 import java.util.EnumSet;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 
 /** Native colour-picker editor. Changes stay local until Save; cancellation never writes settings. */
 public final class DapperMapColoursPage extends InteractiveCustomUIPage<DapperMapColoursPage.Ev> {
     private static final long PULSE_MILLIS = 700L;
-    private static final ScheduledExecutorService PULSE_EXECUTOR =
-            Executors.newSingleThreadScheduledExecutor(runnable -> {
-                Thread thread = new Thread(runnable, "DapperMap-colour-preview-pulse");
-                thread.setDaemon(true);
-                return thread;
-            });
 
     private final PlayerRef owner;
     private final MinimapSessionManager sessions;
@@ -206,7 +198,7 @@ public final class DapperMapColoursPage extends InteractiveCustomUIPage<DapperMa
     private void startPulse() {
         stopPulse();
         pageActive = true;
-        pulseTask = PULSE_EXECUTOR.scheduleAtFixedRate(() -> {
+        pulseTask = com.hypixel.hytale.server.core.HytaleServer.SCHEDULED_EXECUTOR.scheduleAtFixedRate(() -> {
             if (!pageActive) return;
             pulseBright = !pulseBright;
             try {
@@ -362,12 +354,17 @@ public final class DapperMapColoursPage extends InteractiveCustomUIPage<DapperMa
                     | (Byte.toUnsignedInt(event.colour.green) << 8)
                     | Byte.toUnsignedInt(event.colour.blue);
 
+            if (draft.rgb(selected) == rgb) return;
+            boolean firstEdit = edited.isEmpty();
             draft = draft.with(selected, rgb);
             edited.add(selected);
+            UICommandBuilder ui = new UICommandBuilder();
+            ui.set("#ColourHex.Text", draft.hex(selected));
+            if (firstEdit) ui.set("#ColourChanges.Text", "Unsaved colour changes. Choose Save Colours to apply them.");
+            applyPulse(ui, pulseBright);
+            sendUpdate(ui, new UIEventBuilder(), false);
+            return;
 
-            // Leave the picker itself client-controlled while its popup is open, but
-            // immediately update the hex readout and preview from the server-side draft.
-            syncPicker = false;
         } else {
             return;
         }

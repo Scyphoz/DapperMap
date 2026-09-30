@@ -25,6 +25,7 @@ public final class NativeWorldMapIntegration {
     // "prefabs". Keep their markers (and future providers), excluding only
     // marker types rendered separately by the minimap.
     private static final Set<String> EXCLUDED = Set.of("playerIcons", "death");
+    private static final java.util.regex.Pattern ICON_FILENAME = java.util.regex.Pattern.compile("[A-Za-z0-9._-]+\\.png");
     private static final String ICON_PREFIX = "UI/WorldMap/MapMarkers/";
     private static final int MARKER_SIZE = 18;
     private static final Map<String, byte[]> ICON_BYTES = new ConcurrentHashMap<>();
@@ -119,7 +120,7 @@ public final class NativeWorldMapIntegration {
         String normalized = image.replace('\\', '/');
         int slash = normalized.lastIndexOf('/');
         String filename = slash >= 0 ? normalized.substring(slash + 1) : normalized;
-        return filename.matches("[A-Za-z0-9._-]+\\.png") ? filename : null;
+        return ICON_FILENAME.matcher(filename).matches() ? filename : null;
     }
 
     private static java.awt.Color markerTint(MapMarker marker) {

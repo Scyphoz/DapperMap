@@ -1,6 +1,6 @@
 package dev.scyphoz.dappermap.dynamic;
 
-import com.hypixel.hytale.component.CommandBuffer;
+import com.hypixel.hytale.component.ComponentAccessor;
 import com.hypixel.hytale.component.Ref;
 import com.hypixel.hytale.component.Store;
 import com.hypixel.hytale.server.core.asset.type.attitude.Attitude;
@@ -29,65 +29,173 @@ public final class DynamicEntityScanner {
         double playerX = playerPosition.x();
         double playerY = playerPosition.y();
         double playerZ = playerPosition.z();
+        NearestCreatures creatures = settings.showEntities ? new NearestCreatures(settings.creatureMarkerLimit, playerX, playerZ) : null;
         double verticalRange = settings.limitMobHeight ? (double)settings.mobVerticalRange : (double)0.0F;
         if (settings.showEntities) {
-            try {
-                store.forEachChunk(NPCEntity.getComponentType(), (chunk, commandBuffer) -> {
-                    for(int i = 0; i < chunk.size(); ++i) {
-                        try {
-                            TransformComponent transform = (TransformComponent)chunk.getComponent(i, TransformComponent.getComponentType());
-                            if (transform != null) {
-                                Vector3d position = transform.getPosition();
-                                double dx = position.x() - playerX;
-                                double dz = position.z() - playerZ;
-                                if (!(dx * dx + dz * dz > radiusSq) && (!(verticalRange > (double)0.0F) || !(Math.abs(position.y() - playerY) > verticalRange))) {
-                                    NPCEntity npc = (NPCEntity)chunk.getComponent(i, NPCEntity.getComponentType());
-                                    if (npc != null) {
-                                        Ref<EntityStore> npcRef = chunk.getReferenceTo(i);
-                                        Color color = colorFor(npcRef, npc, playerRef, commandBuffer, settings.colours);
-                                        if (color != null) {
-                                            markers.add(DynamicMinimapMarker.dot(position.x(), position.z(), color, 7));
+            List<Ref<EntityStore>> nearby = nearby(store, playerPosition, radius, verticalRange, true);
+            if (nearby != null) {
+                for (Ref<EntityStore> npcRef : nearby) {
+                    try {
+                        if (!npcRef.isValid()) continue;
+                        TransformComponent transform = store.getComponent(npcRef, TransformComponent.getComponentType());
+                        if (transform == null) continue;
+                        Vector3d position = transform.getPosition();
+                        double dx = position.x() - playerX, dz = position.z() - playerZ;
+                        if (dx * dx + dz * dz > radiusSq || (verticalRange > 0 && Math.abs(position.y() - playerY) > verticalRange)
+                                || !creatures.wouldAccept(position.x(), position.z())) continue;
+                        NPCEntity npc = store.getComponent(npcRef, NPCEntity.getComponentType());
+                        if (npc == null) continue;
+                        Color color = colorFor(npcRef, npc, playerRef, store, settings.colours);
+                        if (color != null) creatures.add(DynamicMinimapMarker.dot(position.x(), position.z(), color, 7));
+                    } catch (RuntimeException ignored) { }
+                }
+            } else {
+                try {
+                    store.forEachChunk(NPCEntity.getComponentType(), (chunk, commandBuffer) -> {
+                        for(int i = 0; i < chunk.size(); ++i) {
+                            try {
+                                TransformComponent transform = (TransformComponent)chunk.getComponent(i, TransformComponent.getComponentType());
+                                if (transform != null) {
+                                    Vector3d position = transform.getPosition();
+                                    double dx = position.x() - playerX;
+                                    double dz = position.z() - playerZ;
+                                    if (!(dx * dx + dz * dz > radiusSq) && (!(verticalRange > (double)0.0F) || !(Math.abs(position.y() - playerY) > verticalRange))) {
+                                        if (!creatures.wouldAccept(position.x(), position.z())) continue;
+                                        NPCEntity npc = (NPCEntity)chunk.getComponent(i, NPCEntity.getComponentType());
+                                        if (npc != null) {
+                                            Ref<EntityStore> npcRef = chunk.getReferenceTo(i);
+                                            Color color = colorFor(npcRef, npc, playerRef, commandBuffer, settings.colours);
+                                            if (color != null) {
+                                                creatures.add(DynamicMinimapMarker.dot(position.x(), position.z(), color, 7));
+                                            }
                                         }
                                     }
                                 }
+                            } catch (Exception var24) {
                             }
-                        } catch (Exception var24) {
                         }
-                    }
 
-                });
-            } catch (Exception var19) {
+                    });
+                } catch (Exception var19) {
+                }
             }
         }
 
-        if (settings.showOtherPlayers) {
-            try {
-                store.forEachChunk(Player.getComponentType(), (chunk, commandBuffer) -> {
-                    for(int i = 0; i < chunk.size(); ++i) {
-                        try {
-                            TransformComponent transform = (TransformComponent)chunk.getComponent(i, TransformComponent.getComponentType());
-                            if (transform != null) {
-                                Vector3d position = transform.getPosition();
-                                double dx = position.x() - playerX;
-                                double dz = position.z() - playerZ;
-                                double distanceSq = dx * dx + dz * dz;
-                                if (distanceSq >= 0.01 && distanceSq <= radiusSq) {
-                                    markers.add(DynamicMinimapMarker.dot(position.x(), position.z(), settings.colours.awt(PLAYERS, 255), 11));
-                                }
-                            }
-                        } catch (Exception var18) {
-                        }
-                    }
+        if (creatures != null) markers.addAll(creatures.sorted());
 
-                });
-            } catch (Exception var18) {
+        if (settings.showOtherPlayers) {
+            List<Ref<EntityStore>> nearby = nearby(store, playerPosition, radius, 0, false);
+            if (nearby != null) {
+                Color playerColor = settings.colours.awt(PLAYERS, 255);
+                for (Ref<EntityStore> other : nearby) {
+                    try {
+                        if (!other.isValid()) continue;
+                        TransformComponent transform = store.getComponent(other, TransformComponent.getComponentType());
+                        if (transform == null || store.getComponent(other, Player.getComponentType()) == null) continue;
+                        Vector3d position = transform.getPosition();
+                        double dx = position.x() - playerX, dz = position.z() - playerZ;
+                        double distance = dx * dx + dz * dz;
+                        if (distance >= .01 && distance <= radiusSq)
+                            markers.add(DynamicMinimapMarker.dot(position.x(), position.z(), playerColor, 11));
+                    } catch (RuntimeException ignored) { }
+                }
+            } else {
+                try {
+                    store.forEachChunk(Player.getComponentType(), (chunk, commandBuffer) -> {
+                        for(int i = 0; i < chunk.size(); ++i) {
+                            try {
+                                TransformComponent transform = (TransformComponent)chunk.getComponent(i, TransformComponent.getComponentType());
+                                if (transform != null) {
+                                    Vector3d position = transform.getPosition();
+                                    double dx = position.x() - playerX;
+                                    double dz = position.z() - playerZ;
+                                    double distanceSq = dx * dx + dz * dz;
+                                    if (distanceSq >= 0.01 && distanceSq <= radiusSq) {
+                                        markers.add(DynamicMinimapMarker.dot(position.x(), position.z(), settings.colours.awt(PLAYERS, 255), 11));
+                                    }
+                                }
+                            } catch (Exception var18) {
+                            }
+                        }
+
+                    });
+                } catch (Exception var18) {
+                }
             }
         }
 
         return markers;
     }
 
-    private static Color colorFor(Ref<EntityStore> npcRef, NPCEntity npc, Ref<EntityStore> playerRef, CommandBuffer<EntityStore> commandBuffer, MinimapColours colours) {
+    /** Native spatial indices are rebuilt by Hytale. Query a padded box first,
+     * then apply the original exact radius/height checks to current transforms.
+     * No vertical filter means all elevations, not a three-dimensional sphere. */
+    private static List<Ref<EntityStore>> nearby(Store<EntityStore> store, Vector3d position,
+                                                 double radius, double height, boolean npc) {
+        try {
+            com.hypixel.hytale.component.spatial.SpatialResource<Ref<EntityStore>, EntityStore> resource;
+            if (npc) {
+                var plugin = com.hypixel.hytale.server.npc.NPCPlugin.get();
+                if (plugin == null || plugin.getNpcSpatialResource() == null) return null;
+                resource = store.getResource(plugin.getNpcSpatialResource());
+            } else {
+                var module = com.hypixel.hytale.server.core.modules.entity.EntityModule.get();
+                if (module == null || module.getPlayerSpatialResourceType() == null) return null;
+                resource = store.getResource(module.getPlayerSpatialResourceType());
+            }
+            if (resource == null || resource.getSpatialStructure() == null) return null;
+            return collectNearby(resource.getSpatialStructure(), position, radius, height);
+        } catch (RuntimeException | LinkageError ignored) {
+            return null; // Compatibility/startup fallback retains the original chunk scan.
+        }
+    }
+
+    static <T> List<T> collectNearby(com.hypixel.hytale.component.spatial.SpatialStructure<T> structure,
+                                     Vector3d position, double radius, double height) {
+        double padded = radius + 32.0; // Normal movement between spatial-index refreshes.
+        double minY = height > 0 ? position.y() - height - 32 : -Double.MAX_VALUE;
+        double maxY = height > 0 ? position.y() + height + 32 : Double.MAX_VALUE;
+        List<T> result = new ArrayList<>();
+        structure.collectBox(new Vector3d(position.x() - padded, minY, position.z() - padded),
+                new Vector3d(position.x() + padded, maxY, position.z() + padded), result);
+        return result;
+    }
+
+    /** Bounded nearest-first creature selection; players are appended separately. */
+    static final class NearestCreatures {
+        private final int limit;
+        private final double x, z;
+        private final java.util.Comparator<DynamicMinimapMarker> nearest;
+        private final java.util.PriorityQueue<DynamicMinimapMarker> candidates;
+        NearestCreatures(int limit, double x, double z) {
+            this.limit = limit == 32 || limit == 64 ? limit : 16;
+            this.x = x; this.z = z;
+            this.nearest = java.util.Comparator.comparingDouble(this::distance);
+            this.candidates = new java.util.PriorityQueue<>(this.limit, nearest.reversed());
+        }
+        private double distance(DynamicMinimapMarker marker) {
+            double dx = marker.x - x, dz = marker.z - z;
+            return dx * dx + dz * dz;
+        }
+        boolean wouldAccept(double markerX, double markerZ) {
+            if (candidates.size() < limit) return true;
+            double dx = markerX - x, dz = markerZ - z;
+            return dx * dx + dz * dz < distance(candidates.peek());
+        }
+        void add(DynamicMinimapMarker marker) {
+            if (candidates.size() < limit) candidates.add(marker);
+            else if (nearest.compare(marker, candidates.peek()) < 0) {
+                candidates.poll(); candidates.add(marker);
+            }
+        }
+        List<DynamicMinimapMarker> sorted() {
+            var result = new ArrayList<>(candidates);
+            result.sort(nearest);
+            return result;
+        }
+    }
+
+    private static Color colorFor(Ref<EntityStore> npcRef, NPCEntity npc, Ref<EntityStore> playerRef, ComponentAccessor<EntityStore> commandBuffer, MinimapColours colours) {
         try {
             if (playerRef != null && playerRef.isValid()) {
                 WorldSupport worldSupport = WorldSupport.get(npcRef, commandBuffer);
@@ -120,7 +228,7 @@ public final class DynamicEntityScanner {
         }
     }
 
-    private static Ref<EntityStore> getLockedTarget(Ref<EntityStore> npcRef, CommandBuffer<EntityStore> commandBuffer) {
+    private static Ref<EntityStore> getLockedTarget(Ref<EntityStore> npcRef, ComponentAccessor<EntityStore> commandBuffer) {
         try {
             MarkedEntitySupport markedEntitySupport = MarkedEntitySupport.get(npcRef, commandBuffer);
             if (markedEntitySupport == null) {
