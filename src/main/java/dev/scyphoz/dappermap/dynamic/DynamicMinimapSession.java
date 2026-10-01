@@ -60,13 +60,14 @@ public final class DynamicMinimapSession {
 
     // Coalesce each kind of work: slow PNG compression must not build an unbounded backlog.
     private boolean submitRender(String kind, Runnable work) {
+        if (!this.canRenderHud(this.hud)) return false;
         var pending = renderPending.computeIfAbsent(kind, ignored -> new java.util.concurrent.atomic.AtomicBoolean());
         if (!pending.compareAndSet(false, true)) return false;
         World sourceWorld = this.lastObservedWorld;
         DynamicMinimapHud sourceHud = this.hud;
         if (!renderAsync(() -> {
             try {
-                if (running && sourceHud == this.hud && sourceWorld != null
+                if (this.canRenderHud(sourceHud) && sourceWorld != null
                         && sourceWorld.isAlive() && sourceWorld == currentWorld()) work.run();
             } finally { pending.set(false); }
         })) {
@@ -88,15 +89,26 @@ public final class DynamicMinimapSession {
         return worldUuid == null ? null : Universe.get().getWorld(worldUuid);
     }
 
+    private boolean canRenderHud(DynamicMinimapHud expected) {
+        return this.running && this.settings.enabled && expected != null
+                && expected == this.hud && expected.isShown();
+    }
+
+    private boolean worldTaskAllowed(String kind) {
+        // Tick handles disabling; overlay completion must clear its admission flag.
+        return this.running && (kind.equals("tick") || kind.equals("overlay delivery")
+                || this.canRenderHud(this.hud));
+    }
+
     private void executeWorld(World world, String kind, Runnable work) {
         var token = worldPending.compute(kind, (ignored, old) -> old != null && old.world() == world
                 ? old : new WorldTask(world, new java.util.concurrent.atomic.AtomicBoolean()));
         var pending = token.pending();
-        if (!running || !world.isAlive() || !pending.compareAndSet(false, true)) return;
+        if (!this.worldTaskAllowed(kind) || !world.isAlive() || !pending.compareAndSet(false, true)) return;
         try {
             world.execute(labelled(kind, () -> {
                 try {
-                    if (running && currentWorld() == world
+                    if (this.worldTaskAllowed(kind) && currentWorld() == world
                             && (kind.equals("tick") || world == lastObservedWorld)) work.run();
                 } finally { pending.set(false); }
             }));
@@ -116,11 +128,13 @@ public final class DynamicMinimapSession {
     private final java.util.concurrent.atomic.AtomicBoolean staticAssetsQueued = new java.util.concurrent.atomic.AtomicBoolean();
 
     private void queueStaticAssets() {
+        if (!this.running || !this.settings.enabled) return;
         CompletableFuture<Void> ready = this.staticAssetsReady;
         if (ready == null || ready.isDone() || !this.staticAssetsQueued.compareAndSet(false, true)) return;
         DynamicMinimapSetting snapshot = this.settings.copy();
         if (!renderAsync(() -> {
             try {
+                if (!this.running || !this.settings.enabled) return;
                 DynamicMinimapHud.prepareStaticAssets(snapshot);
                 ready.complete(null);
             } catch (RuntimeException failure) { ready.completeExceptionally(failure); }
@@ -187,6 +201,7 @@ public final class DynamicMinimapSession {
 
     /** Resource loading, PNG tinting and hashing never block the entity/world tick. */
     private String markerIcon(DynamicMinimapMarker marker) {
+        if (!this.canRenderHud(this.hud)) return null;
         if (marker.style == Style.DOT && marker.color == null) return null;
         MinimapColours palette = this.settings.colours;
         int rgb = marker.style == Style.DEATH ? palette.rgb(MinimapColours.Key.DEATH)
@@ -209,7 +224,7 @@ public final class DynamicMinimapSession {
         DynamicMinimapHud targetHud = this.hud;
         if (!renderAsync(() -> {
             try {
-                if (!this.running || generation != this.markerAssetGeneration || targetHud != this.hud
+                if (!this.canRenderHud(targetHud) || generation != this.markerAssetGeneration
                         || sourceWorld == null || sourceWorld != currentWorld()) return;
                 DynamicAssetPublisher.PreparedAsset asset;
                 switch (marker.style) {
@@ -226,8 +241,8 @@ public final class DynamicMinimapSession {
                         asset = DynamicAssetPublisher.prepare(path, png);
                     }
                 }
-                if (asset != null && this.running && generation == this.markerAssetGeneration
-                        && targetHud == this.hud && sourceWorld == currentWorld()) {
+                if (asset != null && this.canRenderHud(targetHud) && generation == this.markerAssetGeneration
+                        && sourceWorld == currentWorld()) {
                     if (this.preparedMarkerAssets.size() >= 256) this.preparedMarkerAssets.clear();
                     this.preparedMarkerAssets.put(key, asset);
                 }
@@ -700,7 +715,8 @@ public final class DynamicMinimapSession {
             }
 
             this.settings.normalize();
-            this.hud = new DynamicMinimapHud(this.playerRef, this.settings, work -> executeWorld(world, "overlay delivery", work));
+            this.hud = new DynamicMinimapHud(this.playerRef, this.settings, work -> executeWorld(world, "overlay delivery", work),
+                    () -> this.running && this.settings.enabled);
             this.builtSize = this.settings.sizePixels;
             this.builtShape = this.settings.shape;
             this.builtZoom = this.settings.zoomBlocks;
@@ -777,9 +793,9 @@ public final class DynamicMinimapSession {
                     if (world == null) return;
                     submitRender("self", () -> {
                         byte[] rendered = DynamicMinimapRenderer.renderSelfArrow(renderAngle, colours);
-                        if (rendered == null) return;
+                        if (rendered == null || !this.canRenderHud(targetHud)) return;
                         executeWorld(world, "self arrow delivery", () -> {
-                            if (!this.running || this.hud != targetHud || !targetHud.isShown()
+                            if (!this.canRenderHud(targetHud)
                                     || this.settings.colours != colours) return;
                             this.selfArrowCache[renderBucket] = rendered;
                             if (this.requestedSelfBucket == renderBucket
@@ -809,9 +825,10 @@ public final class DynamicMinimapSession {
             } catch (Throwable ignored) {
                 signature = 0L;
             }
+            if (!this.canRenderHud(probeHud)) return;
             long result = signature;
             executeWorld(world, "signature result", () -> {
-                if (!this.running || probeHud != this.hud
+                if (!this.canRenderHud(probeHud)
                         || generation != this.terrainGeneration
                         || Double.compare(centerX, this.bufferCenterX) != 0
                         || Double.compare(centerZ, this.bufferCenterZ) != 0
@@ -840,9 +857,7 @@ public final class DynamicMinimapSession {
         double mapAngle = DynamicMinimapRenderer.bucketAngle(rotationBucket);
 
         return submitRender("terrain", () -> {
-            if (!this.running) {
-                return;
-            }
+            if (!this.canRenderHud(renderHud)) return;
 
             DynamicMinimapRenderer.Terrain terrain =
                     DynamicMinimapRenderer.renderTerrain(
@@ -868,14 +883,14 @@ public final class DynamicMinimapSession {
                 return;
             }
 
+            if (!this.canRenderHud(renderHud)) return;
             DynamicAssetPublisher.PreparedAsset prepared = DynamicAssetPublisher.prepare(
                     this.terrainAssetPath(renderSettings.textureResolution, this.frameIndex.incrementAndGet()), displayPng);
             // Hash the stitched map off the world thread as well as rendering its PNG.
             long renderSignature = DynamicMinimapRenderer.terrainSignature(
                     world.getWorldMapManager(), centerX, centerZ, renderSettings, caveView);
             executeWorld(world, "terrain delivery", () -> {
-                if (!this.running
-                        || renderHud != this.hud
+                if (!this.canRenderHud(renderHud)
                         || !java.util.Objects.equals(caveView, this.lastCaveView)
                         || sequence <= this.deliveredSequence
                         || this.settings.textureResolution != renderSettings.textureResolution
@@ -966,11 +981,11 @@ public final class DynamicMinimapSession {
                 return;
             }
 
+            if (!this.canRenderHud(renderHud)) return;
             DynamicAssetPublisher.PreparedAsset prepared = DynamicAssetPublisher.prepare(
                     this.terrainAssetPath(renderSettings.textureResolution, this.frameIndex.incrementAndGet()), displayPng);
             executeWorld(world, "rotation delivery", () -> {
-                if (!this.running
-                        || renderHud != this.hud
+                if (!this.canRenderHud(renderHud)
                         || generation != this.terrainGeneration
                         || rotationRequest != this.rotationSequence.get()
                         || this.settings.rotationMode != expectedRotationMode) {
