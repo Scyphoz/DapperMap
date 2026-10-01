@@ -114,6 +114,14 @@ public final class DapperMapSettingsPage
         this.adminMode = adminMode;
     }
 
+    /** Opens the shared settings editor directly on the Colours tab. */
+    public static DapperMapSettingsPage colours(PlayerRef playerRef,
+                                                MinimapSessionManager sessions, MinimapConfig config) {
+        DapperMapSettingsPage page = new DapperMapSettingsPage(playerRef, sessions, config);
+        page.activeTab = Tab.COLOURS;
+        return page;
+    }
+
     public void build(
             Ref<EntityStore> ref,
             UICommandBuilder builder,
@@ -154,8 +162,7 @@ public final class DapperMapSettingsPage
     private void bindNavigation(UICommandBuilder builder, UIEventBuilder events) {
         for (Tab tab : Tab.values()) {
             String slot = "#DapperMapTab" + tab.uiLabel + "ButtonSlot";
-            builder.append(slot, "Pages/BasicTextButton.ui");
-            builder.set(slot + "[0].TextSpans", Message.raw(""));
+            builder.append(slot, "Pages/DapperMapNavigationButton.ui");
             if (this.canOpenTab(tab)) {
                 events.addEventBinding(CustomUIEventBindingType.Activating, slot + "[0]",
                         EventData.of("Action", "tab_" + tab.id), false);
@@ -235,7 +242,7 @@ public final class DapperMapSettingsPage
         String[] actions = {"position_slider_x", "position_slider_y"};
         for (int index = 0; index < labels.length; index++) {
             String row = "#PositionFineTuneList[" + index + "]";
-            builder.append("#PositionFineTuneList", "Pages/DapperMapSliderRow.ui");
+            builder.append("#PositionFineTuneList", "Pages/DapperMapPositionSliderRow.ui");
             builder.set(row + " #RowLabel.Text", labels[index]);
             builder.set(row + " #RowDescription.Text", index == 0
                     ? "Move the minimap left or right."
@@ -551,7 +558,7 @@ public final class DapperMapSettingsPage
         String selector = "#DapperMapSettingsList[" + index + "]";
         builder.append("#DapperMapSettingsList", "Pages/DapperMapDisabledDropdownRow.ui");
         builder.set(selector + " #RowLabel.Text", row.label);
-        builder.set(selector + " #RowDescription.Text", wrappedDescription(row.id));
+        builder.set(selector + " #RowDescription.Text", description(row.id));
         builder.set(selector + " #ValueLabel.Text", "Disabled");
     }
 
@@ -561,13 +568,13 @@ public final class DapperMapSettingsPage
         if (!settings.enabled || !this.hasSettingPermission(permissionForSetting(row.id))) {
             builder.append("#DapperMapSettingsList", "Pages/DapperMapDisabledDropdownRow.ui");
             builder.set(selector + " #RowLabel.Text", row.label);
-            builder.set(selector + " #RowDescription.Text", wrappedDescription(row.id));
+            builder.set(selector + " #RowDescription.Text", description(row.id));
             builder.set(selector + " #ValueLabel.Text", "Disabled");
             return;
         }
         builder.append("#DapperMapSettingsList", "Pages/DapperMapMoveRow.ui");
         builder.set(selector + " #RowLabel.Text", row.label);
-        builder.set(selector + " #RowDescription.Text", wrappedDescription(row.id));
+        builder.set(selector + " #RowDescription.Text", description(row.id));
         builder.append(selector + " #BtnClickSlot", "Pages/BasicTextButton.ui");
         builder.set(selector + " #BtnClickSlot[0].TextSpans", Message.raw(""));
         builder.set(selector + " #BtnLabel.TextSpans",
@@ -597,7 +604,7 @@ public final class DapperMapSettingsPage
 
         builder.set(
                 selector + " #RowDescription.Text",
-                wrappedDescription(row.id)
+                description(row.id)
         );
 
         boolean on = toggleValue(row.id, settings);
@@ -639,7 +646,7 @@ public final class DapperMapSettingsPage
             // Render a non-interactive value while its controlling filter is off.
             builder.append("#DapperMapSettingsList", "Pages/DapperMapDisabledDropdownRow.ui");
             builder.set(selector + " #RowLabel.Text", row.label);
-            builder.set(selector + " #RowDescription.Text", wrappedDescription(row.id));
+            builder.set(selector + " #RowDescription.Text", description(row.id));
             builder.set(selector + " #ValueLabel.Text", "Disabled");
             return;
         }
@@ -654,7 +661,7 @@ public final class DapperMapSettingsPage
                 row.label
         );
 
-        builder.set(selector + " #RowDescription.Text", wrappedDescription(row.id));
+        builder.set(selector + " #RowDescription.Text", description(row.id));
 
         String dropdownSelector = selector + " #ValueDropdown";
 
@@ -983,24 +990,6 @@ public final class DapperMapSettingsPage
     }
 
     /** Keep descriptions within the text column at common UI scales. */
-    private static String wrappedDescription(String id) {
-        String text = description(id);
-        StringBuilder lines = new StringBuilder();
-        int length = 0;
-        for (String word : text.split(" ")) {
-            if (length > 0 && length + 1 + word.length() > 58) {
-                lines.append('\n');
-                length = 0;
-            } else if (length > 0) {
-                lines.append(' ');
-                length++;
-            }
-            lines.append(word);
-            length += word.length();
-        }
-        return lines.toString();
-    }
-
     private boolean isDropdownDisabled(String id, DynamicMinimapSetting settings) {
         return !settings.enabled
                 || (isInfoPanelSetting(id) && !"info_panel".equals(id) && !settings.infoPanelEnabled)
@@ -1244,11 +1233,11 @@ public final class DapperMapSettingsPage
                 new Row("height", "Creature Height Detection", Kind.DROPDOWN),
                 new Row("vrange", "Creature Height Range", Kind.DROPDOWN),
                 new Row("section_3", "INFORMATION", Kind.HEADER),
-                new Row("coordinates", "Coordinate Readout", Kind.DROPDOWN),
-                new Row("clock", "Hytale World Clock", Kind.DROPDOWN),
+                new Row("coordinates", "Coordinates", Kind.DROPDOWN),
+                new Row("compass", "Bearing", Kind.DROPDOWN),
+                new Row("clock", "World Time", Kind.DROPDOWN),
                 new Row("clock_format", "Clock Format", Kind.DROPDOWN),
-                new Row("compass", "Compass Readout", Kind.DROPDOWN),
-                new Row("biome", "Biome Readout", Kind.DROPDOWN),
+                new Row("biome", "Region", Kind.DROPDOWN),
                 new Row("section_4", "HYTALE", Kind.HEADER),
                 new Row("worldmap", "Hytale World Map Markers", Kind.DROPDOWN),
                 new Row("section_5", "BETTERMAP", Kind.HEADER),

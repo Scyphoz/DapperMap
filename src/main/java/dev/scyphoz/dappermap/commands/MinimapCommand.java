@@ -21,7 +21,6 @@ import dev.scyphoz.dappermap.dynamic.MinimapColours.Key;
 import dev.scyphoz.dappermap.integration.BetterMapIntegration;
 import dev.scyphoz.dappermap.pages.DapperMapSettingsPage;
 import dev.scyphoz.dappermap.permissions.DapperMapPermissions;
-import dev.scyphoz.dappermap.pages.DapperMapColoursPage;
 import dev.scyphoz.dappermap.service.MinimapSessionManager;
 import javax.annotation.Nonnull;
 import java.util.Arrays;
@@ -65,6 +64,7 @@ public class MinimapCommand extends AbstractPlayerCommand {
         addNoArg(parent, scope, "on", "Show DapperMap");
         addNoArg(parent, scope, "off", "Hide DapperMap");
         addNoArg(parent, scope, "status", "Show current settings");
+        addNoArg(parent, scope, "help", "List settings commands and accepted values");
         addNoArg(parent, scope, "reset", "Reset settings", "defaults");
         addString(parent, scope, "zoom", "Set zoom", new String[]{"close", "medium", "far"});
         addString(parent, scope, "speed", "Set update speed", new String[]{"very-fast", "fast", "normal", "slow"}, "update");
@@ -72,11 +72,13 @@ public class MinimapCommand extends AbstractPlayerCommand {
         addString(parent, scope, "rotation", "Set rotation", new String[]{"north", "player"}, "rotate");
         addString(parent, scope, "info", "Enable or disable the Info Panel", ON_OFF, "info-panel", "infopanel");
         addString(parent, scope, "panel", "Set Info Panel position", new String[]{"below", "above", "left", "right"});
+        addString(parent, scope, "panel-alignment", "Align Info Panel text left, centre or right", new String[]{"left", "centre", "right"}, "alignment", "text-alignment");
+        addInt(parent, scope, "creature-limit", "Set visible creature markers: 16, 32 or 64", "creature-marker-limit");
         addString(parent, scope, "height", "Toggle creature height detection", ON_OFF, "height-detection");
-        addString(parent, scope, "clock", "Configure clock", new String[]{"on", "off", "12", "24"});
+        addString(parent, scope, "clock", "Configure World Time and Clock Format", new String[]{"on", "off", "12", "24"}, "world-time");
         addString(parent, scope, "coordinates", "Toggle coordinates", ON_OFF, "coords");
-        addString(parent, scope, "compass", "Toggle compass", ON_OFF);
-        addString(parent, scope, "biome", "Toggle biome", ON_OFF);
+        addString(parent, scope, "compass", "Toggle Bearing readout", ON_OFF, "bearing");
+        addString(parent, scope, "biome", "Toggle Region readout", ON_OFF, "region");
         addInt(parent, scope, "size", "Set map size");
         addInt(parent, scope, "scale", "Set interface scale", "interface-scale", "interfacescale");
         addInt(parent, scope, "height-range", "Set creature height range", "heightrange", "vrange");
@@ -113,7 +115,7 @@ public class MinimapCommand extends AbstractPlayerCommand {
                 case "colors":
                     if (value.isEmpty()) {
                         if (!settings.enabled) { context.sendMessage(Message.raw("Enable Minimap before opening Colours.")); return; }
-                        player.getPageManager().openCustomPage(ref, store, new DapperMapColoursPage(playerRef, this.sessions, config));
+                        player.getPageManager().openCustomPage(ref, store, DapperMapSettingsPage.colours(playerRef, this.sessions, config));
                     } else {
                         var result = executeColourCommand(settings, value + (extra.isEmpty() ? "" : " " + extra));
                         if (result.changed()) this.sessions.applySettings(playerRef, settings);
@@ -124,6 +126,19 @@ public class MinimapCommand extends AbstractPlayerCommand {
                 case "menu":
                 case "gui":
                     player.getPageManager().openCustomPage(ref, store, new DapperMapSettingsPage(playerRef, this.sessions, config));
+                    break;
+                case "help":
+                    showHelp(context);
+                    break;
+                case "panel-alignment":
+                    if (!setPanelAlignment(settings, value)) { context.sendMessage(Message.raw("Usage: /mm panel-alignment left|centre|right")); return; }
+                    this.sessions.applySettings(playerRef, settings);
+                    context.sendMessage(Message.raw("DapperMap panel text alignment: " + panelAlignmentName(settings.infoPanelTextAlignment) + "."));
+                    break;
+                case "creature-limit":
+                    if (!setCreatureLimit(settings, value)) { context.sendMessage(Message.raw("Usage: /mm creature-limit 16|32|64")); return; }
+                    this.sessions.applySettings(playerRef, settings);
+                    context.sendMessage(Message.raw("DapperMap visible creature limit: " + settings.creatureMarkerLimit + "."));
                     break;
                 case "on":
                     settings.enabled = true;
@@ -345,7 +360,7 @@ public class MinimapCommand extends AbstractPlayerCommand {
         Player player = store.getComponent(ref, Player.getComponentType());
         String args = arguments == null ? "" : arguments.trim();
         if (args.isEmpty() || args.equalsIgnoreCase("settings") || args.equalsIgnoreCase("menu") || args.equalsIgnoreCase("gui")) {
-            // Opened from the console, so "Save Changes" should close the UI rather than
+            // Opened by an in-game command, so "Save Changes" should close the UI rather than
             // drop the admin into the player settings page.
             this.sessions.setAdminPageOrigin(playerRef.getUuid(), false);
             if (player != null) player.getPageManager().openCustomPage(ref, store,
@@ -360,6 +375,9 @@ public class MinimapCommand extends AbstractPlayerCommand {
         boolean changed = false;
         String usage = null;
         switch (key) {
+            case "help" -> { showHelp(context); context.sendMessage(Message.raw("Admin defaults: use /mm admin <setting> <value> with the same values. Admin permission is required.")); return; }
+            case "panel-alignment" -> { changed=setPanelAlignment(settings,value); usage="admin panel-alignment left|centre|right"; }
+            case "creature-limit" -> { changed=setCreatureLimit(settings,value); usage="admin creature-limit 16|32|64"; }
             case "status" -> { context.sendMessage(Message.raw("DapperMap admin defaults: " + status(settings))); return; }
             case "reset", "defaults" -> { this.sessions.resetAdminDefaults(config); context.sendMessage(Message.raw("DapperMap admin defaults reset to mod defaults.")); return; }
             case "on" -> { settings.enabled = true; changed = true; }
@@ -545,6 +563,33 @@ public class MinimapCommand extends AbstractPlayerCommand {
         }
     }
 
+    /** Shared validation for player commands and server-default commands. */
+    private static boolean setCreatureLimit(DynamicMinimapSetting settings, String value) {
+        try {
+            int limit = Integer.parseInt(value);
+            if (limit != 16 && limit != 32 && limit != 64) return false;
+            settings.creatureMarkerLimit = limit;
+            return true;
+        } catch (NumberFormatException ignored) { return false; }
+    }
+
+    private static boolean setPanelAlignment(DynamicMinimapSetting settings, String value) {
+        switch (value) {
+            case "left": settings.infoPanelTextAlignment = DynamicMinimapSetting.INFO_ALIGN_LEFT; return true;
+            case "centre", "center": settings.infoPanelTextAlignment = DynamicMinimapSetting.INFO_ALIGN_CENTER; return true;
+            case "right": settings.infoPanelTextAlignment = DynamicMinimapSetting.INFO_ALIGN_RIGHT; return true;
+            default: return false;
+        }
+    }
+
+    private static String panelAlignmentName(int value) {
+        return switch (value) {
+            case DynamicMinimapSetting.INFO_ALIGN_CENTER -> "centre";
+            case DynamicMinimapSetting.INFO_ALIGN_RIGHT -> "right";
+            default -> "left";
+        };
+    }
+
     private static String panelPositionName(int value) {
         return switch (value) {
             case DynamicMinimapSetting.INFO_ABOVE -> "above";
@@ -728,6 +773,8 @@ public class MinimapCommand extends AbstractPlayerCommand {
                 + ", position=" + settings.hudPositionX + "," + settings.hudPositionY
                 + ", info-panel=" + (settings.infoPanelEnabled ? "on" : "off")
                 + ", panel=" + panelPositionName(settings.infoPanelPosition)
+                + ", panel-alignment=" + panelAlignmentName(settings.infoPanelTextAlignment)
+                + ", creature-limit=" + settings.creatureMarkerLimit
                 + ", markers[players=" + settings.showOtherPlayers
                 + ", entities=" + settings.showEntities
                 + ", death=" + settings.showDeathMarker
@@ -753,7 +800,8 @@ public class MinimapCommand extends AbstractPlayerCommand {
         context.sendMessage(Message.raw("/mm shape circle|square | /mm rotation north|player"));
         context.sendMessage(Message.raw("/mm speed very-fast|fast|normal|slow"));
         context.sendMessage(Message.raw("/mm position <x 0..100> <y 0..100>"));
-        context.sendMessage(Message.raw("/mm panel below|above|left|right"));
+        context.sendMessage(Message.raw("/mm info on|off | /mm panel below|above|left|right"));
+        context.sendMessage(Message.raw("/mm panel-alignment left|centre|right | /mm creature-limit 16|32|64"));
         context.sendMessage(Message.raw("/mm markers players|entities|death|worldmap on|off"));
         context.sendMessage(Message.raw("/mm height on|off | /mm height-range <4..256>"));
         context.sendMessage(Message.raw("/mm coordinates on|off | /mm clock on|off|12|24"));
@@ -818,7 +866,11 @@ public class MinimapCommand extends AbstractPlayerCommand {
                 // DapperMapPermissions.player(...) registers it against the default player
                 // group via PermissionsModule, not via setPermissionGroups — see that
                 // method's javadoc for why setPermissionGroups was dropped here.
-                this.requirePermission(DapperMapPermissions.player(name.toLowerCase(java.util.Locale.ROOT)));
+                this.requirePermission(DapperMapPermissions.player(switch (name.toLowerCase(java.util.Locale.ROOT)) {
+                    case "panel-alignment" -> "panel";
+                    case "creature-limit" -> "markers";
+                    default -> name.toLowerCase(java.util.Locale.ROOT);
+                }));
             }
             this.firstString = kind == Kind.STRING || kind == Kind.TWO_STRINGS
                     ? this.withRequiredArg("value", "Setting value", ArgTypes.STRING) : null;
@@ -926,7 +978,11 @@ public class MinimapCommand extends AbstractPlayerCommand {
             if (scope == Scope.ADMIN) {
                 this.requirePermission(DapperMapPermissions.ADMIN);
             } else {
-                this.requirePermission(DapperMapPermissions.player(name.toLowerCase(java.util.Locale.ROOT)));
+                this.requirePermission(DapperMapPermissions.player(switch (name.toLowerCase(java.util.Locale.ROOT)) {
+                    case "panel-alignment" -> "panel";
+                    case "creature-limit" -> "markers";
+                    default -> name.toLowerCase(java.util.Locale.ROOT);
+                }));
             }
             this.addAliases(aliases);
             this.arguments = this.withOptionalArg("arguments", "Colour target and value", ArgTypes.GREEDY_STRING);

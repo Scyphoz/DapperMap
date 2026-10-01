@@ -1,0 +1,10 @@
+// Transparent hit target: only the pointer highlight overlays the existing tab.
+Button {
+  Anchor: (Full: 0);
+  Style: (
+    Default: (Background: #000000(0)),
+    Hovered: (Background: PatchStyle(TexturePath: "DapperMapNavigationHover.png", Border: 11)),
+    Pressed: (Background: PatchStyle(TexturePath: "DapperMapNavigationPressed.png", Border: 11)),
+    Disabled: (Background: #000000(0))
+  );
+}

@@ -886,6 +886,10 @@ public final class DynamicMinimapSession {
             if (!this.canRenderHud(renderHud)) return;
             DynamicAssetPublisher.PreparedAsset prepared = DynamicAssetPublisher.prepare(
                     this.terrainAssetPath(renderSettings.textureResolution, this.frameIndex.incrementAndGet()), displayPng);
+            byte[] framePng = DynamicMinimapRenderer.renderNativeHudFrame(renderSettings, renderSettings.sizePixels, mapAngle);
+            if (framePng == null) return;
+            DynamicAssetPublisher.PreparedAsset preparedFrame = DynamicAssetPublisher.prepare(
+                    prepared.path().replace(".png", "-compass.png"), framePng);
             // Hash the stitched map off the world thread as well as rendering its PNG.
             long renderSignature = DynamicMinimapRenderer.terrainSignature(
                     world.getWorldMapManager(), centerX, centerZ, renderSettings, caveView);
@@ -894,7 +898,10 @@ public final class DynamicMinimapSession {
                         || !java.util.Objects.equals(caveView, this.lastCaveView)
                         || sequence <= this.deliveredSequence
                         || this.settings.textureResolution != renderSettings.textureResolution
-                        || this.settings.rotationMode != renderSettings.rotationMode) {
+                        || this.settings.rotationMode != renderSettings.rotationMode
+                        || this.settings.sizePixels != renderSettings.sizePixels
+                        || this.settings.shape != renderSettings.shape
+                        || !this.settings.colours.equals(renderSettings.colours)) {
                     return;
                 }
 
@@ -907,6 +914,7 @@ public final class DynamicMinimapSession {
                     this.terrainPublications.remember(path, publication.hash());
                 }
 
+                if (!renderHud.acceptTerrainFrame(mapAngle, preparedFrame)) return;
                 this.deliveredSequence = sequence;
                 this.rotationSource = source;
                 ++this.terrainGeneration;
@@ -916,7 +924,6 @@ public final class DynamicMinimapSession {
                 this.bufferCenterX = centerX;
                 this.bufferCenterZ = centerZ;
                 this.lastSignature = renderSignature;
-                this.updateRotatingFrame(rotationBucket);
                 this.lastMapRotationBucket = rotationBucket;
                 this.lastRotationDeliveryMs = System.currentTimeMillis();
 
@@ -984,11 +991,19 @@ public final class DynamicMinimapSession {
             if (!this.canRenderHud(renderHud)) return;
             DynamicAssetPublisher.PreparedAsset prepared = DynamicAssetPublisher.prepare(
                     this.terrainAssetPath(renderSettings.textureResolution, this.frameIndex.incrementAndGet()), displayPng);
+            byte[] framePng = DynamicMinimapRenderer.renderNativeHudFrame(renderSettings, renderSettings.sizePixels, mapAngle);
+            if (framePng == null) return;
+            DynamicAssetPublisher.PreparedAsset preparedFrame = DynamicAssetPublisher.prepare(
+                    prepared.path().replace(".png", "-compass.png"), framePng);
             executeWorld(world, "rotation delivery", () -> {
                 if (!this.canRenderHud(renderHud)
                         || generation != this.terrainGeneration
                         || rotationRequest != this.rotationSequence.get()
-                        || this.settings.rotationMode != expectedRotationMode) {
+                        || this.settings.rotationMode != expectedRotationMode
+                        || this.settings.sizePixels != renderSettings.sizePixels
+                        || this.settings.shape != renderSettings.shape
+                        || this.settings.textureResolution != renderSettings.textureResolution
+                        || !this.settings.colours.equals(renderSettings.colours)) {
                     return;
                 }
 
@@ -1001,8 +1016,8 @@ public final class DynamicMinimapSession {
                     this.terrainPublications.remember(path, publication.hash());
                 }
 
+                if (!renderHud.acceptTerrainFrame(mapAngle, preparedFrame)) return;
                 this.displayedTerrainPng = displayPng;
-                this.updateRotatingFrame(rotationBucket);
                 this.lastMapRotationBucket = rotationBucket;
                 this.lastRotationDeliveryMs = System.currentTimeMillis();
 
@@ -1216,6 +1231,8 @@ public final class DynamicMinimapSession {
                         || Math.abs(clamped[1] - visibleZ) > 0.001;
                 double[] stable = this.edgeTracker.update(marker, clamped[0], clamped[1], outside,
                         this.settings.sizePixels, this.settings.shape, size, projectionTime);
+                if (outside) stable = EdgeTracker.clamp(this.settings, stable[0], stable[1], size,
+                        DynamicMinimapRenderer.bucketAngle(Math.max(0, this.lastMapRotationBucket)));
                 markerX = stable[0];
                 markerZ = stable[1];
             } else if (markerX < 0.0D
@@ -1252,7 +1269,8 @@ public final class DynamicMinimapSession {
      * ordinary position markers once the player gets close enough.
      */
     private double[] clampMarkerToVisibleMap(double x, double z, int markerSize) {
-        return EdgeTracker.clamp(this.settings, x, z, markerSize);
+        return EdgeTracker.clamp(this.settings, x, z, markerSize,
+                DynamicMinimapRenderer.bucketAngle(Math.max(0, this.lastMapRotationBucket)));
     }
 
     /**
@@ -1469,43 +1487,33 @@ public final class DynamicMinimapSession {
             return new double[]{x, z};
         }
         static double[] clamp(DynamicMinimapSetting settings, double x, double z, int markerSize) {
-            double mapSize = settings.sizePixels;
-            double center = mapSize / 2.0D;
-            double inset = Math.max(3.0D, markerSize / 2.0D + 2.0D);
-            double dx = x - center;
-            double dz = z - center;
-
-            if (settings.isCircle()) {
-                double radius = Math.max(1.0D, center - inset);
-                double distance = Math.hypot(dx, dz);
-                if (distance <= radius || distance < 0.0001D) {
-                    return new double[]{x, z};
-                }
-
-                double scale = radius / distance;
-                return new double[]{
-                        center + dx * scale,
-                        center + dz * scale
-                };
+            return clamp(settings, x, z, markerSize, 0);
+        }
+        static double[] clamp(DynamicMinimapSetting settings, double x, double z, int markerSize, double angle) {
+            double center = settings.sizePixels / 2.0D;
+            double uiScale = settings.sizePixels / 220.0D;
+            double dx = x-center, dz = z-center, distance = Math.hypot(dx,dz);
+            if(distance < .0001)return new double[]{x,z};
+            dx/=distance;dz/=distance;
+            double perimeter = Math.max(1, center - 11*uiScale - markerSize/2.0D - 1);
+            double radius = Math.min(distance, settings.isCircle() ? perimeter
+                    : perimeter / Math.max(Math.abs(dx),Math.abs(dz)));
+            // Intersect the bearing ray with expanded upright cardinal badge boxes.
+            // Move radially inward so the marker still indicates its true direction.
+            double clearance = 11*uiScale + markerSize/2.0D + 1;
+            for(int i=0;i<4;i++){
+                double bearing = -Math.PI/2 + i*Math.PI/2 + angle;
+                double bx=Math.cos(bearing),bz=Math.sin(bearing);
+                double badgeRadius=(center-27*uiScale)/(settings.isCircle()?1:Math.max(Math.abs(bx),Math.abs(bz)));
+                double lx=bx*badgeRadius,lz=bz*badgeRadius;
+                double enter=Double.NEGATIVE_INFINITY,exit=Double.POSITIVE_INFINITY;
+                if(Math.abs(dx)<1e-9){if(Math.abs(lx)>clearance)continue;}
+                else {double t1=(lx-clearance)/dx,t2=(lx+clearance)/dx;enter=Math.max(enter,Math.min(t1,t2));exit=Math.min(exit,Math.max(t1,t2));}
+                if(Math.abs(dz)<1e-9){if(Math.abs(lz)>clearance)continue;}
+                else {double t1=(lz-clearance)/dz,t2=(lz+clearance)/dz;enter=Math.max(enter,Math.min(t1,t2));exit=Math.min(exit,Math.max(t1,t2));}
+                if(enter<=exit && radius>=enter && radius<=exit)radius=Math.max(0,enter-.5);
             }
-
-            double halfExtent = Math.max(1.0D, center - inset);
-            if (Math.abs(dx) <= halfExtent && Math.abs(dz) <= halfExtent) {
-                return new double[]{x, z};
-            }
-
-            double scaleX = Math.abs(dx) < 0.0001D
-                    ? Double.POSITIVE_INFINITY
-                    : halfExtent / Math.abs(dx);
-            double scaleZ = Math.abs(dz) < 0.0001D
-                    ? Double.POSITIVE_INFINITY
-                    : halfExtent / Math.abs(dz);
-            double scale = Math.min(scaleX, scaleZ);
-
-            return new double[]{
-                    center + dx * scale,
-                    center + dz * scale
-            };
+            return new double[]{center+dx*radius,center+dz*radius};
         }
 
         void clear() { positions.clear(); }

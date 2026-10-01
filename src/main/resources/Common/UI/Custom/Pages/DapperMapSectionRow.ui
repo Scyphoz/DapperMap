@@ -1,3 +1,3 @@
-Group { Anchor: (Height: 30); Padding: (Left: 2, Top: 10);
-  Label #SectionLabel { Style: (FontSize: 8, TextColor: #a99eff, HorizontalAlignment: Start, VerticalAlignment: Center); }
+Group { Anchor: (Height: 40); Padding: (Left: 2, Top: 10);
+  Label #SectionLabel { Style: (FontSize: 16, RenderBold: true, TextColor: #b8aeff, HorizontalAlignment: Start, VerticalAlignment: Center); }
 }

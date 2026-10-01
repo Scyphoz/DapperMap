@@ -13,7 +13,6 @@ import java.awt.GradientPaint;
 import java.awt.Graphics2D;
 import java.awt.RenderingHints;
 import java.awt.geom.AffineTransform;
-import java.awt.geom.Arc2D;
 import java.awt.geom.Ellipse2D;
 import java.awt.geom.Path2D;
 import java.awt.geom.RoundRectangle2D;
@@ -57,6 +56,7 @@ public final class DynamicMinimapRenderer {
         if (size == 11 && !bold && tracking == 0.015F) return HUD_VALUE_FONT;
         return trackedFont(size, bold, tracking);
     }
+    private static final double[][] SQUARE_COMPASS_POINTS = {{0,-1},{1,-1},{1,0},{1,1},{0,1},{-1,1},{-1,0},{-1,-1},{0,-1}};
     private static final Font CARDINAL_FONT = new Font("SansSerif", 1, 15);
     private static final Map<String, byte[]> MASK_CACHE = new ConcurrentHashMap();
     private static final PngCache FRAME_CACHE = new PngCache(256, 8 * 1024 * 1024);
@@ -248,15 +248,13 @@ public final class DynamicMinimapRenderer {
         );
         graphics.setColor(Color.WHITE);
 
+        double inset = textureSize * 11.0D / STATIC_ASSET_LOGICAL_SIZE;
+        double aperture = textureSize - 2 * inset;
         if (settings.isCircle()) {
-            graphics.fill(new Ellipse2D.Double(
-                    0.0,
-                    0.0,
-                    textureSize,
-                    textureSize
-            ));
+            graphics.fill(new Ellipse2D.Double(inset, inset, aperture, aperture));
         } else {
-            graphics.fillRect(0, 0, textureSize, textureSize);
+            double corner = textureSize * 10.0D / STATIC_ASSET_LOGICAL_SIZE;
+            graphics.fill(new RoundRectangle2D.Double(inset, inset, aperture, aperture, corner, corner));
         }
 
         graphics.dispose();
@@ -302,19 +300,7 @@ public final class DynamicMinimapRenderer {
             drawApertureSquareFrame(graphics, logicalSize, colours);
         }
 
-        if (settings.isCircle()) {
-            AffineTransform beforeCompass = graphics.getTransform();
-            double center = (double)logicalSize / 2.0D;
-            graphics.rotate(bucketAngle(bucket), center, center);
-            drawCardinals(graphics, logicalSize, true, colours);
-            graphics.setTransform(beforeCompass);
-        } else {
-            drawSquareCardinalsRotated(
-                    graphics,
-                    logicalSize,
-                    bucketAngle(bucket)
-                    , colours);
-        }
+        drawTexturedCompass(graphics, logicalSize, settings.isCircle(), bucketAngle(bucket), colours);
         graphics.dispose();
 
         byte[] png = toPng(image);
@@ -561,7 +547,7 @@ public final class DynamicMinimapRenderer {
     }
 
     /** Crop to the map and retain the previous logical-size frame pixels. */
-    private static byte[] renderNativeHudFrame(DynamicMinimapSetting settings, int size, double angle) {
+    public static byte[] renderNativeHudFrame(DynamicMinimapSetting settings, int size, double angle) {
         var key = new FrameLayerKey(size, size, size, 0, 0, settings.textureResolution,
                 settings.shape, settings.infoPanelEnabled, rotationBucket(angle), settings.colours.frameKey());
         byte[] cached = OVERLAY_LAYERS.get(key);
@@ -694,8 +680,10 @@ public final class DynamicMinimapRenderer {
                     : Math.max(0, (hud.getHeight() - mapSize) / 2)));
 
             Shape oldClip = g.getClip();
-            if (preview.isCircle()) g.setClip(new Ellipse2D.Double(mapX + 3, mapY + 3, mapSize - 6, mapSize - 6));
-            else g.setClip(new RoundRectangle2D.Double(mapX + 3, mapY + 3, mapSize - 6, mapSize - 6, 8, 8));
+            double apertureInset = mapSize * 11.0D / STATIC_ASSET_LOGICAL_SIZE;
+            double apertureSize = mapSize - 2 * apertureInset;
+            if (preview.isCircle()) g.setClip(new Ellipse2D.Double(mapX + apertureInset, mapY + apertureInset, apertureSize, apertureSize));
+            else g.setClip(new RoundRectangle2D.Double(mapX + apertureInset, mapY + apertureInset, apertureSize, apertureSize, mapSize * 10.0D / STATIC_ASSET_LOGICAL_SIZE, mapSize * 10.0D / STATIC_ASSET_LOGICAL_SIZE));
             BufferedImage terrain = ImageIO.read(new ByteArrayInputStream(snapshot.terrain()));
             if (terrain != null) {
                 double ratio = (double)mapSize / snapshot.mapSize();
@@ -1366,69 +1354,81 @@ public final class DynamicMinimapRenderer {
         }
     }
 
+    /** Logo-style bevel and emissive trim; fixed bezel, independently moving compass. */
     private static void drawApertureCircleFrame(Graphics2D graphics, int size, MinimapColours colours) {
-        int center = size / 2;
-        int outer = size - 5;
-        graphics.setStroke(new BasicStroke(9.0F));
-        graphics.setColor(withAlpha(FIXED_FRAME_SHADOW, 220));
-        graphics.draw(new Ellipse2D.Double((double)2.0F, (double)2.0F, (double)outer, (double)outer));
-        graphics.setStroke(new BasicStroke(2.2F, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
-        graphics.setColor(colours.awt(EDGE, 245));
-        // Four 30-degree gaps are centred exactly on E/N/W/S.
-        for (int start : new int[]{15, 105, 195, 285}) {
-            graphics.draw(new Arc2D.Double(4, 4, size - 9, size - 9, start, 60, Arc2D.OPEN));
-        }
-
-        // Keep the four stronger cardinal survey bars, then add the smaller
-        // sub-compass dashes used by the square frame so the circular frame
-        // has the same intermediate bearing references.
-        graphics.setStroke(new BasicStroke(4.0F, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
-        graphics.setColor(colours.awt(TICKS, 255));
-        for (int i = 0; i < 4; i++) {
-            double angle = -Math.PI / 2D + i * Math.PI / 2D;
-            drawRadialTick(graphics, center, center, size / 2.0D - 5.0D,
-                    size / 2.0D - 17.0D, angle, 4.0F, colours.awt(TICKS, 255));
-        }
-
-        // Three short dashes between each pair of cardinal points (22.5 degree
-        // spacing). This gives the circular aperture the same readable minor
-        // compass graduation as the square style without crowding the rim.
-        for (int i = 0; i < 16; i++) {
-            if (i % 4 == 0) {
-                continue; // Cardinal positions already use the stronger bars above.
-            }
-            double angle = -Math.PI / 2D + i * Math.PI / 8D;
-            drawRadialTick(graphics, center, center, size / 2.0D - 7.0D,
-                    size / 2.0D - 13.0D, angle, 1.4F, colours.awt(TICKS, 225));
-        }
+        drawTexturedBezel(graphics, size, true, colours);
     }
 
     private static void drawApertureSquareFrame(Graphics2D graphics, int size, MinimapColours colours) {
-        graphics.setStroke(new BasicStroke(7.0F));
-        graphics.setColor(withAlpha(FIXED_FRAME_SHADOW, 190));
-        graphics.drawRect(2, 2, size - 5, size - 5);
-        graphics.setStroke(new BasicStroke(1.5F));
-        graphics.setColor(colours.awt(EDGE, 245));
-        graphics.drawRect(4, 4, size - 9, size - 9);
-        int start = 34;
-        int end = size - 34;
+        drawTexturedBezel(graphics, size, false, colours);
+    }
 
-        for(int i = 0; i <= 8; ++i) {
-            int pos = start + (end - start) * i / 8;
-            boolean major = i % 4 == 0;
-            int tick = major ? 16 : 6;
-            graphics.setStroke(new BasicStroke(major ? 1.8F : 1.0F));
-            graphics.setColor(major ? colours.awt(TICKS, 255) : colours.awt(TICKS, 225));
-            graphics.drawLine(pos, 8, pos, 8 + tick);
-            graphics.drawLine(pos, size - 9, pos, size - 9 - tick);
-            graphics.drawLine(8, pos, 8 + tick, pos);
-            graphics.drawLine(size - 9, pos, size - 9 - tick, pos);
+    private static void drawTexturedBezel(Graphics2D g, int size, boolean circle, MinimapColours colours) {
+        Shape rim = circle ? new Ellipse2D.Double(11, 11, size - 22, size - 22)
+                : new RoundRectangle2D.Double(11, 11, size - 22, size - 22, 15, 15);
+        g.setStroke(new BasicStroke(18, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+        g.setColor(new Color(5, 9, 20, 50));g.draw(rim);
+        g.setStroke(new BasicStroke(14));g.setColor(new Color(17, 25, 43, 45));g.draw(rim);
+        g.setStroke(new BasicStroke(10));g.setColor(new Color(8, 13, 28, 50));g.draw(rim);
+        // Restore the full bright band's dark backing without making the inner bevel opaque.
+        g.setStroke(new BasicStroke(8, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+        g.setColor(new Color(5, 9, 20, 230));g.draw(rim);
+        for (int width : new int[]{7, 4, 2}) {
+            g.setStroke(new BasicStroke(width, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+            g.setColor(colours.awt(EDGE, width == 2 ? 255 : width == 4 ? 110 : 30));g.draw(rim);
         }
+    }
 
-        drawCornerBracket(graphics, 8, 8, 1, 1, colours);
-        drawCornerBracket(graphics, size - 9, 8, -1, 1, colours);
-        drawCornerBracket(graphics, 8, size - 9, 1, -1, colours);
-        drawCornerBracket(graphics, size - 9, size - 9, -1, -1, colours);
+    private static void drawTexturedCompass(Graphics2D g, int size, boolean circle, double angle, MinimapColours colours) {
+        double center = size / 2.0D;
+        // Minor divisions sit on the inner rim; major bars project beyond the outer hairline.
+        int divisions = circle ? 32 : 24;
+        int cardinalStep = divisions / 4, diagonalStep = divisions / 8;
+        for (int i = 0; i < divisions; i++) {
+            if(i % cardinalStep == 0)continue;
+            boolean diagonal = i % diagonalStep == 0;
+            double bearing;
+            if (circle) bearing = -Math.PI / 2 + i * Math.PI / 16 + angle;
+            else {
+                // Match the artwork's two evenly spaced small ticks per half-side.
+                double[][] points = SQUARE_COMPASS_POINTS;
+                int segment = i / 3;
+                double fraction = (i % 3) / 3.0D;
+                double x = points[segment][0] + (points[segment+1][0]-points[segment][0])*fraction;
+                double y = points[segment][1] + (points[segment+1][1]-points[segment][1])*fraction;
+                bearing = Math.atan2(y,x) + angle;
+            }
+            double divisor = circle ? 1 : Math.max(Math.abs(Math.cos(bearing)), Math.abs(Math.sin(bearing)));
+            double outer = (center - (diagonal ? 13 : 18)) / divisor;
+            double inner = (center - (diagonal ? 24 : 22)) / divisor;
+            float width = diagonal ? 2.8F : 1.8F;
+            drawRadialTick(g, (int)center, (int)center, outer, inner, bearing, width + 2, colours.awt(TICKS, 40));
+            drawRadialTick(g, (int)center, (int)center, outer, inner, bearing, width, colours.awt(TICKS, 245));
+        }
+        g.setFont(CARDINAL_FONT);
+        String[] labels = {"N", "E", "S", "W"};
+        for (int i = 0; i < 4; i++) {
+            double bearing = -Math.PI / 2 + i * Math.PI / 2 + angle;
+            double dx = Math.cos(bearing), dy = Math.sin(bearing);
+            double divisor = circle ? 1 : Math.max(Math.abs(dx), Math.abs(dy));
+            double radius = (center - 27) / divisor;
+            int x = (int)Math.round(center + dx * radius), y = (int)Math.round(center + dy * radius);
+            // Badge joins the bezel and cuts an inward recess around an upright letter.
+            Shape badge = new RoundRectangle2D.Double(x - 11, y - 11, 22, 22, 6, 6);
+            double join = (center - 10) / divisor;
+            g.setStroke(new BasicStroke(20, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+            g.setColor(new Color(5, 10, 23));
+            g.draw(new java.awt.geom.Line2D.Double(x, y, center + dx * join, center + dy * join));
+            g.fill(badge);
+            g.setStroke(new BasicStroke(.6F));g.setColor(colours.awt(TICKS, 65));g.draw(badge);
+            drawCardinal(g, labels[i], x, y, colours);
+            drawRadialTick(g, (int)center, (int)center, (center - 1.8) / divisor,
+                    (center - 12) / divisor, bearing, 6.5F, new Color(3, 9, 20));
+            drawRadialTick(g, (int)center, (int)center, (center - 2.5) / divisor,
+                    (center - 11.5) / divisor, bearing, 3.6F, colours.awt(TICKS, 255));
+            drawRadialTick(g, (int)center, (int)center, (center - 3) / divisor,
+                    (center - 11) / divisor, bearing, 1.0F, new Color(235, 255, 255, 180));
+        }
     }
 
     private static void drawRadialTick(Graphics2D graphics, int centerX, int centerY, double outerRadius, double innerRadius, double angle, float width, Color color) {
@@ -1439,72 +1439,6 @@ public final class DynamicMinimapRenderer {
         graphics.setStroke(new BasicStroke(width, 1, 1));
         graphics.setColor(color);
         graphics.drawLine(x1, y1, x2, y2);
-    }
-
-    private static void drawCornerBracket(Graphics2D graphics, int x, int y, int xDir, int yDir, MinimapColours colours) {
-        graphics.setStroke(new BasicStroke(2.0F, 1, 1));
-        graphics.setColor(colours.awt(EDGE, 245));
-        graphics.drawLine(x, y, x + xDir * 28, y);
-        graphics.drawLine(x, y, x, y + yDir * 28);
-        graphics.setStroke(new BasicStroke(1.0F, 1, 1));
-        graphics.setColor(colours.awt(TICKS, 225));
-        graphics.drawLine(x + xDir * 7, y + yDir * 7, x + xDir * 18, y + yDir * 7);
-        graphics.drawLine(x + xDir * 7, y + yDir * 7, x + xDir * 7, y + yDir * 18);
-    }
-
-    /**
-     * Rotates square-map cardinal directions while constraining each label to
-     * the square frame perimeter. Rotating the Graphics2D context directly
-     * makes the labels orbit on a circle, which is correct for round maps but
-     * visually wrong for square maps.
-     */
-    private static void drawSquareCardinalsRotated(
-            Graphics2D graphics,
-            int size,
-            double angle
-            , MinimapColours colours) {
-        graphics.setFont(CARDINAL_FONT);
-        double center = (double)size / 2.0D;
-        double radius = center - 15.0D;
-        double cos = Math.cos(angle);
-        double sin = Math.sin(angle);
-
-        drawSquareBorderCardinal(graphics, "N", 0.0D, -1.0D, cos, sin, center, radius, colours);
-        drawSquareBorderCardinal(graphics, "E", 1.0D, 0.0D, cos, sin, center, radius, colours);
-        drawSquareBorderCardinal(graphics, "S", 0.0D, 1.0D, cos, sin, center, radius, colours);
-        drawSquareBorderCardinal(graphics, "W", -1.0D, 0.0D, cos, sin, center, radius, colours);
-    }
-
-    private static void drawSquareBorderCardinal(
-            Graphics2D graphics,
-            String label,
-            double baseX,
-            double baseY,
-            double cos,
-            double sin,
-            double center,
-            double radius
-            , MinimapColours colours) {
-        double x = baseX * cos - baseY * sin;
-        double y = baseX * sin + baseY * cos;
-        double max = Math.max(Math.abs(x), Math.abs(y));
-        if (max < 1.0E-9D) {
-            return;
-        }
-
-        double scale = radius / max;
-        int px = (int)Math.round(center + x * scale);
-        int py = (int)Math.round(center + y * scale);
-        drawCardinal(graphics, label, px, py, colours);
-    }
-
-    private static void drawCardinals(Graphics2D graphics, int size, boolean circle, MinimapColours colours) {
-        graphics.setFont(CARDINAL_FONT);
-        int margin = circle ? 27 : 15;
-        drawCardinal(graphics, "N", size / 2, margin, colours);
-        drawCardinal(graphics, "S", size / 2, size - margin, colours);
-        drawCardinal(graphics, "E", size - margin, size / 2, colours);
-        drawCardinal(graphics, "W", margin, size / 2, colours);
     }
 
     private static void drawCardinal(Graphics2D graphics, String label, int centerX, int centerY, MinimapColours colours) {

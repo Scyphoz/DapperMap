@@ -14,6 +14,8 @@ import java.util.concurrent.ConcurrentHashMap;
 
 /** Owns active player sessions and mediates inheritance/persistence of player and admin settings. */
 public class MinimapSessionManager {
+
+
     private final Map<UUID, DynamicMinimapSetting> settingsByPlayer = new ConcurrentHashMap();
     private final Map<UUID, DynamicMinimapSession> sessionsByPlayer = new ConcurrentHashMap();
     /**

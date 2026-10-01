@@ -22,7 +22,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
     static {
         for (int i = 0; i < MARKER_SLOTS; i++) {
             MARKER_SELECTORS[0][i] = "#WayfinderMmRoot #WayfinderMmClip #WayfinderMmMarkers #WayfinderMmMk" + i;
-            MARKER_SELECTORS[1][i] = "#WayfinderMmRoot #WayfinderMmClip #WayfinderMmEdges #WayfinderMmEdge" + i;
+            MARKER_SELECTORS[1][i] = "#WayfinderMmRoot #WayfinderMmEdges #WayfinderMmEdge" + i;
         }
     }
 
@@ -376,6 +376,24 @@ public final class DynamicMinimapHud extends CustomUIHud {
      * Swaps only the compass/frame asset. Used by player-up rotation mode so the
      * compass markings track the rotated terrain without rebuilding the HUD.
      */
+    /** Publish a pre-rendered frame in the same command batch as its accepted terrain. */
+    public boolean acceptTerrainFrame(double angle, DynamicAssetPublisher.PreparedAsset prepared) {
+        if (!this.overlayWorkAllowed() || prepared == null) return false;
+        String path = this.publishPart(this.framePublications, prepared);
+        if (path == null) return false;
+        this.frameAngle = angle;
+        if (this.overlayRenderQueued) this.overlayDirty = true;
+        ++this.overlayGeneration; // Reject a delayed independent overlay at an older heading.
+        this.framePath = path;
+        UICommandBuilder builder = new UICommandBuilder();
+        if (!path.equals(this.displayedFramePath)) {
+            builder.set("#WayfinderMmRoot #WayfinderMmFrame.AssetPath", path);
+            this.update(false, builder);
+        }
+        this.displayedFramePath = path;
+        return true;
+    }
+
     public void setFrameAngle(double angle) {
         if (this.built && Double.compare(angle, this.frameAngle) != 0) {
             this.frameAngle = angle;
@@ -820,6 +838,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
                 .append(", Top: ").append(this.mapOriginY()).append(", Width: ").append(this.displaySize(this.logicalUiSize))
                 .append(", Height: ").append(this.displaySize(this.logicalUiSize)).append("); AssetPath: \"")
                 .append(this.framePath).append("\"; Visible: true; } ");
+        this.appendEdgeLayer(out);
         out.append("AssetImage #WayfinderMmOverlay { Anchor: (Full: 0); AssetPath: \"")
                 .append(this.overlayPath).append("\"; Visible: true; } ");
         this.appendReadoutLabels(out);
@@ -925,9 +944,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
 
         appendMarkerLayer(out, false);
         out.append("} ");
-        out.append("Group #WayfinderMmEdges { Anchor: (Full: 0); ");
-        appendMarkerLayer(out, true);
-        out.append("} } ");
+        out.append("} ");
 
         out.append("AssetImage #WayfinderMmSelf { Anchor: (Left: ")
                 .append(mapLeft + selfInset)
@@ -947,6 +964,17 @@ public final class DynamicMinimapHud extends CustomUIHud {
      * circle/square mask and nautical frame can be reused at every map size.
      * This avoids introducing a new mask resource during live map-size changes.
      */
+    /** Edge icons sit above the bezel and outside the terrain aperture mask. */
+    private void appendEdgeLayer(StringBuilder out) {
+        int mapLeft = this.mapOriginX(), mapTop = this.mapOriginY();
+        int displayUiSize = this.displaySize(this.logicalUiSize);
+        out.append("Group #WayfinderMmEdges { Anchor: (Left: ").append(mapLeft)
+                .append(", Top: ").append(mapTop).append(", Width: ").append(displayUiSize)
+                .append(", Height: ").append(displayUiSize).append("); ");
+        appendMarkerLayer(out, true);
+        out.append("} ");
+    }
+
     private void appendMarkerLayer(StringBuilder out, boolean fixed) {
         for (int i = 0; i < MARKER_SLOTS; ++i) {
             boolean visible = this.slotFixed[i] == fixed && this.slotVisible[i] && this.slotPath[i] != null;
