@@ -42,19 +42,18 @@ public final class DynamicMinimapHud extends CustomUIHud {
     private record InitialOverlayKey(int size, int shape, int resolution, boolean panel, int position,
                                      int alignment, boolean coords, boolean compass, boolean clock,
                                      boolean biome, MinimapColours colours) {}
-    private static final java.util.concurrent.ConcurrentMap<InitialOverlayKey, DynamicMinimapRenderer.HudOverlayParts> INITIAL_OVERLAYS
+    private static final java.util.concurrent.ConcurrentMap<InitialOverlayKey, DynamicMinimapRenderer.NativeHudParts> INITIAL_OVERLAYS
             = new java.util.concurrent.ConcurrentHashMap<>();
 
-    private static DynamicMinimapRenderer.HudOverlayParts initialOverlay(DynamicMinimapSetting settings) {
+    private static DynamicMinimapRenderer.NativeHudParts initialOverlay(DynamicMinimapSetting settings) {
         InitialOverlayKey key = new InitialOverlayKey(settings.sizePixels, settings.shape,
                 settings.textureResolution, settings.infoPanelEnabled, settings.infoPanelPosition,
                 settings.infoPanelTextAlignment, settings.showCoordinates, settings.showCompass,
                 settings.showClock, settings.showBiome, settings.colours);
         var ready = INITIAL_OVERLAYS.get(key);
         if (ready != null) return ready;
-        var png = DynamicMinimapRenderer.renderHudOverlayParts(settings, settings.sizePixels,
-                READOUT_WIDTH, readoutHeight(settings), readoutGap(settings), 0.0D,
-                "X: ?  Y: ?  Z: ?", "N 0 deg", "Sun 06:00", "Biome: unknown");
+        var png = DynamicMinimapRenderer.renderNativeHudParts(settings, settings.sizePixels,
+                READOUT_WIDTH, readoutHeight(settings), readoutGap(settings), 0.0D);
         if (png != null) {
             if (INITIAL_OVERLAYS.size() >= 16) INITIAL_OVERLAYS.clear();
             INITIAL_OVERLAYS.put(key, png);
@@ -64,6 +63,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
 
     private final PlayerRef ownerRef;
     private final Consumer<Runnable> worldExecute;
+    private final java.util.function.BooleanSupplier renderingAllowed;
     private volatile boolean overlayRenderQueued;
     private volatile boolean overlayDirty;
     private long overlayGeneration;
@@ -71,11 +71,8 @@ public final class DynamicMinimapHud extends CustomUIHud {
     private String displayedOverlayPath;
     private String displayedFramePath;
     private String framePath;
-    private final String[] rowPaths = new String[4], displayedRowPaths = new String[4];
-    private DynamicMinimapRenderer.OverlayRow[] overlayRows;
-    private final DynamicAssetPublisher.ImagePublicationCache[] rowPublications = {
-            new DynamicAssetPublisher.ImagePublicationCache(), new DynamicAssetPublisher.ImagePublicationCache(),
-            new DynamicAssetPublisher.ImagePublicationCache(), new DynamicAssetPublisher.ImagePublicationCache()};
+
+
     private final DynamicAssetPublisher.ImagePublicationCache framePublications = new DynamicAssetPublisher.ImagePublicationCache();
     private final DynamicAssetPublisher.ImagePublicationCache overlayPublications = new DynamicAssetPublisher.ImagePublicationCache();
 
@@ -133,8 +130,6 @@ public final class DynamicMinimapHud extends CustomUIHud {
         this.terrainShown = false;
         this.overlayPublications.clear();
         this.framePublications.clear();
-        for (var cache : this.rowPublications) cache.clear();
-        java.util.Arrays.fill(this.displayedRowPaths, null);
         this.lastOverlaySubmitMs = 0L;
         this.overlayDirty = true;
     }
@@ -189,9 +184,15 @@ public final class DynamicMinimapHud extends CustomUIHud {
 
     public DynamicMinimapHud(PlayerRef playerRef, DynamicMinimapSetting settings,
                              Consumer<Runnable> worldExecute) {
+        this(playerRef, settings, worldExecute, () -> settings.enabled);
+    }
+
+    public DynamicMinimapHud(PlayerRef playerRef, DynamicMinimapSetting settings,
+                             Consumer<Runnable> worldExecute, java.util.function.BooleanSupplier renderingAllowed) {
         super(playerRef, KEY);
         this.ownerRef = playerRef;
         this.worldExecute = worldExecute;
+        this.renderingAllowed = renderingAllowed;
         this.uuid = playerRef.getUuid();
         this.settings = settings.copy();
         this.settings.normalize();
@@ -567,42 +568,51 @@ public final class DynamicMinimapHud extends CustomUIHud {
         int normalized = Math.max(DynamicMinimapSetting.INFO_ALIGN_LEFT,
                 Math.min(DynamicMinimapSetting.INFO_ALIGN_RIGHT, alignment));
 
-        // DynamicMinimapSession and this HUD intentionally share the same settings
-        // instance. By the time the session detects an alignment change, the value in
-        // this.settings has therefore already been updated. Do not short-circuit by
-        // comparing against this.settings here: doing so prevents the live HUD overlay
-        // from being republished even though the Settings preview is correct.
+        if (this.settings.infoPanelTextAlignment == normalized) return;
         this.settings.infoPanelTextAlignment = normalized;
         if (this.built) {
-            this.publishOverlayAsset(true);
+            // Headers are raster artwork; values are native labels. Publish the
+            // matching panel before replacing both in the same layout update.
+            this.publishOverlayAsset(false);
+            this.rebuildPositionLayout();
         }
     }
 
     public void setStatus(String coords, String compass, String clock, String biome) {
-        boolean changed = false;
+        UICommandBuilder builder = null;
         if (coords != null && !coords.equals(this.coordsText)) {
             this.coordsText = coords;
-            changed = true;
+            if (this.built && this.settings.infoPanelEnabled && this.readoutEnabled(0)) {
+                if (builder == null) builder = new UICommandBuilder();
+                builder.set("#WayfinderMmRoot #WayfinderMmReadout0.Text", this.coordsText);
+            }
         }
 
         if (compass != null && !compass.equals(this.compassText)) {
             this.compassText = compass;
-            changed = true;
+            if (this.built && this.settings.infoPanelEnabled && this.readoutEnabled(1)) {
+                if (builder == null) builder = new UICommandBuilder();
+                builder.set("#WayfinderMmRoot #WayfinderMmReadout1.Text", this.compassText);
+            }
         }
 
         if (clock != null && !clock.equals(this.clockText)) {
             this.clockText = clock;
-            changed = true;
+            if (this.built && this.settings.infoPanelEnabled && this.readoutEnabled(2)) {
+                if (builder == null) builder = new UICommandBuilder();
+                builder.set("#WayfinderMmRoot #WayfinderMmReadout2.Text", this.clockText);
+            }
         }
 
         if (biome != null && !biome.equals(this.biomeText)) {
             this.biomeText = biome;
-            changed = true;
+            if (this.built && this.settings.infoPanelEnabled && this.readoutEnabled(3)) {
+                if (builder == null) builder = new UICommandBuilder();
+                builder.set("#WayfinderMmRoot #WayfinderMmReadout3.Text", this.biomeText);
+            }
         }
 
-        if (this.built && changed && this.settings.infoPanelEnabled) {
-            this.publishOverlayAsset(true);
-        }
+        if (builder != null) this.update(false, builder);
     }
 
     /** Invalidate detached HUD work without sending updates to a previous world. */
@@ -750,6 +760,8 @@ public final class DynamicMinimapHud extends CustomUIHud {
         }
 
         this.interfaceScalePercent = normalized;
+        // Marker deltas and rebuilt markup must use the same presentation scale.
+        this.settings.interfaceScalePercent = normalized;
 
         if (this.built) {
             this.rebuildPositionLayout();
@@ -804,20 +816,13 @@ public final class DynamicMinimapHud extends CustomUIHud {
                 .append("); LayoutMode: Full; ");
 
         out.append(this.buildMapMarkup());
-        out.append("AssetImage #WayfinderMmFrame { Anchor: (Full: 0); AssetPath: \"")
+        out.append("AssetImage #WayfinderMmFrame { Anchor: (Left: ").append(this.mapOriginX())
+                .append(", Top: ").append(this.mapOriginY()).append(", Width: ").append(this.displaySize(this.logicalUiSize))
+                .append(", Height: ").append(this.displaySize(this.logicalUiSize)).append("); AssetPath: \"")
                 .append(this.framePath).append("\"; Visible: true; } ");
         out.append("AssetImage #WayfinderMmOverlay { Anchor: (Full: 0); AssetPath: \"")
                 .append(this.overlayPath).append("\"; Visible: true; } ");
-        for (int i = 0; i < 4; i++) {
-            var row = this.overlayRows == null ? null : this.overlayRows[i];
-            boolean visible = row != null && row.height() > 0;
-            out.append("AssetImage #WayfinderMmReadout").append(i)
-                    .append(" { Anchor: (Left: 0, Top: ").append(visible ? this.displayCoordinate(row.top()) : 0)
-                    .append(", Width: ").append(visible ? this.displaySize(row.width()) : 0)
-                    .append(", Height: ").append(visible ? this.displayCoordinate(row.top() + row.height()) - this.displayCoordinate(row.top()) : 0)
-                    .append("); AssetPath: \"").append(this.rowPaths[i] == null ? this.blankPath : this.rowPaths[i])
-                    .append("\"; Visible: ").append(visible).append("; } ");
-        }
+        this.appendReadoutLabels(out);
         out.append("} ");
 
         if (this.hudPositionX < 100) {
@@ -842,6 +847,51 @@ public final class DynamicMinimapHud extends CustomUIHud {
      * Builds the map subtree at the origin determined by the selected
      * information-panel side.
      */
+    private boolean readoutEnabled(int row) {
+        return switch (row) { case 0 -> this.settings.showCoordinates; case 1 -> this.settings.showCompass;
+            case 2 -> this.settings.showClock; default -> this.settings.showBiome; };
+    }
+
+    private void appendReadoutLabels(StringBuilder out) {
+        if (!this.settings.infoPanelEnabled) return;
+        int position = this.settings.infoPanelPosition;
+        boolean side = position == DynamicMinimapSetting.INFO_LEFT || position == DynamicMinimapSetting.INFO_RIGHT;
+        int panelX = position == DynamicMinimapSetting.INFO_RIGHT ? this.logicalUiSize + this.readoutGap()
+                : side ? 0 : Math.max(0, (this.logicalUiSize - READOUT_WIDTH) / 2);
+        int panelY = position == DynamicMinimapSetting.INFO_BELOW ? this.logicalUiSize + this.readoutGap()
+                : position == DynamicMinimapSetting.INFO_ABOVE ? 0 : Math.max(0, (this.logicalUiSize - this.readoutHeight()) / 2);
+        String[] values = {this.coordsText, this.compassText, this.clockText, this.biomeText};
+        MinimapColours.Key[] colours = {COORDS_TEXT, COMPASS_TEXT, CLOCK_TEXT, BIOME_TEXT};
+        String alignment = switch (this.settings.infoPanelTextAlignment) { case 1 -> "Center"; case 2 -> "End"; default -> "Start"; };
+        int cursor = panelY + 30;
+        for (int i = 0; i < 4; i++) {
+            if (!this.readoutEnabled(i)) continue;
+            int curve = this.settings.isCircle() && side ? (i == 0 || i == 3 ? 12 : 22) : 0;
+            int left = 8 + (position == DynamicMinimapSetting.INFO_RIGHT ? curve : 0);
+            int right = 8 + (position == DynamicMinimapSetting.INFO_LEFT ? curve : 0);
+            out.append("Label #WayfinderMmReadout").append(i).append(" { Anchor: (Left: ")
+                    .append(this.displayCoordinate(panelX + left)).append(", Top: ")
+                    .append(this.displayCoordinate(cursor + 19)).append(", Width: ")
+                    .append(this.displaySize(READOUT_WIDTH - left - right)).append(", Height: ")
+                    .append(this.displayCoordinate(cursor + 38) - this.displayCoordinate(cursor + 19))
+                    .append("); Text: \"").append(escapeUiText(values[i]))
+                    .append("\"; Style: (FontSize: ").append(this.displaySize(11)).append(", TextColor: ")
+                    .append(this.settings.colours.hex(colours[i])).append(", HorizontalAlignment: ")
+                    .append(alignment).append(", VerticalAlignment: Center); } ");
+            cursor += 43;
+        }
+    }
+
+    private static String escapeUiText(String value) {
+        StringBuilder escaped = new StringBuilder(value.length());
+        for (int i = 0; i < value.length(); i++) {
+            char c = value.charAt(i);
+            if (c == '\\' || c == '"') escaped.append('\\');
+            escaped.append(c < 32 ? ' ' : c);
+        }
+        return escaped.toString();
+    }
+
     private String buildMapMarkup() {
         int displayUiSize = this.displaySize(this.logicalUiSize);
         int displayBuffer = this.displaySize(this.bufferPixels);
@@ -923,7 +973,6 @@ public final class DynamicMinimapHud extends CustomUIHud {
                 + this.settings.colours.hex(PANEL).substring(1)
                 + "-v" + (this.overlayRevision & 15) + ".png";
         this.framePath = this.overlayPath.replace("-v", "-frame-v");
-        for (int i = 0; i < 4; i++) this.rowPaths[i] = this.overlayPath.replace("-v", "-row" + i + "-v");
     }
 
     private void publishOverlayAsset(boolean updateClient) {
@@ -941,17 +990,10 @@ public final class DynamicMinimapHud extends CustomUIHud {
         boolean initial = this.frameAngle == 0.0D
                 && "X: ?  Y: ?  Z: ?".equals(this.coordsText) && "N 0 deg".equals(this.compassText)
                 && "Sun 06:00".equals(this.clockText) && "Biome: unknown".equals(this.biomeText);
-        var overlay = initial ? initialOverlay(this.settings) : DynamicMinimapRenderer.renderHudOverlayParts(
+        var overlay = initial ? initialOverlay(this.settings) : DynamicMinimapRenderer.renderNativeHudParts(
                 this.settings, this.logicalUiSize, READOUT_WIDTH,
-                this.readoutHeight(), this.readoutGap(), this.frameAngle,
-                this.coordsText, this.compassText, this.clockText, this.biomeText);
+                this.readoutHeight(), this.readoutGap(), this.frameAngle);
         if (overlay == null) return;
-        this.overlayRows = overlay.rows();
-        for (int i = 0; i < 4; i++) {
-            var prepared = DynamicAssetPublisher.prepare(this.rowPaths[i], overlay.rows()[i].png());
-            String published = publishPart(this.rowPublications[i], prepared);
-            if (published != null) this.displayedRowPaths[i] = this.rowPaths[i] = published;
-        }
         var readout = DynamicAssetPublisher.prepare(this.overlayPath, overlay.readout());
         var frame = DynamicAssetPublisher.prepare(this.framePath, overlay.frame());
         String readoutPath = publishPart(this.overlayPublications, readout);
@@ -971,9 +1013,9 @@ public final class DynamicMinimapHud extends CustomUIHud {
         return publication.path();
     }
 
-    /** Render frequent compass and readout changes outside the world tick. */
+    /** Render frame changes outside the world tick; native readouts use text deltas. */
     private void queueOverlayRender() {
-        if (!this.overlayDirty || this.overlayRenderQueued || !this.built) return;
+        if (!this.overlayDirty || this.overlayRenderQueued || !this.built || !this.renderingAllowed.getAsBoolean()) return;
         long now = System.currentTimeMillis();
         if (now - this.lastOverlaySubmitMs < this.overlayIntervalMs()) return;
         this.overlayDirty = false;
@@ -982,31 +1024,24 @@ public final class DynamicMinimapHud extends CustomUIHud {
         this.updateStaticAssetPaths();
         String path = this.overlayPath;
         String framePath = this.framePath;
-        String[] rowPaths = this.rowPaths.clone();
         long generation = ++this.overlayGeneration;
         DynamicMinimapSetting snapshot = this.settings.copy();
         int mapSize = this.logicalUiSize;
         int panelHeight = this.readoutHeight();
         int gap = this.readoutGap();
         double angle = this.frameAngle;
-        String coords = this.coordsText;
-        String compass = this.compassText;
-        String clock = this.clockText;
-        String biome = this.biomeText;
         if (!DynamicMinimapSession.renderAsync(() -> {
             try {
-                if (!this.built) return;
-                var image = DynamicMinimapRenderer.renderHudOverlayParts(
-                        snapshot, mapSize, READOUT_WIDTH, panelHeight, gap, angle,
-                        coords, compass, clock, biome);
+                if (!this.overlayWorkAllowed()) return;
+                var image = DynamicMinimapRenderer.renderNativeHudParts(
+                        snapshot, mapSize, READOUT_WIDTH, panelHeight, gap, angle);
                 var prepared = image == null ? null : DynamicAssetPublisher.prepare(path, image.readout());
                 var preparedFrame = image == null ? null : DynamicAssetPublisher.prepare(framePath, image.frame());
-                var preparedRows = new DynamicAssetPublisher.PreparedAsset[4];
-                if (image != null) for (int i = 0; i < 4; i++)
-                    preparedRows[i] = DynamicAssetPublisher.prepare(rowPaths[i], image.rows()[i].png());
+                if (!this.overlayWorkAllowed()) return;
                 this.worldExecute.accept(() -> {
                     this.overlayRenderQueued = false;
-                    if (this.built && generation == this.overlayGeneration && prepared != null) {
+                    if (!this.overlayWorkAllowed()) return;
+                    if (generation == this.overlayGeneration && prepared != null) {
                         String publishedPath = this.publishPart(this.overlayPublications, prepared);
                         String publishedFrame = this.publishPart(this.framePublications, preparedFrame);
                         UICommandBuilder builder = new UICommandBuilder();
@@ -1027,17 +1062,6 @@ public final class DynamicMinimapHud extends CustomUIHud {
                             }
                             this.displayedFramePath = publishedFrame;
                         }
-                        for (int i = 0; i < 4; i++) {
-                            String published = this.publishPart(this.rowPublications[i], preparedRows[i]);
-                            if (published != null) {
-                                this.rowPaths[i] = published;
-                                if (!published.equals(this.displayedRowPaths[i])) {
-                                    builder.set("#WayfinderMmRoot #WayfinderMmReadout" + i + ".AssetPath", published);
-                                    changed = true;
-                                }
-                                this.displayedRowPaths[i] = published;
-                            }
-                        }
                         if (changed) this.update(false, builder);
                     }
                     // The normal tick admits the next dirty overlay after this callback exits.
@@ -1053,6 +1077,13 @@ public final class DynamicMinimapHud extends CustomUIHud {
         } else {
             this.lastOverlaySubmitMs = now;
         }
+    }
+
+    private boolean overlayWorkAllowed() {
+        if (this.built && this.renderingAllowed.getAsBoolean()) return true;
+        this.overlayDirty = this.built;
+        this.overlayRenderQueued = false;
+        return false;
     }
 
     private String maskFileFor(DynamicMinimapSetting maskSettings) {

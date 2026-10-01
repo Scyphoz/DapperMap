@@ -22,7 +22,7 @@ public final class DynamicMinimapSetting {
     public static final int INFO_ALIGN_CENTER = 1;
     public static final int INFO_ALIGN_RIGHT = 2;
     public volatile MinimapColours colours = MinimapColours.defaults();
-    public boolean enabled = true;
+    public volatile boolean enabled = true;
     public int rotationMode = 0;
     public int zoomBlocks = 96;
     /** Logical Hytale UI size of the minimap viewport. */
