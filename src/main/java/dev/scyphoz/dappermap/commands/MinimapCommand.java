@@ -21,6 +21,7 @@ import dev.scyphoz.dappermap.dynamic.MinimapColours.Key;
 import dev.scyphoz.dappermap.integration.BetterMapIntegration;
 import dev.scyphoz.dappermap.pages.DapperMapSettingsPage;
 import dev.scyphoz.dappermap.permissions.DapperMapPermissions;
+import dev.scyphoz.dappermap.permissions.SettingPermissions;
 import dev.scyphoz.dappermap.service.MinimapSessionManager;
 import javax.annotation.Nonnull;
 import java.util.Arrays;
@@ -271,9 +272,19 @@ public class MinimapCommand extends AbstractPlayerCommand {
                     break;
                 case "reset":
                 case "defaults":
-                    DynamicMinimapSetting defaults = DynamicMinimapSetting.fromConfig(config);
-                    this.sessions.applySettings(playerRef, defaults);
-                    context.sendMessage(Message.raw("DapperMap settings reset to defaults."));
+                    // Same behaviour as the settings page's Reset: return to the current server
+                    // defaults. With every setting permission the personal override is removed,
+                    // so future admin-default changes apply again; otherwise only permitted
+                    // settings are reset and the rest are kept.
+                    var allowed = SettingPermissions.forPlayer(playerRef);
+                    if (SettingPermissions.hasAll(allowed)) {
+                        this.sessions.resetSettings(playerRef, config);
+                    } else {
+                        DynamicMinimapSetting live = settings.copy();
+                        this.sessions.applySettings(playerRef,
+                                SettingPermissions.merge(allowed, live, this.sessions.getAdminDefaults(config)));
+                    }
+                    context.sendMessage(Message.raw("DapperMap settings reset to the server defaults."));
                     break;
                 case "markers":
                 case "blips":

@@ -7,10 +7,7 @@ import com.hypixel.hytale.server.core.universe.world.World;
 import com.hypixel.hytale.server.core.entity.entities.Player;
 import com.hypixel.hytale.server.core.plugin.PluginBase;
 import com.hypixel.hytale.server.core.plugin.PluginManager;
-import com.hypixel.hytale.server.core.universe.world.worldmap.markers.user.UserMapMarker;
 import dev.scyphoz.dappermap.dynamic.DynamicAssetPublisher;
-import dev.scyphoz.dappermap.dynamic.DynamicMinimapMarker;
-import com.hypixel.hytale.server.core.universe.PlayerRef;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.ByteArrayInputStream;
@@ -18,9 +15,6 @@ import java.io.ByteArrayOutputStream;
 import java.awt.image.BufferedImage;
 import javax.imageio.ImageIO;
 import java.lang.reflect.Method;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
 import java.util.Map;
 import java.util.LinkedHashMap;
 import java.util.function.LongSupplier;
@@ -42,12 +36,10 @@ public final class BetterMapIntegration {
             new PluginIdentifier("dev.ninesliced", "BetterMap");
     private static final String WAYPOINT_MANAGER = "dev.ninesliced.managers.WaypointManager";
     private static final String ICON_RESOURCE_PREFIX = "Common/UI/Custom/Common/";
-    private static final int MARKER_SIZE = 20;
 
     private static volatile ClassLoader resolvedLoader;
     private static volatile Method getUserMarkers;
     private static final Map<String, byte[]> ICON_BYTES = new ConcurrentHashMap<>();
-    private static final Map<String, byte[]> TINTED_ICON_BYTES = new ConcurrentHashMap<>();
 
     private BetterMapIntegration() {
     }
@@ -57,111 +49,41 @@ public final class BetterMapIntegration {
         return resolve() != null;
     }
 
-    /** Reads the player's markers; null means the scan failed and the last snapshot should be kept. */
-    public static List<DynamicMinimapMarker> getMarkers(Player player) {
-        if (player == null) return null;
-
-        Method method = resolve();
-        if (method == null) return null;
-
-        try {
-            Object value = method.invoke(null, player);
-            if (!(value instanceof List<?> source)) return null;
-            if (source.isEmpty()) return Collections.emptyList();
-
-            List<DynamicMinimapMarker> result = new ArrayList<>(source.size());
-            for (Object item : source) {
-                if (!(item instanceof UserMapMarker marker)) {
-                    continue;
-                }
-
-                String icon = sanitizeIcon(marker.getIcon());
-                if (icon == null) {
-                    continue;
-                }
-
-                java.awt.Color tint = toAwtColor(marker.getColorTint());
-                result.add(DynamicMinimapMarker.betterMap(
-                        marker.getX(),
-                        marker.getZ(),
-                        icon,
-                        tint,
-                        MARKER_SIZE
-                ));
-            }
-            return result;
-        } catch (ReflectiveOperationException | RuntimeException | LinkageError ignored) {
-            return null;
-        }
-    }
-
     /**
-     * Resolves one of BetterMap's icon resources through BetterMap's own class
-     * loader and republishes the original bytes as a DapperMap dynamic asset.
-     * This avoids bundling/copying BetterMap artwork into DapperMap while also
-     * avoiding cross-plugin UI asset namespace resolution, which Hytale does
-     * not perform for DapperMap's dynamically-created HUD elements.
+     * Prepares a BetterMap waypoint icon as a DapperMap dynamic asset. BetterMap's own icon
+     * resources are read through its plugin class loader (no artwork is bundled with
+     * DapperMap); Hytale's common marker assets are the fallback for waypoints using
+     * Hytale's own icon names. Waypoints themselves are collected by
+     * NativeWorldMapIntegration from BetterMap's world-map provider. Off the world thread.
      */
-    public static String resolveIconAsset(PlayerRef playerRef, String icon, java.awt.Color tint, String playerSlug) {
-        DynamicAssetPublisher.PreparedAsset prepared = prepareIconAsset(icon, tint, playerSlug);
-        return DynamicAssetPublisher.deliver(playerRef, prepared) ? prepared.path() : null;
-    }
-
     public static DynamicAssetPublisher.PreparedAsset prepareIconAsset(
             String icon, java.awt.Color tint, String playerSlug) {
-        if (playerSlug == null || playerSlug.isBlank()) return null;
+        String image = NativeWorldMapIntegration.markerImage(icon);
+        if (playerSlug == null || playerSlug.isBlank() || image == null) return null;
+        String filename = NativeWorldMapIntegration.fileName(image);
+        byte[] bytes = loaderIcon(filename);
+        if (bytes == null) bytes = NativeWorldMapIntegration.registryIcon(image);
+        if (bytes == null) { NativeWorldMapIntegration.reportMissing(image); return null; }
+        return NativeWorldMapIntegration.publishTinted("bettermap-", filename, bytes, tint, playerSlug);
+    }
 
-        String filename = sanitizeIcon(icon);
-        if (filename == null) {
-            return null;
-        }
-
-        Method resolved = resolve();
+    /** Raw bytes of one of BetterMap's bundled icons, or null when unavailable. */
+    static byte[] loaderIcon(String filename) {
+        if (filename == null || resolve() == null) return null;
         ClassLoader loader = resolvedLoader;
-        if (resolved == null || loader == null) {
+        if (loader == null) return null;
+        byte[] bytes = ICON_BYTES.get(filename);
+        if (bytes != null) return bytes;
+        try (InputStream stream = loader.getResourceAsStream(ICON_RESOURCE_PREFIX + filename)) {
+            if (stream == null) return null;
+            bytes = stream.readAllBytes();
+            if (bytes.length == 0) return null;
+            if (ICON_BYTES.size() >= 256) ICON_BYTES.clear();
+            ICON_BYTES.put(filename, bytes);
+            return bytes;
+        } catch (IOException | RuntimeException ignored) {
             return null;
         }
-
-        byte[] bytes = ICON_BYTES.get(filename);
-        if (bytes == null) {
-            String resourcePath = ICON_RESOURCE_PREFIX + filename;
-            try (InputStream stream = loader.getResourceAsStream(resourcePath)) {
-                if (stream == null) {
-                    return null;
-                }
-                bytes = stream.readAllBytes();
-                if (bytes.length == 0) {
-                    return null;
-                }
-                if (ICON_BYTES.size() >= 256) ICON_BYTES.clear();
-                ICON_BYTES.put(filename, bytes);
-            } catch (IOException | RuntimeException ignored) {
-                return null;
-            }
-        }
-
-        int rgb = tint != null ? tint.getRGB() & 0xFFFFFF : 0xFFFFFF;
-        String tintKey = filename + "#" + String.format("%06X", rgb);
-        byte[] publishedBytes = bytes;
-
-        // BetterMap's source icons are designed to be UI-tinted. Replicate that
-        // behaviour for DapperMap's dynamic image assets by multiplying each
-        // source RGB channel by the marker tint while preserving alpha.
-        if (rgb != 0xFFFFFF) {
-            publishedBytes = TINTED_ICON_BYTES.get(tintKey);
-            if (publishedBytes == null) {
-                publishedBytes = tintPng(bytes, rgb);
-                if (publishedBytes == null || publishedBytes.length == 0) {
-                    return null;
-                }
-                if (TINTED_ICON_BYTES.size() >= 256) TINTED_ICON_BYTES.clear();
-                TINTED_ICON_BYTES.put(tintKey, publishedBytes);
-            }
-        }
-
-        String path = "UI/DapperMap/bettermap-" + playerSlug + "-"
-                + stripExtension(filename) + "-" + String.format("%06X", rgb) + ".png";
-        return DynamicAssetPublisher.prepare(path, publishedBytes);
     }
 
     private static Method resolve() {
@@ -205,21 +127,9 @@ public final class BetterMapIntegration {
     private static void clearResolved() {
         if (resolvedLoader != null) {
             ICON_BYTES.clear();
-            TINTED_ICON_BYTES.clear();
         }
         resolvedLoader = null;
         getUserMarkers = null;
-    }
-
-    private static java.awt.Color toAwtColor(com.hypixel.hytale.protocol.Color color) {
-        if (color == null) {
-            return java.awt.Color.WHITE;
-        }
-        return new java.awt.Color(
-                Byte.toUnsignedInt(color.red),
-                Byte.toUnsignedInt(color.green),
-                Byte.toUnsignedInt(color.blue)
-        );
     }
 
     static byte[] tintPng(byte[] source, int rgb) {
@@ -265,31 +175,6 @@ public final class BetterMapIntegration {
         } catch (IOException | RuntimeException ignored) {
             return null;
         }
-    }
-
-    private static String stripExtension(String filename) {
-        int dot = filename.lastIndexOf('.');
-        return dot > 0 ? filename.substring(0, dot) : filename;
-    }
-
-    private static String sanitizeIcon(String icon) {
-        if (icon == null || icon.isBlank()) {
-            return null;
-        }
-
-        // BetterMap 1.3.8 stores simple names such as UserA.png. Restrict the
-        // value to a filename so a malformed/custom marker cannot escape the
-        // expected shared UI asset path.
-        String normalized = icon.replace('\\', '/');
-        int slash = normalized.lastIndexOf('/');
-        if (slash >= 0) {
-            normalized = normalized.substring(slash + 1);
-        }
-
-        if (normalized.isBlank() || normalized.contains("..")) {
-            return null;
-        }
-        return normalized;
     }
 
     private static final BoundedImageRequests<Key, MapImage> IMAGES =

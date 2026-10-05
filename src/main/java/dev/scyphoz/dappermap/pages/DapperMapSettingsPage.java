@@ -2,6 +2,7 @@ package dev.scyphoz.dappermap.pages;
 
 import com.hypixel.hytale.server.core.permissions.PermissionQuery;
 import dev.scyphoz.dappermap.permissions.DapperMapPermissions;
+import dev.scyphoz.dappermap.permissions.SettingPermissions;
 import com.hypixel.hytale.codec.Codec;
 import com.hypixel.hytale.codec.KeyedCodec;
 import com.hypixel.hytale.codec.builder.BuilderCodec;
@@ -57,12 +58,6 @@ public final class DapperMapSettingsPage
     );
 
     private static final Row[] ROWS;
-    private static final List<String> PLAYER_SETTING_PERMISSIONS = List.of(
-            "toggle", "zoom", "size", "scale", "shape", "rotation", "speed", "resolution",
-            "panel", "markers", "height", "height-range", "coordinates", "clock", "compass",
-            "biome", "integration", "colours", "position"
-    );
-
     private final PlayerRef playerRef;
     private final MinimapSessionManager sessions;
     private final MinimapConfig config;
@@ -465,58 +460,19 @@ public final class DapperMapSettingsPage
     }
 
     private boolean hasAllSettingPermissions() {
-        return this.adminMode || PLAYER_SETTING_PERMISSIONS.stream().allMatch(this::hasSettingPermission);
+        return this.adminMode || SettingPermissions.hasAll(this::hasSettingPermission);
     }
 
     /**
      * Copies only values that the player may edit. This is the authoritative server-side
      * guard for Apply/Reset; disabled controls and missing event bindings are presentation.
+     * Shared with the /dappermap commands through {@link SettingPermissions}.
      */
     private DynamicMinimapSetting mergePermittedSettings(
             DynamicMinimapSetting target,
             DynamicMinimapSetting source
     ) {
-        if (this.hasSettingPermission("toggle")) target.enabled = source.enabled;
-        if (this.hasSettingPermission("zoom")) target.zoomBlocks = source.zoomBlocks;
-        if (this.hasSettingPermission("size")) target.sizePixels = source.sizePixels;
-        if (this.hasSettingPermission("scale")) target.interfaceScalePercent = source.interfaceScalePercent;
-        if (this.hasSettingPermission("shape")) target.shape = source.shape;
-        if (this.hasSettingPermission("rotation")) target.rotationMode = source.rotationMode;
-        if (this.hasSettingPermission("speed")) target.updateSpeed = source.updateSpeed;
-        if (this.hasSettingPermission("resolution")) target.textureResolution = source.textureResolution;
-        if (this.hasSettingPermission("info")) target.infoPanelEnabled = source.infoPanelEnabled;
-        if (this.hasSettingPermission("panel")) {
-            target.infoPanelPosition = source.infoPanelPosition;
-            target.infoPanelTextAlignment = source.infoPanelTextAlignment;
-        }
-        if (this.hasSettingPermission("markers")) {
-            target.showOtherPlayers = source.showOtherPlayers;
-            target.showEntities = source.showEntities;
-            target.creatureMarkerLimit = source.creatureMarkerLimit;
-            target.showDeathMarker = source.showDeathMarker;
-        }
-        if (this.hasSettingPermission("height")) target.limitMobHeight = source.limitMobHeight;
-        if (this.hasSettingPermission("height-range")) target.mobVerticalRange = source.mobVerticalRange;
-        if (this.hasSettingPermission("position")) {
-            target.hudPositionX = source.hudPositionX;
-            target.hudPositionY = source.hudPositionY;
-        }
-        if (this.hasSettingPermission("clock")) {
-            target.showClock = source.showClock;
-            target.clock24Hour = source.clock24Hour;
-        }
-        if (this.hasSettingPermission("coordinates")) target.showCoordinates = source.showCoordinates;
-        if (this.hasSettingPermission("compass")) target.showCompass = source.showCompass;
-        if (this.hasSettingPermission("biome")) target.showBiome = source.showBiome;
-        if (this.hasSettingPermission("integration")) {
-            target.showWorldMapMarkers = source.showWorldMapMarkers;
-            target.betterMapEnabled = source.betterMapEnabled;
-            target.betterMapMarkersEnabled = source.betterMapMarkersEnabled;
-            target.betterMapCaveModeEnabled = source.betterMapCaveModeEnabled;
-        }
-        if (this.hasSettingPermission("colours")) target.colours = source.colours;
-        target.normalize();
-        return target;
+        return SettingPermissions.merge(this::hasSettingPermission, target, source);
     }
 
     private void renderList(
@@ -982,7 +938,7 @@ public final class DapperMapSettingsPage
             case "bettermap" -> BetterMapIntegration.isAvailable()
                     ? "Enable BetterMap waypoints and cave terrain. Surface maps use shared Hytale images."
                     : "BetterMap is not installed or could not be detected.";
-            case "bettermap_markers" -> "Show BetterMap waypoints and icons on the minimap edge.";
+            case "bettermap_markers" -> "Show waypoints with BetterMap icons. When off, they appear with Hytale map markers.";
             case "bettermap_caves" -> "Show BetterMap's cave terrain while underground.";
             case "texture_resolution" -> "Choose the resolution used to render minimap textures.";
             default -> "";

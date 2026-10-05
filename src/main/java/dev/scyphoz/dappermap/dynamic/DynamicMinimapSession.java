@@ -8,7 +8,7 @@ import com.hypixel.hytale.server.core.entity.entities.Player;
 import com.hypixel.hytale.server.core.modules.entity.component.TransformComponent;
 import com.hypixel.hytale.server.core.modules.entitystats.EntityStatMap;
 import com.hypixel.hytale.server.core.modules.entitystats.EntityStatValue;
-import com.hypixel.hytale.server.core.modules.entitystats.asset.EntityStatType;
+import com.hypixel.hytale.server.core.modules.entitystats.asset.DefaultEntityStatTypes;
 import com.hypixel.hytale.server.core.modules.time.TimeModule;
 import com.hypixel.hytale.server.core.modules.time.WorldTimeResource;
 import com.hypixel.hytale.server.core.universe.PlayerRef;
@@ -181,6 +181,8 @@ public final class DynamicMinimapSession {
     private long lastSignatureMs = 0L;
     private boolean signatureChangedPending = false;
     private BetterMapIntegration.CaveView lastCaveView;
+    private long lastCaveCheckMs = 0L;
+    private static final long CAVE_CHECK_MS = 500L;
     private long lastMarkerMs = 0L;
     private MinimapColours renderedColours;
     private List<DynamicMinimapMarker> cachedMarkers = new ArrayList<>();
@@ -191,11 +193,15 @@ public final class DynamicMinimapSession {
     private final java.util.concurrent.ConcurrentMap<MarkerAssetKey, DynamicAssetPublisher.PreparedAsset> preparedMarkerAssets = new java.util.concurrent.ConcurrentHashMap<>();
     private final java.util.concurrent.ConcurrentMap<MarkerAssetKey, Boolean> markerAssetsPending = new java.util.concurrent.ConcurrentHashMap<>();
     private volatile long markerAssetGeneration;
+    /** Icons whose preparation failed, with the failure time, to avoid retry storms. */
+    private final java.util.concurrent.ConcurrentMap<MarkerAssetKey, Long> failedMarkerAssets = new java.util.concurrent.ConcurrentHashMap<>();
+    private static final long FAILED_ICON_RETRY_MS = 30000L;
 
     private void invalidateMarkerAssets() {
         ++this.markerAssetGeneration;
         this.markerAssets.clear();
         this.preparedMarkerAssets.clear();
+        this.failedMarkerAssets.clear(); // New generation (teleport/colours): allow a fresh attempt.
         // Pending jobs finish naturally; their generation check rejects stale results.
     }
 
@@ -216,6 +222,14 @@ public final class DynamicMinimapSession {
             this.markerAssets.put(key, prepared.path());
             this.preparedMarkerAssets.remove(key, prepared);
             return prepared.path();
+        }
+        // An icon that could not be prepared (missing or unreadable source) is not retried
+        // on every projection; it is retried after a back-off or a new asset generation.
+        Long failedAt = this.failedMarkerAssets.get(key);
+        long nowMs = System.currentTimeMillis();
+        if (failedAt != null) {
+            if (nowMs - failedAt < FAILED_ICON_RETRY_MS) return null;
+            this.failedMarkerAssets.remove(key, failedAt);
         }
         if (this.markerAssetsPending.size() >= 16
                 || this.markerAssetsPending.putIfAbsent(key, Boolean.TRUE) != null) return null;
@@ -241,20 +255,24 @@ public final class DynamicMinimapSession {
                         asset = DynamicAssetPublisher.prepare(path, png);
                     }
                 }
-                if (asset != null && this.canRenderHud(targetHud) && generation == this.markerAssetGeneration
-                        && sourceWorld == currentWorld()) {
-                    if (this.preparedMarkerAssets.size() >= 256) this.preparedMarkerAssets.clear();
-                    this.preparedMarkerAssets.put(key, asset);
+                if (!this.canRenderHud(targetHud) || generation != this.markerAssetGeneration
+                        || sourceWorld != currentWorld()) return;
+                if (asset == null) {
+                    // Remember the failure for this generation instead of re-queuing it each tick.
+                    if (this.failedMarkerAssets.size() >= 256) this.failedMarkerAssets.clear();
+                    this.failedMarkerAssets.put(key, System.currentTimeMillis());
+                    return;
                 }
+                if (this.preparedMarkerAssets.size() >= 256) this.preparedMarkerAssets.clear();
+                this.preparedMarkerAssets.put(key, asset);
             } finally { this.markerAssetsPending.remove(key); }
         })) this.markerAssetsPending.remove(key);
         return null;
     }
-    private List<DynamicMinimapMarker> cachedBetterMapMarkers = new ArrayList<>();
     private List<DynamicMinimapMarker> cachedWorldMapMarkers = new ArrayList<>();
-    private int emptyBetterMapScans = 0;
+    /** Integration switches used by the last world-map scan; a change forces a rescan. */
+    private boolean scannedNative, scannedBetterMap;
     private int emptyWorldMapScans = 0;
-    private long lastBetterMapScanMs = 0L;
     private long lastWorldMapScanMs = 0L;
     private long lastTerrainMs = 0L;
     private boolean bufferComplete = false;
@@ -290,7 +308,7 @@ public final class DynamicMinimapSession {
             this.running = true;
             this.staticAssetsReady = new CompletableFuture<>();
             this.queueStaticAssets();
-            this.task = HytaleServer.SCHEDULED_EXECUTOR.scheduleAtFixedRate(this::tickSafe, 500L, 25L, TimeUnit.MILLISECONDS);
+            this.scheduleNextTick(500L);
         }
 
     }
@@ -325,21 +343,35 @@ public final class DynamicMinimapSession {
         DynamicAssetPublisher.clear(this.uuid);
     }
 
+    /**
+     * Self-rescheduling tick. Previously a fixed 25 ms task woke for every player and
+     * discarded most wake-ups; now each player wakes only at its update-speed interval,
+     * which is re-read every tick so speed/rotation changes apply immediately.
+     */
+    private void scheduleNextTick(long delayMs) {
+        if (!this.running) return;
+        try {
+            this.task = HytaleServer.SCHEDULED_EXECUTOR.schedule(this::tickSafe, delayMs, TimeUnit.MILLISECONDS);
+        } catch (java.util.concurrent.RejectedExecutionException ignored) {
+            // Server scheduler is shutting down; the session ends with it.
+        }
+    }
+
+    private long tickIntervalMs() {
+        return this.settings.rotationMode == 1
+                ? Math.min(this.settings.panIntervalMs(), this.rotationPollIntervalMs())
+                : this.settings.panIntervalMs();
+    }
+
     private void tickSafe() {
         try {
-            long now = System.currentTimeMillis();
-            long tickInterval = this.settings.rotationMode == 1
-                    ? Math.min(this.settings.panIntervalMs(), this.rotationPollIntervalMs())
-                    : this.settings.panIntervalMs();
-            if (now - this.lastTickMs < tickInterval) {
-                return;
-            }
-
-            this.lastTickMs = now;
+            this.lastTickMs = System.currentTimeMillis();
             this.tick();
         } catch (Throwable var3) {
+        } finally {
+            // stop() clears running first, so a stopped session never reschedules itself.
+            this.scheduleNextTick(this.tickIntervalMs());
         }
-
     }
 
     /** Give Hytale's slow-task warning an actionable name for each world callback. */
@@ -409,6 +441,7 @@ public final class DynamicMinimapSession {
                     if (this.hud != null) this.hud.detach();
                     this.hud = null;
                     this.lastCaveView = null;
+                    this.lastCaveCheckMs = 0L; // Re-read cave mode immediately in the new world.
                     this.rotationSource = null;
                     this.displayedTerrainPng = null;
                     this.terrainPublications.clear();
@@ -419,13 +452,10 @@ public final class DynamicMinimapSession {
                     ++this.terrainGeneration;
                     this.rotationSequence.incrementAndGet();
                     this.cachedMarkers = new ArrayList<>();
-                    this.cachedBetterMapMarkers = List.of();
                     this.cachedWorldMapMarkers = List.of();
-                    this.emptyBetterMapScans = 0;
                     this.emptyWorldMapScans = 0;
                 }
                 this.lastMarkerMs = 0L;
-                this.lastBetterMapScanMs = 0L;
                 this.lastWorldMapScanMs = 0L;
             }
             Rotation3f rotation = transform.getRotation();
@@ -533,9 +563,17 @@ public final class DynamicMinimapSession {
             }
 
             long now = System.currentTimeMillis();
-            BetterMapIntegration.CaveView caveView = this.settings.betterMapEnabled
-                    && this.settings.betterMapCaveModeEnabled
-                    ? BetterMapIntegration.caveView(player, world) : null;
+            // BetterMap cave state is read reflectively; poll it at most every
+            // CAVE_CHECK_MS rather than on every tick (up to 40 times a second).
+            BetterMapIntegration.CaveView caveView;
+            if (!this.settings.betterMapEnabled || !this.settings.betterMapCaveModeEnabled) {
+                caveView = null;
+            } else if (now - this.lastCaveCheckMs >= CAVE_CHECK_MS) {
+                this.lastCaveCheckMs = now;
+                caveView = BetterMapIntegration.caveView(player, world);
+            } else {
+                caveView = this.lastCaveView;
+            }
             boolean caveChanged = !java.util.Objects.equals(caveView, this.lastCaveView);
             if (caveChanged) {
                 this.lastCaveView = caveView;
@@ -666,6 +704,16 @@ public final class DynamicMinimapSession {
         int resolution = Math.max(256, Math.min(1024, textureResolution));
         return "UI/DapperMap/terrain-" + this.slug + "-r"
                 + resolution + "-" + (frame & 15) + ".png";
+    }
+
+    /**
+     * Compass-frame path paired with a terrain path. The rotating slot number must stay
+     * at the end ("...-compass-7.png") because ImagePublicationCache rotates slots by
+     * that trailing number; "...-7-compass.png" had none and could throw on reuse.
+     */
+    private static String compassFramePath(String terrainPath) {
+        int slot = terrainPath.lastIndexOf('-');
+        return terrainPath.substring(0, slot) + "-compass" + terrainPath.substring(slot);
     }
 
     private long rotationPollIntervalMs() {
@@ -889,7 +937,7 @@ public final class DynamicMinimapSession {
             byte[] framePng = DynamicMinimapRenderer.renderNativeHudFrame(renderSettings, renderSettings.sizePixels, mapAngle);
             if (framePng == null) return;
             DynamicAssetPublisher.PreparedAsset preparedFrame = DynamicAssetPublisher.prepare(
-                    prepared.path().replace(".png", "-compass.png"), framePng);
+                    compassFramePath(prepared.path()), framePng);
             // Hash the stitched map off the world thread as well as rendering its PNG.
             long renderSignature = DynamicMinimapRenderer.terrainSignature(
                     world.getWorldMapManager(), centerX, centerZ, renderSettings, caveView);
@@ -994,7 +1042,7 @@ public final class DynamicMinimapSession {
             byte[] framePng = DynamicMinimapRenderer.renderNativeHudFrame(renderSettings, renderSettings.sizePixels, mapAngle);
             if (framePng == null) return;
             DynamicAssetPublisher.PreparedAsset preparedFrame = DynamicAssetPublisher.prepare(
-                    prepared.path().replace(".png", "-compass.png"), framePng);
+                    compassFramePath(prepared.path()), framePng);
             executeWorld(world, "rotation delivery", () -> {
                 if (!this.canRenderHud(renderHud)
                         || generation != this.terrainGeneration
@@ -1118,15 +1166,26 @@ public final class DynamicMinimapSession {
             );
         }
 
-        if (this.settings.showWorldMapMarkers) {
+        // One provider pass serves both integrations: Hytale world-map markers and BetterMap
+        // waypoints (BetterMap replaces Hytale's waypoint providers with its own). A switch
+        // change forces an immediate rescan instead of waiting for the 2 s cadence.
+        boolean includeNative = this.settings.showWorldMapMarkers;
+        boolean betterMapWaypoints = this.betterMapWaypointsActive();
+        if (includeNative || betterMapWaypoints) {
+            if (includeNative != this.scannedNative || betterMapWaypoints != this.scannedBetterMap) {
+                this.scannedNative = includeNative;
+                this.scannedBetterMap = betterMapWaypoints;
+                this.lastWorldMapScanMs = 0L;
+                this.emptyWorldMapScans = 3; // Accept the new switch state's result immediately.
+            }
             Player player = store.getComponent(playerRef, Player.getComponentType());
             long now = System.currentTimeMillis();
             if (player != null && now - this.lastWorldMapScanMs >= 2000L) {
                 this.lastWorldMapScanMs = now;
                 try {
                     List<DynamicMinimapMarker> current = NativeWorldMapIntegration.getMarkers(
-                            store.getExternalData().getWorld(),
-                            player, this.settings.colours);
+                            store.getExternalData().getWorld(), player, this.settings.colours,
+                            includeNative, betterMapWaypoints);
                     if (current.isEmpty() && !this.cachedWorldMapMarkers.isEmpty()
                             && ++this.emptyWorldMapScans < 3) {
                         // A provider can briefly return no markers during a map refresh.
@@ -1136,41 +1195,21 @@ public final class DynamicMinimapSession {
                     }
                 } catch (Throwable ignored) { }
             }
-
         } else {
             this.cachedWorldMapMarkers = List.of();
             this.emptyWorldMapScans = 0;
             this.lastWorldMapScanMs = 0L;
-        }
-
-        if (this.settings.betterMapEnabled && this.settings.betterMapMarkersEnabled
-                && BetterMapIntegration.isAvailable()) {
-            long now = System.currentTimeMillis();
-            // Stagger integration scans; projection/rotation still uses cached markers.
-            if (this.lastBetterMapScanMs == 0L && this.settings.showWorldMapMarkers)
-                this.lastBetterMapScanMs = now - 1000L;
-            if (now - this.lastBetterMapScanMs >= 2000L) {
-                this.lastBetterMapScanMs = now;
-                Player player = store.getComponent(playerRef, Player.getComponentType());
-                List<DynamicMinimapMarker> current = BetterMapIntegration.getMarkers(player);
-                if (current != null) {
-                    if (current.isEmpty() && !this.cachedBetterMapMarkers.isEmpty()
-                            && ++this.emptyBetterMapScans < 3) {
-                        // Wait for a repeated empty snapshot before removing visible waypoints.
-                    } else {
-                        if (!current.equals(this.cachedBetterMapMarkers)) this.cachedBetterMapMarkers = current;
-                        this.emptyBetterMapScans = 0;
-                    }
-                }
-            }
-
-        } else {
-            this.cachedBetterMapMarkers = List.of();
-            this.emptyBetterMapScans = 0;
-            this.lastBetterMapScanMs = 0L;
+            this.scannedNative = false;
+            this.scannedBetterMap = false;
         }
 
         if (!markers.equals(this.cachedMarkers)) this.cachedMarkers = markers;
+    }
+
+    /** True when BetterMap waypoints are drawn with BetterMap styling and icons. */
+    private boolean betterMapWaypointsActive() {
+        return this.settings.betterMapEnabled && this.settings.betterMapMarkersEnabled
+                && BetterMapIntegration.isAvailable();
     }
 
     /**
@@ -1198,7 +1237,7 @@ public final class DynamicMinimapSession {
         // useful display order. Select nearby markers before the fixed HUD slots
         // are exhausted by distant POIs clamped to the edge.
         List<DynamicMinimapMarker> orderedMarkers = this.markerOrder.get(
-                this.cachedMarkers, this.cachedWorldMapMarkers, this.cachedBetterMapMarkers,
+                this.cachedMarkers, this.cachedWorldMapMarkers, List.of(),
                 this.bufferCenterX, this.bufferCenterZ);
 
         for (DynamicMinimapMarker marker : orderedMarkers) {
@@ -1307,7 +1346,8 @@ public final class DynamicMinimapSession {
                 return;
             }
 
-            int healthIndex = EntityStatType.getAssetMap().getIndex("Health");
+            // Hytale keeps the Health stat index cached; no per-tick asset-map lookup.
+            int healthIndex = DefaultEntityStatTypes.getHealth();
             EntityStatValue health = statMap.get(healthIndex);
             if (health == null) {
                 return;

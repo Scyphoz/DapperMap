@@ -9,7 +9,9 @@ import com.hypixel.hytale.component.Ref;
 import com.hypixel.hytale.component.Store;
 import com.hypixel.hytale.server.core.asset.type.attitude.Attitude;
 import com.hypixel.hytale.server.core.entity.entities.Player;
+import com.hypixel.hytale.server.core.modules.entity.component.Spectating;
 import com.hypixel.hytale.server.core.modules.entity.component.TransformComponent;
+import com.hypixel.hytale.server.core.universe.PlayerRef;
 import com.hypixel.hytale.server.core.universe.world.storage.EntityStore;
 import com.hypixel.hytale.server.npc.NPCPlugin;
 import com.hypixel.hytale.server.npc.asset.builder.BuilderInfo;
@@ -130,10 +132,11 @@ public final class DynamicEntityScanner {
             }
         }
 
-        if (settings.showOtherPlayers) {
+        PlayerVisibility visibility = settings.showOtherPlayers ? PlayerVisibility.forViewer(store, playerRef) : null;
+        if (visibility != null) {
+            Color playerColor = settings.colours.awt(PLAYERS, 255);
             List<Ref<EntityStore>> nearby = nearby(store, playerPosition, radius, 0, false);
             if (nearby != null) {
-                Color playerColor = settings.colours.awt(PLAYERS, 255);
                 for (Ref<EntityStore> other : nearby) {
                     try {
                         if (!other.isValid()) continue;
@@ -142,7 +145,10 @@ public final class DynamicEntityScanner {
                         Vector3d position = transform.getPosition();
                         double dx = position.x() - playerX, dz = position.z() - playerZ;
                         double distance = dx * dx + dz * dz;
-                        if (distance >= .01 && distance <= radiusSq)
+                        // Cheap distance test first; visibility lookups only for candidates.
+                        if (distance >= .01 && distance <= radiusSq
+                                && visibility.visible(store.getComponent(other, PlayerRef.getComponentType()),
+                                store.getComponent(other, Spectating.getComponentType()) != null))
                             markers.add(DynamicMinimapMarker.dot(position.x(), position.z(), playerColor, 11));
                     } catch (RuntimeException ignored) { }
                 }
@@ -157,8 +163,10 @@ public final class DynamicEntityScanner {
                                     double dx = position.x() - playerX;
                                     double dz = position.z() - playerZ;
                                     double distanceSq = dx * dx + dz * dz;
-                                    if (distanceSq >= 0.01 && distanceSq <= radiusSq) {
-                                        markers.add(DynamicMinimapMarker.dot(position.x(), position.z(), settings.colours.awt(PLAYERS, 255), 11));
+                                    if (distanceSq >= 0.01 && distanceSq <= radiusSq
+                                            && visibility.visible(chunk.getComponent(i, PlayerRef.getComponentType()),
+                                            chunk.getComponent(i, Spectating.getComponentType()) != null)) {
+                                        markers.add(DynamicMinimapMarker.dot(position.x(), position.z(), playerColor, 11));
                                     }
                                 }
                             } catch (Exception var18) {
@@ -172,6 +180,43 @@ public final class DynamicEntityScanner {
         }
 
         return markers;
+    }
+
+    /**
+     * Mirrors Hytale's own world-map player rules (OtherPlayersMarkerProvider): players are
+     * omitted when the world hides them, when the viewer has them hidden, or when they are
+     * spectating and the viewer is not. Built once per scan so per-player checks stay cheap.
+     */
+    static final class PlayerVisibility {
+        private final java.util.UUID viewer;
+        private final com.hypixel.hytale.server.core.entity.entities.player.HiddenPlayersManager hidden;
+        private final boolean viewerSpectating;
+
+        private PlayerVisibility(java.util.UUID viewer,
+                                 com.hypixel.hytale.server.core.entity.entities.player.HiddenPlayersManager hidden,
+                                 boolean viewerSpectating) {
+            this.viewer = viewer; this.hidden = hidden; this.viewerSpectating = viewerSpectating;
+        }
+
+        /** Null means no other players may be shown to this viewer at all. */
+        static PlayerVisibility forViewer(Store<EntityStore> store, Ref<EntityStore> viewerRef) {
+            try {
+                var world = store.getExternalData().getWorld();
+                if (world != null && !world.getGameplayConfig().getWorldMapConfig().isDisplayPlayers()) return null;
+                PlayerRef viewer = store.getComponent(viewerRef, PlayerRef.getComponentType());
+                if (viewer == null) return null; // Cannot evaluate privacy: fail closed.
+                return new PlayerVisibility(viewer.getUuid(), viewer.getHiddenPlayersManager(),
+                        store.getComponent(viewerRef, Spectating.getComponentType()) != null);
+            } catch (RuntimeException ignored) {
+                return null;
+            }
+        }
+
+        boolean visible(PlayerRef other, boolean otherSpectating) {
+            if (other == null || other.getUuid() == null || other.getUuid().equals(this.viewer)) return false;
+            if (otherSpectating && !this.viewerSpectating) return false;
+            return this.hidden == null || !this.hidden.isPlayerHidden(other.getUuid());
+        }
     }
 
     /** Native spatial indices are rebuilt by Hytale. Query a padded box first,

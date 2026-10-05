@@ -839,6 +839,9 @@ public final class DynamicMinimapHud extends CustomUIHud {
                 .append(", Height: ").append(this.displaySize(this.logicalUiSize)).append("); AssetPath: \"")
                 .append(this.framePath).append("\"; Visible: true; } ");
         this.appendEdgeLayer(out);
+        // Locator goes after the frame and edge-marker layer: UI elements draw in markup
+        // order, so this keeps it above any marker at the player's position.
+        this.appendSelf(out);
         out.append("AssetImage #WayfinderMmOverlay { Anchor: (Full: 0); AssetPath: \"")
                 .append(this.overlayPath).append("\"; Visible: true; } ");
         this.appendReadoutLabels(out);
@@ -916,9 +919,6 @@ public final class DynamicMinimapHud extends CustomUIHud {
         int displayBuffer = this.displaySize(this.bufferPixels);
         int mapLeft = this.mapOriginX();
         int mapTop = this.mapOriginY();
-        int selfInset = this.displayCoordinate((this.logicalUiSize - this.selfSize) / 2);
-        int displaySelfSize = this.displaySize(this.selfSize);
-
         StringBuilder out = new StringBuilder(3200);
         out.append("Group #WayfinderMmClip { ")
                 .append("Anchor: (Left: ").append(mapLeft)
@@ -946,15 +946,20 @@ public final class DynamicMinimapHud extends CustomUIHud {
         out.append("} ");
         out.append("} ");
 
+        return out.toString();
+    }
+
+    /** Player locator, centred on the map; emitted last among map layers so it draws on top. */
+    private void appendSelf(StringBuilder out) {
+        int selfInset = this.displayCoordinate((this.logicalUiSize - this.selfSize) / 2);
+        int displaySelfSize = this.displaySize(this.selfSize);
         out.append("AssetImage #WayfinderMmSelf { Anchor: (Left: ")
-                .append(mapLeft + selfInset)
-                .append(", Top: ").append(mapTop + selfInset)
+                .append(this.mapOriginX() + selfInset)
+                .append(", Top: ").append(this.mapOriginY() + selfInset)
                 .append(", Width: ").append(displaySelfSize)
                 .append(", Height: ").append(displaySelfSize)
                 .append("); AssetPath: \"").append(this.selfPath)
                 .append("\"; Visible: true; } ");
-
-        return out.toString();
     }
 
     /**

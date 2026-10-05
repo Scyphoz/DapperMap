@@ -183,7 +183,8 @@ public final class DynamicAssetPublisher {
         String nonActivePath(String candidate) {
             if (!candidate.equals(activePath)) return candidate;
             var match = SLOT.matcher(candidate);
-            if (!match.matches()) throw new IllegalArgumentException("Image path lacks a rotating slot: " + candidate);
+            // Defensive: never throw on the world thread; give an unslotted path a slot suffix.
+            if (!match.matches()) return candidate.substring(0, candidate.length() - 4) + "-1.png";
             return match.group(1) + ((Integer.parseInt(match.group(2)) + 1) & 15) + match.group(3);
         }
 
