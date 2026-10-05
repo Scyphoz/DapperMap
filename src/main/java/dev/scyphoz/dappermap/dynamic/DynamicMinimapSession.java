@@ -5,6 +5,7 @@ import com.hypixel.hytale.component.Store;
 import com.hypixel.hytale.math.vector.Rotation3f;
 import com.hypixel.hytale.server.core.HytaleServer;
 import com.hypixel.hytale.server.core.entity.entities.Player;
+import com.hypixel.hytale.server.core.modules.entity.component.HeadRotation;
 import com.hypixel.hytale.server.core.modules.entity.component.TransformComponent;
 import com.hypixel.hytale.server.core.modules.entitystats.EntityStatMap;
 import com.hypixel.hytale.server.core.modules.entitystats.EntityStatValue;
@@ -36,7 +37,7 @@ import org.joml.Vector3d;
  * dynamic-asset delivery and incremental HUD updates.
  */
 public final class DynamicMinimapSession {
-    private static final int SELF_BUCKETS = DynamicMinimapRenderer.ROTATION_BUCKETS;
+    private static final int SELF_BUCKETS = DynamicMinimapRenderer.SELF_ARROW_BUCKETS;
     private static final int RENDER_THREADS = Math.min(4, Math.max(2, Runtime.getRuntime().availableProcessors() / 4));
     private static final ExecutorService RENDER_POOL = new java.util.concurrent.ThreadPoolExecutor(
             RENDER_THREADS, RENDER_THREADS, 0L, TimeUnit.MILLISECONDS,
@@ -159,7 +160,6 @@ public final class DynamicMinimapSession {
     private boolean builtShowClock;
     private boolean builtShowBiome;
     private int lastMapRotationBucket = -1;
-    private long lastRotationDeliveryMs = 0L;
     private long terrainGeneration = 0L;
     private DynamicMinimapRenderer.RotationSource rotationSource = null;
     private byte[] displayedTerrainPng = null;
@@ -278,8 +278,19 @@ public final class DynamicMinimapSession {
     private boolean bufferComplete = false;
     private long warmupUntilMs = 0L;
     private int lastSelfBucket = -1;
-    private int requestedSelfBucket = -1;
-    private final byte[][] selfArrowCache = new byte[SELF_BUCKETS][];
+    /** Locator images already sent to this client for the current colour (skips re-hashing). */
+    private final boolean[] selfArrowDelivered = new boolean[SELF_BUCKETS];
+    /** True once every locator image for the current colour is on the client. */
+    private boolean selfArrowsComplete = false;
+    /** Last locator heading change; the tick runs at the faster rotation cadence while turning. */
+    private volatile long lastHeadingChangeMs = 0L;
+    private static final long TURNING_WINDOW_MS = 500L;
+    /** Smallest heading change (2°, below the 5° locator step) that triggers an immediate tick. */
+    private static final double HEADING_EPSILON = Math.toRadians(2.0D);
+    /** Yaw seen by the last dispatched tick; only touched on the scheduler thread. */
+    private float lastDispatchedYaw = Float.NaN;
+    /** When the last map-rotation render was requested; paces rotation by request, not delivery. */
+    private long lastRotationRequestMs = 0L;
     private final ReadoutCache readouts = new ReadoutCache();
     private boolean wasAlive = true;
     private boolean hasDeath = false;
@@ -341,6 +352,8 @@ public final class DynamicMinimapSession {
         this.worldPending.clear();
         this.invalidateMarkerAssets();
         DynamicAssetPublisher.clear(this.uuid);
+        java.util.Arrays.fill(this.selfArrowDelivered, false);
+        this.selfArrowsComplete = false;
     }
 
     /**
@@ -357,20 +370,50 @@ public final class DynamicMinimapSession {
         }
     }
 
+    /**
+     * Player-up maps always poll at the rotation cadence. North-up maps use it only while the
+     * player is turning (so the locator and bearing keep up), then fall back to the cheaper
+     * pan cadence when the heading is steady.
+     */
     private long tickIntervalMs() {
-        return this.settings.rotationMode == 1
+        boolean turning = System.currentTimeMillis() - this.lastHeadingChangeMs < TURNING_WINDOW_MS;
+        return this.settings.rotationMode == 1 || turning
                 ? Math.min(this.settings.panIntervalMs(), this.rotationPollIntervalMs())
                 : this.settings.panIntervalMs();
     }
 
+    /**
+     * Scheduler-thread heartbeat. It wakes at the fast rotation cadence but only queues the
+     * world-thread tick when the heading has moved or the normal update interval is due.
+     * The heading check is one read of PlayerRef's cached transform (refreshed by the server
+     * every tick), so starting to turn is noticed within one poll at almost no idle cost.
+     */
     private void tickSafe() {
         try {
-            this.lastTickMs = System.currentTimeMillis();
-            this.tick();
+            long now = System.currentTimeMillis();
+            float yaw = this.peekYaw();
+            boolean headingMoved = !Float.isNaN(yaw) && (Float.isNaN(this.lastDispatchedYaw)
+                    || Math.abs(Math.IEEEremainder(yaw - this.lastDispatchedYaw, Math.PI * 2.0D)) >= HEADING_EPSILON);
+            if (headingMoved || now - this.lastTickMs >= this.tickIntervalMs()) {
+                this.lastTickMs = now;
+                this.lastDispatchedYaw = yaw;
+                this.tick();
+            }
         } catch (Throwable var3) {
         } finally {
             // stop() clears running first, so a stopped session never reschedules itself.
-            this.scheduleNextTick(this.tickIntervalMs());
+            this.scheduleNextTick(Math.min(this.settings.panIntervalMs(), this.rotationPollIntervalMs()));
+        }
+    }
+
+    /** Racy but benign read of the server's cached player yaw (radians); NaN when unavailable. */
+    private float peekYaw() {
+        try {
+            // Head (camera) yaw, matching the readout and locator; see renderTick.
+            var rotation = this.playerRef.getHeadRotation();
+            return rotation == null ? Float.NaN : rotation.yaw();
+        } catch (RuntimeException ignored) {
+            return Float.NaN;
         }
     }
 
@@ -434,6 +477,10 @@ public final class DynamicMinimapSession {
                 this.rotationSequence.incrementAndGet();
                 if (this.hud != null) this.hud.invalidateVisualAssets();
                 DynamicAssetPublisher.clear(this.uuid);
+                // The client may have dropped dynamic assets: resend the locator too.
+                java.util.Arrays.fill(this.selfArrowDelivered, false);
+                this.selfArrowsComplete = false;
+                this.lastSelfBucket = -1;
                 if (this.hud != null) this.hud.invalidateMarkerSlots();
                 if (worldChanged) {
                     BetterMapIntegration.clearWorld(this.lastCaveView == null ? null : this.lastCaveView.world());
@@ -458,7 +505,11 @@ public final class DynamicMinimapSession {
                 this.lastMarkerMs = 0L;
                 this.lastWorldMapScanMs = 0L;
             }
-            Rotation3f rotation = transform.getRotation();
+            // Use the head (camera) yaw, as Hytale's compass and world map do. The body yaw
+            // only follows once the view turns ~45° past it, which made the locator start
+            // late and point up to 45° away from the real view direction.
+            HeadRotation head = store.getComponent(ref, HeadRotation.getComponentType());
+            Rotation3f rotation = head != null ? head.getRotation() : transform.getRotation();
             double yaw = rotation == null ? Double.NaN : (double)rotation.yaw();
             if (!this.settings.enabled) {
                 if (this.hud != null && this.hud.isShown()) {
@@ -582,7 +633,8 @@ public final class DynamicMinimapSession {
             }
             if (!this.settings.colours.equals(this.renderedColours)) {
                 this.renderedColours = this.settings.colours;
-                java.util.Arrays.fill(this.selfArrowCache, null);
+                java.util.Arrays.fill(this.selfArrowDelivered, false);
+                this.selfArrowsComplete = false;
                 this.invalidateMarkerAssets();
                 this.lastSelfBucket = -1;
                 this.lastMarkerMs = 0L;
@@ -614,12 +666,12 @@ public final class DynamicMinimapSession {
                     : 0;
 
             if (mapRotationBucket != this.lastMapRotationBucket
-                    && now - this.lastRotationDeliveryMs >= this.rotationIntervalMs()) {
-                this.scheduleRotationOnly(
-                        world,
-                        yaw,
-                        mapRotationBucket
-                );
+                    && now - this.lastRotationRequestMs >= this.rotationIntervalMs()) {
+                // Pace from the previous request so render time is not added on top of the
+                // interval; only one rotation render is ever in flight (coalesced).
+                if (this.scheduleRotationOnly(world, yaw, mapRotationBucket)) {
+                    this.lastRotationRequestMs = now;
+                }
 
                 // The cached markers are projected again when the rotated terrain arrives.
             }
@@ -803,59 +855,53 @@ public final class DynamicMinimapSession {
         this.hud.setFrameAngle(angle);
     }
 
+    /**
+     * Points the locator at the player's heading. All headings for the current colour are
+     * pre-rendered once on the render pool (shared by every player with that colour), so a
+     * heading change is an immediate asset swap in the same tick: no per-heading render,
+     * no world-thread round trip, and each image is uploaded to a client at most once.
+     */
     private void updateSelfArrow(double yaw) {
-        if (!Double.isNaN(yaw) && this.hud != null) {
-            int bucket;
-            double angle;
-
-            if (this.settings.rotationMode == 1) {
-                // Player-up mode: the world rotates, so the self marker stays up.
-                bucket = 0;
-                angle = 0.0D;
-            } else {
-                angle = DynamicMinimapRenderer.screenAngleForYaw(yaw);
-                bucket = (int)Math.round(
-                        angle / (Math.PI * 2D)
-                                * (double)DynamicMinimapRenderer.ROTATION_BUCKETS
-                );
-                bucket = Math.floorMod(bucket, DynamicMinimapRenderer.ROTATION_BUCKETS);
-                angle = (double)bucket * (Math.PI * 2D)
-                        / (double)DynamicMinimapRenderer.ROTATION_BUCKETS;
-            }
-
-            this.requestedSelfBucket = bucket;
-            if (bucket != this.lastSelfBucket) {
-                String path = "UI/DapperMap/self-" + this.slug + "-" + this.settings.colours.arrowKey() + "-" + bucket + ".png";
-                byte[] png = this.selfArrowCache[bucket];
-                if (png != null) {
-                    if (DynamicAssetPublisher.deliver(this.playerRef, path, png)) {
-                        this.lastSelfBucket = bucket;
-                        this.hud.setSelf(path);
-                    }
-                } else {
-                    final int renderBucket = bucket;
-                    final double renderAngle = angle;
-                    MinimapColours colours = this.settings.colours;
-                    DynamicMinimapHud targetHud = this.hud;
-                    World world = this.lastObservedWorld;
-                    if (world == null) return;
-                    submitRender("self", () -> {
-                        byte[] rendered = DynamicMinimapRenderer.renderSelfArrow(renderAngle, colours);
-                        if (rendered == null || !this.canRenderHud(targetHud)) return;
-                        executeWorld(world, "self arrow delivery", () -> {
-                            if (!this.canRenderHud(targetHud)
-                                    || this.settings.colours != colours) return;
-                            this.selfArrowCache[renderBucket] = rendered;
-                            if (this.requestedSelfBucket == renderBucket
-                                    && DynamicAssetPublisher.deliver(this.playerRef, path, rendered)) {
-                                this.lastSelfBucket = renderBucket;
-                                targetHud.setSelf(path);
-                            }
-                        });
-                    });
-                }
-            }
+        if (Double.isNaN(yaw) || this.hud == null) return;
+        // Player-up mode: the world rotates, so the locator always points up.
+        int bucket = this.settings.rotationMode == 1 ? 0 : DynamicMinimapRenderer.selfArrowBucket(yaw);
+        if (bucket == this.lastSelfBucket) {
+            // Idle heading: trickle the remaining locator images to the client (two per tick)
+            // so a first turn to a new heading never waits for an upload.
+            if (this.settings.rotationMode != 1) this.presendSelfArrows(2);
+            return;
         }
+        this.lastHeadingChangeMs = System.currentTimeMillis();
+        MinimapColours colours = this.settings.colours;
+        byte[][] arrows = DynamicMinimapRenderer.cachedSelfArrows(colours);
+        if (arrows == null) {
+            // First use of this colour: build the set off-thread; a later tick applies it.
+            submitRender("self", () -> DynamicMinimapRenderer.selfArrows(colours));
+            return;
+        }
+        String path = "UI/DapperMap/self-" + this.slug + "-" + colours.arrowKey() + "-" + bucket + ".png";
+        if (!this.selfArrowDelivered[bucket]) {
+            if (!DynamicAssetPublisher.deliver(this.playerRef, path, arrows[bucket])) return;
+            this.selfArrowDelivered[bucket] = true;
+        }
+        this.lastSelfBucket = bucket;
+        this.hud.setSelf(path);
+    }
+
+    /** Sends up to {@code budget} not-yet-delivered locator images for the current colour. */
+    private void presendSelfArrows(int budget) {
+        if (this.selfArrowsComplete) return;
+        MinimapColours colours = this.settings.colours;
+        byte[][] arrows = DynamicMinimapRenderer.cachedSelfArrows(colours);
+        if (arrows == null) return;
+        for (int bucket = 0; bucket < SELF_BUCKETS && budget > 0; bucket++) {
+            if (this.selfArrowDelivered[bucket]) continue;
+            String path = "UI/DapperMap/self-" + this.slug + "-" + colours.arrowKey() + "-" + bucket + ".png";
+            if (!DynamicAssetPublisher.deliver(this.playerRef, path, arrows[bucket])) return;
+            this.selfArrowDelivered[bucket] = true;
+            budget--;
+        }
+        if (budget > 0) this.selfArrowsComplete = true; // Loop finished with budget left: all sent.
     }
 
     /** Probe map-image changes on the render pool so cave lookups and image hashing
@@ -973,7 +1019,6 @@ public final class DynamicMinimapSession {
                 this.bufferCenterZ = centerZ;
                 this.lastSignature = renderSignature;
                 this.lastMapRotationBucket = rotationBucket;
-                this.lastRotationDeliveryMs = System.currentTimeMillis();
 
                 double pixelsPerBlock =
                         DynamicMinimapRenderer.pixelsPerBlock(renderSettings);
@@ -1006,7 +1051,8 @@ public final class DynamicMinimapSession {
      * bitmap when the player changes heading. This keeps follow-player rotation
      * responsive without re-fetching/re-stitching world-map chunks each turn.
      */
-    private void scheduleRotationOnly(
+    /** @return true when a rotation render was queued. */
+    private boolean scheduleRotationOnly(
             World world,
             double yaw,
             int rotationBucket
@@ -1016,7 +1062,7 @@ public final class DynamicMinimapSession {
                 || Double.isNaN(this.bufferCenterX)
                 || this.hud == null
                 || !this.hud.isShown()) {
-            return;
+            return false;
         }
 
         DynamicMinimapRenderer.RotationSource base = this.rotationSource;
@@ -1028,7 +1074,7 @@ public final class DynamicMinimapSession {
         double centerZ = this.bufferCenterZ;
         double mapAngle = DynamicMinimapRenderer.bucketAngle(rotationBucket);
 
-        submitRender("rotation", () -> {
+        return submitRender("rotation", () -> {
             if (rotationRequest != this.rotationSequence.get()) return;
             byte[] displayPng =
                     DynamicMinimapRenderer.rotateTerrain(base, mapAngle);
@@ -1067,7 +1113,6 @@ public final class DynamicMinimapSession {
                 if (!renderHud.acceptTerrainFrame(mapAngle, preparedFrame)) return;
                 this.displayedTerrainPng = displayPng;
                 this.lastMapRotationBucket = rotationBucket;
-                this.lastRotationDeliveryMs = System.currentTimeMillis();
 
                 double pixelsPerBlock =
                         DynamicMinimapRenderer.pixelsPerBlock(renderSettings);
@@ -1372,11 +1417,20 @@ public final class DynamicMinimapSession {
 
     private static final String[] COMPASS_DIRECTIONS = {"N", "NE", "E", "SE", "S", "SW", "W", "NW"};
 
+    /**
+     * Compass bearing, clockwise from north (90 = east). Hytale's yaw increases
+     * anticlockwise, so raw yaw degrees showed east/west mirrored. Uses the same
+     * conversion as the locator so the readout and arrow always agree.
+     */
+    private static int bearingDegrees(double yaw) {
+        return Math.floorMod((int)Math.round(Math.toDegrees(DynamicMinimapRenderer.screenAngleForYaw(yaw))), 360);
+    }
+
     private static String compassText(double yaw) {
         if (Double.isNaN(yaw)) {
             return "—°  ?";
         } else {
-            int degrees = Math.floorMod((int)Math.round(Math.toDegrees(yaw)), 360);
+            int degrees = bearingDegrees(yaw);
             String[] directions = COMPASS_DIRECTIONS;
             int index = (int)Math.floor(((double)degrees + (double)22.5F) / (double)45.0F) & 7;
             return degrees + "°  " + directions[index];
@@ -1459,7 +1513,7 @@ public final class DynamicMinimapSession {
             return coords;
         }
         String compass(double yaw) {
-            int next = Double.isNaN(yaw) ? -1 : Math.floorMod((int)Math.round(Math.toDegrees(yaw)), 360);
+            int next = Double.isNaN(yaw) ? -1 : bearingDegrees(yaw);
             if (compass == null || degrees != next) { degrees = next; compass = compassText(yaw); }
             return compass;
         }

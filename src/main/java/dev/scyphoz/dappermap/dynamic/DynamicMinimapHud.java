@@ -252,7 +252,8 @@ public final class DynamicMinimapHud extends CustomUIHud {
         DynamicMinimapRenderer.renderBlank();
         DynamicMinimapSetting normalized = settings.copy();
         normalized.normalize();
-        DynamicMinimapRenderer.renderSelfArrow(0.0D, normalized.colours);
+        // Pre-render every locator heading so the first turn needs no render round trip.
+        DynamicMinimapRenderer.selfArrows(normalized.colours);
         initialOverlay(normalized); // Includes frame/font setup and PNG encoding off the world thread.
     }
 

@@ -1200,6 +1200,41 @@ public final class DynamicMinimapRenderer {
         return png;
     }
 
+    /** Locator headings: 5° steps are visually smooth at HUD arrow sizes (18–36 px). */
+    public static final int SELF_ARROW_BUCKETS = 72;
+    /** Complete locator image sets keyed by locator RGB; shared by every player using that colour. */
+    private static final Map<Integer, byte[][]> ARROW_SETS = new ConcurrentHashMap<>();
+
+    /** Non-blocking lookup of a ready locator set, or null if it has not been rendered yet. */
+    public static byte[][] cachedSelfArrows(MinimapColours colours) {
+        return ARROW_SETS.get(colours.rgb(MinimapColours.Key.SELF));
+    }
+
+    /** Renders (once per colour) every locator heading. Render pool only. */
+    public static byte[][] selfArrows(MinimapColours colours) {
+        int rgb = colours.rgb(MinimapColours.Key.SELF);
+        byte[][] ready = ARROW_SETS.get(rgb);
+        if (ready != null) return ready;
+        byte[][] set = new byte[SELF_ARROW_BUCKETS][];
+        for (int bucket = 0; bucket < SELF_ARROW_BUCKETS; bucket++) {
+            set[bucket] = renderSelfArrow(selfArrowAngle(bucket), colours);
+            if (set[bucket] == null) return null;
+        }
+        if (ARROW_SETS.size() >= 16) ARROW_SETS.clear(); // Bounded: ~60 KB per colour.
+        byte[][] raced = ARROW_SETS.putIfAbsent(rgb, set);
+        return raced != null ? raced : set;
+    }
+
+    /** Locator bucket for a player yaw in north-up mode. */
+    public static int selfArrowBucket(double yaw) {
+        double turns = screenAngleForYaw(yaw) / (Math.PI * 2.0D);
+        return Math.floorMod((int)Math.round(turns * SELF_ARROW_BUCKETS), SELF_ARROW_BUCKETS);
+    }
+
+    public static double selfArrowAngle(int bucket) {
+        return Math.floorMod(bucket, SELF_ARROW_BUCKETS) * (Math.PI * 2.0D) / SELF_ARROW_BUCKETS;
+    }
+
     public static byte[] renderBlank() {
         return BLANK_PNG;
     }
