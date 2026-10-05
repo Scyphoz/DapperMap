@@ -7,9 +7,6 @@ import com.hypixel.hytale.server.core.HytaleServer;
 import com.hypixel.hytale.server.core.entity.entities.Player;
 import com.hypixel.hytale.server.core.modules.entity.component.HeadRotation;
 import com.hypixel.hytale.server.core.modules.entity.component.TransformComponent;
-import com.hypixel.hytale.server.core.modules.entitystats.EntityStatMap;
-import com.hypixel.hytale.server.core.modules.entitystats.EntityStatValue;
-import com.hypixel.hytale.server.core.modules.entitystats.asset.DefaultEntityStatTypes;
 import com.hypixel.hytale.server.core.modules.time.TimeModule;
 import com.hypixel.hytale.server.core.modules.time.WorldTimeResource;
 import com.hypixel.hytale.server.core.universe.PlayerRef;
@@ -57,7 +54,25 @@ public final class DynamicMinimapSession {
     private record WorldTask(World world, java.util.concurrent.atomic.AtomicBoolean pending) {}
     private final java.util.concurrent.ConcurrentMap<String, WorldTask> worldPending = new java.util.concurrent.ConcurrentHashMap<>();
 
-    public static void shutdownRendering() { RENDER_POOL.shutdownNow(); }
+    /**
+     * DapperMap's own heartbeat thread. Hytale's HytaleServer.SCHEDULED_EXECUTOR is a single
+     * thread shared by the whole server, so per-player minimap timers must not run there.
+     * Work on this thread is limited to cheap checks and handing tasks to world threads.
+     */
+    private static final java.util.concurrent.ScheduledExecutorService HEARTBEAT =
+            java.util.concurrent.Executors.newSingleThreadScheduledExecutor(runnable -> {
+                Thread thread = new Thread(runnable, "DapperMap-Heartbeat");
+                thread.setDaemon(true);
+                return thread;
+            });
+
+    /** Shared scheduler for DapperMap's periodic housekeeping (e.g. cave image pruning). */
+    public static java.util.concurrent.ScheduledExecutorService heartbeat() { return HEARTBEAT; }
+
+    public static void shutdownRendering() {
+        HEARTBEAT.shutdownNow();
+        RENDER_POOL.shutdownNow();
+    }
 
     // Coalesce each kind of work: slow PNG compression must not build an unbounded backlog.
     private boolean submitRender(String kind, Runnable work) {
@@ -146,7 +161,6 @@ public final class DynamicMinimapSession {
     private int builtSize = -1;
     private int builtShape = -1;
     private int builtZoom = -1;
-    private int builtPosition = -1;
     private int builtHudPositionX = -1;
     private int builtHudPositionY = -1;
     private boolean builtInfoPanelEnabled;
@@ -187,6 +201,8 @@ public final class DynamicMinimapSession {
     private MinimapColours renderedColours;
     private List<DynamicMinimapMarker> cachedMarkers = new ArrayList<>();
     private final EdgeTracker edgeTracker = new EdgeTracker();
+    /** Creature threat colours for this player's view (see DynamicEntityScanner.ThreatCache). */
+    private final DynamicEntityScanner.ThreatCache threatCache = new DynamicEntityScanner.ThreatCache();
     private final MarkerOrder markerOrder = new MarkerOrder();
     private record MarkerAssetKey(Style style, String source, int rgb) {}
     private final java.util.concurrent.ConcurrentMap<MarkerAssetKey, String> markerAssets = new java.util.concurrent.ConcurrentHashMap<>();
@@ -210,8 +226,7 @@ public final class DynamicMinimapSession {
         if (!this.canRenderHud(this.hud)) return null;
         if (marker.style == Style.DOT && marker.color == null) return null;
         MinimapColours palette = this.settings.colours;
-        int rgb = marker.style == Style.DEATH ? palette.rgb(MinimapColours.Key.DEATH)
-                : marker.color == null ? 0xFFFFFF : marker.color.getRGB() & 0xFFFFFF;
+        int rgb = marker.color == null ? 0xFFFFFF : marker.color.getRGB() & 0xFFFFFF;
         MarkerAssetKey key = new MarkerAssetKey(marker.style, marker.assetPath, rgb);
         String ready = this.markerAssets.get(key);
         if (ready != null) return ready;
@@ -247,11 +262,8 @@ public final class DynamicMinimapSession {
                     case NATIVE_WORLDMAP -> asset = NativeWorldMapIntegration.prepareIconAsset(
                             marker.assetPath, marker.color, this.slug);
                     default -> {
-                        byte[] png = marker.style == Style.DEATH
-                                ? DynamicMinimapRenderer.renderDeath(palette)
-                                : DynamicMinimapRenderer.renderDot(rgb, palette);
-                        String path = "UI/DapperMap/" + (marker.style == Style.DEATH ? "death-" : "mk-")
-                                + this.slug + "-" + String.format("%06X", rgb) + ".png";
+                        byte[] png = DynamicMinimapRenderer.renderDot(rgb, palette);
+                        String path = "UI/DapperMap/mk-" + this.slug + "-" + String.format("%06X", rgb) + ".png";
                         asset = DynamicAssetPublisher.prepare(path, png);
                     }
                 }
@@ -271,7 +283,7 @@ public final class DynamicMinimapSession {
     }
     private List<DynamicMinimapMarker> cachedWorldMapMarkers = new ArrayList<>();
     /** Integration switches used by the last world-map scan; a change forces a rescan. */
-    private boolean scannedNative, scannedBetterMap;
+    private boolean scannedNative, scannedBetterMap, scannedDeaths;
     private int emptyWorldMapScans = 0;
     private long lastWorldMapScanMs = 0L;
     private long lastTerrainMs = 0L;
@@ -293,9 +305,6 @@ public final class DynamicMinimapSession {
     private long lastRotationRequestMs = 0L;
     private final ReadoutCache readouts = new ReadoutCache();
     private boolean wasAlive = true;
-    private boolean hasDeath = false;
-    private double deathX;
-    private double deathZ;
     // Detect discontinuous movement even when the player stays in the same world.
     private volatile World lastObservedWorld;
     private double lastObservedX = Double.NaN;
@@ -364,9 +373,9 @@ public final class DynamicMinimapSession {
     private void scheduleNextTick(long delayMs) {
         if (!this.running) return;
         try {
-            this.task = HytaleServer.SCHEDULED_EXECUTOR.schedule(this::tickSafe, delayMs, TimeUnit.MILLISECONDS);
+            this.task = HEARTBEAT.schedule(this::tickSafe, delayMs, TimeUnit.MILLISECONDS);
         } catch (java.util.concurrent.RejectedExecutionException ignored) {
-            // Server scheduler is shutting down; the session ends with it.
+            // DapperMap is shutting down; the session ends with it.
         }
     }
 
@@ -442,12 +451,12 @@ public final class DynamicMinimapSession {
     private void renderTick(World world, Ref<EntityStore> ref) {
         try {
             Store<EntityStore> store = world.getEntityStore().getStore();
-            TransformComponent transform = (TransformComponent)store.getComponent(ref, TransformComponent.getComponentType());
+            TransformComponent transform = store.getComponent(ref, TransformComponent.getComponentType());
             if (transform == null) {
                 return;
             }
 
-            Player player = (Player)store.getComponent(ref, Player.getComponentType());
+            Player player = store.getComponent(ref, Player.getComponentType());
             Vector3d position = transform.getPosition();
             double x = position.x();
             double y = position.y();
@@ -676,7 +685,6 @@ public final class DynamicMinimapSession {
                 // The cached markers are projected again when the rotated terrain arrives.
             }
 
-            this.detectDeath(store, ref, x, z);
             this.updateSelfArrow(yaw);
             double pixelsPerBlock = DynamicMinimapRenderer.pixelsPerBlock(this.settings);
             int bufferPixels = this.hud.bufferPixels();
@@ -820,7 +828,6 @@ public final class DynamicMinimapSession {
             this.builtSize = this.settings.sizePixels;
             this.builtShape = this.settings.shape;
             this.builtZoom = this.settings.zoomBlocks;
-            this.builtPosition = this.settings.position;
             this.builtHudPositionX = this.settings.hudPositionX;
             this.builtHudPositionY = this.settings.hudPositionY;
             this.builtInfoPanelEnabled = this.settings.infoPanelEnabled;
@@ -980,6 +987,7 @@ public final class DynamicMinimapSession {
             if (!this.canRenderHud(renderHud)) return;
             DynamicAssetPublisher.PreparedAsset prepared = DynamicAssetPublisher.prepare(
                     this.terrainAssetPath(renderSettings.textureResolution, this.frameIndex.incrementAndGet()), displayPng);
+            if (source != null) source.rememberFrame(rotationBucket, prepared); // Seed the rotation cache.
             byte[] framePng = DynamicMinimapRenderer.renderNativeHudFrame(renderSettings, renderSettings.sizePixels, mapAngle);
             if (framePng == null) return;
             DynamicAssetPublisher.PreparedAsset preparedFrame = DynamicAssetPublisher.prepare(
@@ -1076,15 +1084,24 @@ public final class DynamicMinimapSession {
 
         return submitRender("rotation", () -> {
             if (rotationRequest != this.rotationSequence.get()) return;
-            byte[] displayPng =
-                    DynamicMinimapRenderer.rotateTerrain(base, mapAngle);
-            if (displayPng == null || displayPng.length == 0) {
-                return;
+            String framePath = this.terrainAssetPath(renderSettings.textureResolution, this.frameIndex.incrementAndGet());
+            // Reuse a recent rotation of this same terrain when turning back to a heading.
+            DynamicAssetPublisher.PreparedAsset recent = base.cachedFrame(rotationBucket);
+            byte[] displayPng;
+            DynamicAssetPublisher.PreparedAsset prepared;
+            if (recent != null) {
+                displayPng = recent.data();
+                prepared = recent.withPath(framePath);
+            } else {
+                displayPng = DynamicMinimapRenderer.rotateTerrain(base, mapAngle);
+                if (displayPng == null || displayPng.length == 0) {
+                    return;
+                }
+                prepared = DynamicAssetPublisher.prepare(framePath, displayPng);
+                base.rememberFrame(rotationBucket, prepared);
             }
 
             if (!this.canRenderHud(renderHud)) return;
-            DynamicAssetPublisher.PreparedAsset prepared = DynamicAssetPublisher.prepare(
-                    this.terrainAssetPath(renderSettings.textureResolution, this.frameIndex.incrementAndGet()), displayPng);
             byte[] framePng = DynamicMinimapRenderer.renderNativeHudFrame(renderSettings, renderSettings.sizePixels, mapAngle);
             if (framePng == null) return;
             DynamicAssetPublisher.PreparedAsset preparedFrame = DynamicAssetPublisher.prepare(
@@ -1156,7 +1173,7 @@ public final class DynamicMinimapSession {
         try {
             Ref<EntityStore> ref = world.getEntityRef(this.uuid);
             if (ref != null && ref.isValid()) {
-                TransformComponent transform = (TransformComponent)world.getEntityStore().getStore().getComponent(ref, TransformComponent.getComponentType());
+                TransformComponent transform = world.getEntityStore().getStore().getComponent(ref, TransformComponent.getComponentType());
                 if (transform != null) {
                     Vector3d position = transform.getPosition();
                     currentX = position.x();
@@ -1195,31 +1212,26 @@ public final class DynamicMinimapSession {
                     playerRef,
                     playerPosition,
                     (double)(this.settings.zoomBlocks + 16),
-                    this.settings
+                    this.settings,
+                    this.threatCache
             );
         } catch (Throwable ignored) {
             markers = new ArrayList<>();
         }
 
-        if (this.settings.showDeathMarker && this.hasDeath) {
-            markers.add(
-                    DynamicMinimapMarker.death(
-                            this.deathX,
-                            this.deathZ,
-                            12
-                    )
-            );
-        }
-
-        // One provider pass serves both integrations: Hytale world-map markers and BetterMap
-        // waypoints (BetterMap replaces Hytale's waypoint providers with its own). A switch
-        // change forces an immediate rescan instead of waiting for the 2 s cadence.
+        // One provider pass serves Hytale world-map markers, BetterMap waypoints (BetterMap
+        // replaces Hytale's waypoint providers with its own) and death markers (Hytale's own
+        // provider, or BetterMap's privacy wrapper of it). A switch change forces an
+        // immediate rescan instead of waiting for the 2 s cadence.
         boolean includeNative = this.settings.showWorldMapMarkers;
         boolean betterMapWaypoints = this.betterMapWaypointsActive();
-        if (includeNative || betterMapWaypoints) {
-            if (includeNative != this.scannedNative || betterMapWaypoints != this.scannedBetterMap) {
+        boolean includeDeaths = this.settings.showDeathMarker;
+        if (includeNative || betterMapWaypoints || includeDeaths) {
+            if (includeNative != this.scannedNative || betterMapWaypoints != this.scannedBetterMap
+                    || includeDeaths != this.scannedDeaths) {
                 this.scannedNative = includeNative;
                 this.scannedBetterMap = betterMapWaypoints;
+                this.scannedDeaths = includeDeaths;
                 this.lastWorldMapScanMs = 0L;
                 this.emptyWorldMapScans = 3; // Accept the new switch state's result immediately.
             }
@@ -1230,7 +1242,7 @@ public final class DynamicMinimapSession {
                 try {
                     List<DynamicMinimapMarker> current = NativeWorldMapIntegration.getMarkers(
                             store.getExternalData().getWorld(), player, this.settings.colours,
-                            includeNative, betterMapWaypoints);
+                            includeNative, betterMapWaypoints, includeDeaths);
                     if (current.isEmpty() && !this.cachedWorldMapMarkers.isEmpty()
                             && ++this.emptyWorldMapScans < 3) {
                         // A provider can briefly return no markers during a map refresh.
@@ -1246,6 +1258,7 @@ public final class DynamicMinimapSession {
             this.lastWorldMapScanMs = 0L;
             this.scannedNative = false;
             this.scannedBetterMap = false;
+            this.scannedDeaths = false;
         }
 
         if (!markers.equals(this.cachedMarkers)) this.cachedMarkers = markers;
@@ -1276,6 +1289,8 @@ public final class DynamicMinimapSession {
         DynamicMinimapHud.Slot[] slots =
                 new DynamicMinimapHud.Slot[DynamicMinimapHud.MARKER_SLOTS];
         int slot = 0;
+        // Each HUD layer has its own capacity: edge icons and map dots never crowd each other out.
+        int edgeFree = DynamicMinimapHud.EDGE_MARKER_SLOTS, mapFree = DynamicMinimapHud.MAP_MARKER_SLOTS;
         long projectionTime = System.currentTimeMillis();
 
         // The native POI provider returns world-wide markers from a map with no
@@ -1286,9 +1301,8 @@ public final class DynamicMinimapSession {
                 this.bufferCenterX, this.bufferCenterZ);
 
         for (DynamicMinimapMarker marker : orderedMarkers) {
-            if (slot >= slots.length) {
-                break;
-            }
+            if (edgeFree == 0 && mapFree == 0) break;
+            if (marker.clampToEdge ? edgeFree == 0 : mapFree == 0) continue; // Layer full: skip its icon work.
 
             double dx =
                     (marker.x - this.bufferCenterX) * pixelsPerBlock;
@@ -1335,6 +1349,7 @@ public final class DynamicMinimapSession {
             int left = (int)Math.round(markerX) - size / 2;
             int top = (int)Math.round(markerZ) - size / 2;
 
+            if (marker.clampToEdge) edgeFree--; else mapFree--;
             slots[slot++] =
                     new DynamicMinimapHud.Slot(
                             path,
@@ -1383,33 +1398,6 @@ public final class DynamicMinimapSession {
         );
     }
 
-
-    private void detectDeath(Store<EntityStore> store, Ref<EntityStore> ref, double x, double z) {
-        try {
-            EntityStatMap statMap = (EntityStatMap)store.getComponent(ref, EntityStatMap.getComponentType());
-            if (statMap == null) {
-                return;
-            }
-
-            // Hytale keeps the Health stat index cached; no per-tick asset-map lookup.
-            int healthIndex = DefaultEntityStatTypes.getHealth();
-            EntityStatValue health = statMap.get(healthIndex);
-            if (health == null) {
-                return;
-            }
-
-            boolean alive = health.get() > 0.001F;
-            if (this.wasAlive && !alive) {
-                this.deathX = x;
-                this.deathZ = z;
-                this.hasDeath = true;
-            }
-
-            this.wasAlive = alive;
-        } catch (Throwable var11) {
-        }
-
-    }
 
     private static String coordsText(double x, double y, double z) {
         return (int)Math.floor(x) + ", " + (int)Math.floor(y) + ", " + (int)Math.floor(z);
@@ -1462,7 +1450,7 @@ public final class DynamicMinimapSession {
     private static WorldTimeResource getWorldTime(World world) {
         try {
             TimeModule timeModule = TimeModule.get();
-            return timeModule == null ? null : (WorldTimeResource)world.getEntityStore().getStore().getResource(timeModule.getWorldTimeResourceType());
+            return timeModule == null ? null : world.getEntityStore().getStore().getResource(timeModule.getWorldTimeResourceType());
         } catch (RuntimeException var2) {
             return null;
         }
@@ -1580,9 +1568,6 @@ public final class DynamicMinimapSession {
             positions.put(key, new Position(x, z, mapSize, shape, iconSize, now));
             return new double[]{x, z};
         }
-        static double[] clamp(DynamicMinimapSetting settings, double x, double z, int markerSize) {
-            return clamp(settings, x, z, markerSize, 0);
-        }
         static double[] clamp(DynamicMinimapSetting settings, double x, double z, int markerSize, double angle) {
             double center = settings.sizePixels / 2.0D;
             double uiScale = settings.sizePixels / 220.0D;
@@ -1624,17 +1609,12 @@ public final class DynamicMinimapSession {
 
         private static Comparator<DynamicMinimapMarker> comparator(double x, double z) {
             return Comparator.comparingInt((DynamicMinimapMarker marker) -> switch (marker.style) {
-                case DEATH -> 0;
                 case BETTERMAP, NATIVE_WORLDMAP -> 1;
                 case DOT -> 2;
             }).thenComparingDouble(marker -> {
                 double dx = marker.x - x, dz = marker.z - z;
                 return dx * dx + dz * dz;
             });
-        }
-
-        List<DynamicMinimapMarker> get(List<DynamicMinimapMarker> snapshot, double x, double z) {
-            return get(snapshot, List.of(), List.of(), x, z);
         }
 
         List<DynamicMinimapMarker> get(List<DynamicMinimapMarker> snapshot,
@@ -1656,16 +1636,14 @@ public final class DynamicMinimapSession {
                 }
                 var moving = new ArrayList<>(snapshot);
                 moving.sort(compare);
-                // Normal local snapshots contain deaths and dots. Reuse the entire
-                // immutable integration segment rather than copying every waypoint
-                // whenever a creature moves. General mixed snapshots keep stable merge.
-                int deaths = 0;
-                while (deaths < moving.size() && moving.get(deaths).style == DynamicMinimapMarker.Style.DEATH) deaths++;
+                // Normal local snapshots contain only dots. Reuse the entire immutable
+                // integration segment rather than copying every waypoint whenever a
+                // creature moves. General mixed snapshots keep stable merge.
                 boolean localOnly = true;
-                for (int i = deaths; i < moving.size(); i++)
+                for (int i = 0; i < moving.size(); i++)
                     localOnly &= moving.get(i).style == DynamicMinimapMarker.Style.DOT;
                 if (integrations.isEmpty()) ordered = moving;
-                else if (localOnly) ordered = new SegmentedMarkers(moving, integrations, deaths);
+                else if (localOnly) ordered = new SegmentedMarkers(moving, integrations);
                 else {
                     var merged = new ArrayList<DynamicMinimapMarker>(moving.size() + integrations.size());
                     int local = 0, integration = 0;
@@ -1689,15 +1667,13 @@ public final class DynamicMinimapSession {
         private static final class SegmentedMarkers extends java.util.AbstractList<DynamicMinimapMarker>
                 implements java.util.RandomAccess {
             private final List<DynamicMinimapMarker> moving, integrations;
-            private final int deaths;
-            SegmentedMarkers(List<DynamicMinimapMarker> moving, List<DynamicMinimapMarker> integrations, int deaths) {
-                this.moving = moving; this.integrations = integrations; this.deaths = deaths;
+            SegmentedMarkers(List<DynamicMinimapMarker> moving, List<DynamicMinimapMarker> integrations) {
+                this.moving = moving; this.integrations = integrations;
             }
             @Override public int size() { return moving.size() + integrations.size(); }
             @Override public DynamicMinimapMarker get(int index) {
                 java.util.Objects.checkIndex(index, size());
-                if (index < deaths) return moving.get(index);
-                if (index < deaths + integrations.size()) return integrations.get(index - deaths);
+                if (index < integrations.size()) return integrations.get(index);
                 return moving.get(index - integrations.size());
             }
         }

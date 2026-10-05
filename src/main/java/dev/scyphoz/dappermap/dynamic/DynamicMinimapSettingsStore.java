@@ -12,14 +12,14 @@ import java.util.regex.Pattern;
 /** Persists normalized player settings as small JSON files and caches active values in memory. */
 public final class DynamicMinimapSettingsStore {
     private final Path dataDir;
-    private final ConcurrentHashMap<UUID, DynamicMinimapSetting> cache = new ConcurrentHashMap();
+    private final ConcurrentHashMap<UUID, DynamicMinimapSetting> cache = new ConcurrentHashMap<>();
 
     public DynamicMinimapSettingsStore(Path pluginDataDir) {
         this.dataDir = pluginDataDir.resolve("players");
     }
 
     public DynamicMinimapSetting get(UUID uuid, DynamicMinimapSetting defaults) {
-        return (DynamicMinimapSetting)this.cache.computeIfAbsent(uuid, (ignored) -> this.load(uuid, defaults));
+        return this.cache.computeIfAbsent(uuid, (ignored) -> this.load(uuid, defaults));
     }
 
     /** True when this player has a settings file on disk, i.e. they are not a new player. */

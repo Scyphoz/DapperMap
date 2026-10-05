@@ -16,8 +16,8 @@ import java.util.concurrent.ConcurrentHashMap;
 public class MinimapSessionManager {
 
 
-    private final Map<UUID, DynamicMinimapSetting> settingsByPlayer = new ConcurrentHashMap();
-    private final Map<UUID, DynamicMinimapSession> sessionsByPlayer = new ConcurrentHashMap();
+    private final Map<UUID, DynamicMinimapSetting> settingsByPlayer = new ConcurrentHashMap<>();
+    private final Map<UUID, DynamicMinimapSession> sessionsByPlayer = new ConcurrentHashMap<>();
     /**
      * Players who have changed at least one setting this session. Only these get written to
      * disk. Without this, every player who merely logged in once was given a frozen snapshot
@@ -66,7 +66,7 @@ public class MinimapSessionManager {
      * never customised anything keeps inheriting admin defaults on every join.
      */
     public DynamicMinimapSetting getSettings(UUID playerUuid, MinimapConfig config) {
-        return (DynamicMinimapSetting)this.settingsByPlayer.computeIfAbsent(playerUuid, (ignored) -> {
+        return this.settingsByPlayer.computeIfAbsent(playerUuid, (ignored) -> {
             DynamicMinimapSetting defaults = this.getAdminDefaults(config).copy();
             return this.settingsStore == null ? defaults : this.settingsStore.get(playerUuid, defaults);
         });
@@ -124,7 +124,7 @@ public class MinimapSessionManager {
             this.customisedPlayers.add(playerUuid);
         }
         this.settingsByPlayer.put(playerUuid, settings);
-        DynamicMinimapSession session = (DynamicMinimapSession)this.sessionsByPlayer.get(playerUuid);
+        DynamicMinimapSession session = this.sessionsByPlayer.get(playerUuid);
         if (session != null) {
             session.settings().colours = settings.colours;
             session.settings().enabled = settings.enabled;
@@ -221,7 +221,7 @@ public class MinimapSessionManager {
 
     private void start(PlayerRef playerRef, DynamicMinimapSetting settings) {
         UUID uuid = playerRef.getUuid();
-        DynamicMinimapSession oldSession = (DynamicMinimapSession)this.sessionsByPlayer.remove(uuid);
+        DynamicMinimapSession oldSession = this.sessionsByPlayer.remove(uuid);
         if (oldSession != null) {
             oldSession.stop(true);
         }
@@ -233,7 +233,7 @@ public class MinimapSessionManager {
     }
 
     private void stop(UUID uuid, boolean removeHud) {
-        DynamicMinimapSession session = (DynamicMinimapSession)this.sessionsByPlayer.remove(uuid);
+        DynamicMinimapSession session = this.sessionsByPlayer.remove(uuid);
         if (session != null) {
             session.stop(removeHud);
         }
@@ -250,7 +250,7 @@ public class MinimapSessionManager {
             return;
         }
         if (this.settingsStore != null && uuid != null) {
-            DynamicMinimapSetting settings = (DynamicMinimapSetting)this.settingsByPlayer.get(uuid);
+            DynamicMinimapSetting settings = this.settingsByPlayer.get(uuid);
             if (settings != null) {
                 this.settingsStore.put(uuid, settings);
             }

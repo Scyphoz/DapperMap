@@ -1,9 +1,6 @@
 package dev.scyphoz.dappermap.dynamic;
 
 import com.google.gson.*;
-import com.google.gson.JsonElement;
-import com.google.gson.JsonObject;
-import com.google.gson.JsonParser;
 import com.hypixel.hytale.component.ComponentAccessor;
 import com.hypixel.hytale.component.Ref;
 import com.hypixel.hytale.component.Store;
@@ -41,16 +38,6 @@ import java.lang.reflect.Field;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.*;
-import java.util.ArrayDeque;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.IdentityHashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
-import java.util.WeakHashMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
@@ -64,8 +51,10 @@ public final class DynamicEntityScanner {
     private DynamicEntityScanner() {
     }
 
-    public static List<DynamicMinimapMarker> scan(Store<EntityStore> store, Ref<EntityStore> playerRef, Vector3d playerPosition, double radius, DynamicMinimapSetting settings) {
-        ArrayList<DynamicMinimapMarker> markers = new ArrayList();
+    /** @param threats per-viewer colour cache (may be null to classify every creature afresh). */
+    public static List<DynamicMinimapMarker> scan(Store<EntityStore> store, Ref<EntityStore> playerRef, Vector3d playerPosition,
+                                                  double radius, DynamicMinimapSetting settings, ThreatCache threats) {
+        ArrayList<DynamicMinimapMarker> markers = new ArrayList<>();
         double radiusSq = radius * radius;
         double playerX = playerPosition.x();
         double playerY = playerPosition.y();
@@ -94,14 +83,14 @@ public final class DynamicEntityScanner {
                     store.forEachChunk(NPCEntity.getComponentType(), (chunk, commandBuffer) -> {
                         for(int i = 0; i < chunk.size(); ++i) {
                             try {
-                                TransformComponent transform = (TransformComponent)chunk.getComponent(i, TransformComponent.getComponentType());
+                                TransformComponent transform = chunk.getComponent(i, TransformComponent.getComponentType());
                                 if (transform != null) {
                                     Vector3d position = transform.getPosition();
                                     double dx = position.x() - playerX;
                                     double dz = position.z() - playerZ;
                                     if (!(dx * dx + dz * dz > radiusSq) && (!(verticalRange > (double)0.0F) || !(Math.abs(position.y() - playerY) > verticalRange))) {
                                         if (!creatures.wouldAccept(position.x(), position.z())) continue;
-                                        NPCEntity npc = (NPCEntity)chunk.getComponent(i, NPCEntity.getComponentType());
+                                        NPCEntity npc = chunk.getComponent(i, NPCEntity.getComponentType());
                                         if (npc != null) {
                                             Ref<EntityStore> npcRef = chunk.getReferenceTo(i);
                                             creatures.add(npcRef, position.x(), position.z());
@@ -121,15 +110,19 @@ public final class DynamicEntityScanner {
         // Only classify the final displayed set. Intermediate candidates may be
         // replaced by closer creatures, and need no attitude or intent reads.
         if (creatures != null) {
+            long now = System.currentTimeMillis();
             for (NearestNpcs.Candidate candidate : creatures.sorted()) {
                 try {
                     if (!candidate.ref().isValid()) continue;
                     NPCEntity npc = store.getComponent(candidate.ref(), NPCEntity.getComponentType());
                     if (npc == null) continue;
-                    Color color = colorFor(candidate.ref(), npc, playerRef, store, settings.colours);
-                    markers.add(DynamicMinimapMarker.dot(candidate.x(), candidate.z(), color, 7));
+                    MinimapColours.Key key = threats == null
+                            ? colourFor(candidate.ref(), npc, playerRef, store)
+                            : threats.classify(candidate.ref(), npc, playerRef, store, now);
+                    markers.add(DynamicMinimapMarker.dot(candidate.x(), candidate.z(), settings.colours.awt(key, 255), 7));
                 } catch (RuntimeException ignored) { }
             }
+            if (threats != null) threats.endScan();
         }
 
         PlayerVisibility visibility = settings.showOtherPlayers ? PlayerVisibility.forViewer(store, playerRef) : null;
@@ -157,7 +150,7 @@ public final class DynamicEntityScanner {
                     store.forEachChunk(Player.getComponentType(), (chunk, commandBuffer) -> {
                         for(int i = 0; i < chunk.size(); ++i) {
                             try {
-                                TransformComponent transform = (TransformComponent)chunk.getComponent(i, TransformComponent.getComponentType());
+                                TransformComponent transform = chunk.getComponent(i, TransformComponent.getComponentType());
                                 if (transform != null) {
                                     Vector3d position = transform.getPosition();
                                     double dx = position.x() - playerX;
@@ -288,8 +281,60 @@ public final class DynamicEntityScanner {
         }
     }
 
-    private static Color colorFor(Ref<EntityStore> npcRef, NPCEntity npc, Ref<EntityStore> playerRef, ComponentAccessor<EntityStore> commandBuffer, MinimapColours colours) {
-        return colours.awt(colourFor(npcRef, npc, playerRef, commandBuffer), 255);
+    /**
+     * Per-viewer cache of creature threat colours. Full classification (attitude cache,
+     * AI state, combat state, role profile and behaviour-tree inspection) is the most
+     * expensive part of a marker scan, so a result is reused for up to {@link #TTL_MS}.
+     *
+     * <p>Attack responsiveness is preserved by a cheap "engagement" fingerprint read on
+     * every scan: whether the creature's locked target is this player, whether it is
+     * executing an attack, and whether its current movement is aimed at this player. Any
+     * change to that fingerprint (a creature starting or stopping an attack on the player)
+     * forces an immediate reclassification on that same scan.
+     *
+     * <p>Only creatures shown in the latest scan are kept, so the cache is bounded by the
+     * creature marker limit and never retains removed entities. World thread only.
+     */
+    public static final class ThreatCache {
+        static final long TTL_MS = 750L;
+        private record Entry(MinimapColours.Key key, int engagement, long expiresAt) { }
+        private java.util.Map<Ref<EntityStore>, Entry> current = new java.util.HashMap<>();
+        private java.util.Map<Ref<EntityStore>, Entry> next = new java.util.HashMap<>();
+
+        MinimapColours.Key classify(Ref<EntityStore> npcRef, NPCEntity npc, Ref<EntityStore> playerRef,
+                                    ComponentAccessor<EntityStore> accessor, long now) {
+            int engagement = engagement(npcRef, npc, playerRef, accessor);
+            Entry cached = this.current.get(npcRef);
+            if (cached == null || cached.engagement() != engagement || now >= cached.expiresAt()) {
+                cached = new Entry(colourFor(npcRef, npc, playerRef, accessor), engagement, now + TTL_MS);
+            }
+            this.next.put(npcRef, cached);
+            return cached.key();
+        }
+
+        /** Keeps only creatures seen in the scan just finished. */
+        void endScan() {
+            var swap = this.current;
+            this.current = this.next;
+            this.next = swap;
+            this.next.clear();
+        }
+
+        /** Bit 0: locked onto player; bit 1: executing an attack; bit 2: moving at player. */
+        private static int engagement(Ref<EntityStore> npcRef, NPCEntity npc, Ref<EntityStore> playerRef,
+                                      ComponentAccessor<EntityStore> accessor) {
+            int bits = sameEntity(getLockedTarget(npcRef, accessor), playerRef) ? 1 : 0;
+            try {
+                CombatSupport combat = CombatSupport.get(npcRef, accessor);
+                if (combat != null && combat.isExecutingAttack()) bits |= 2;
+            } catch (RuntimeException ignored) { }
+            try {
+                Role role = npc.getRole();
+                BodyMotion motion = role == null ? null : role.getLastBodySteeringMotion();
+                if (motion != null && sameEntity(motion.getDesiredTargetEntity(), playerRef)) bits |= 4;
+            } catch (RuntimeException | LinkageError ignored) { }
+            return bits;
+        }
     }
 
     private static MinimapColours.Key colourFor(Ref<EntityStore> npcRef, NPCEntity npc,
@@ -565,13 +610,6 @@ public final class DynamicEntityScanner {
             } catch (java.io.IOException | RuntimeException ignored) {
                 return null;
             }
-        }
-
-        static MinimapColours.Key classify(NpcThreatProfile profile, Attitude attitude,
-                                           Attitude defaultAttitude, Attitude override, boolean targetingPlayer,
-                                           String state, boolean executingAttack) {
-            return classify(profile, attitude, defaultAttitude, override, targetingPlayer, state,
-                    executingAttack, NpcBehaviourSignals.Signals.UNKNOWN);
         }
 
         static MinimapColours.Key classify(NpcThreatProfile profile, Attitude attitude,

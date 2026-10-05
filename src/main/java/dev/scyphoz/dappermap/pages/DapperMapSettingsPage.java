@@ -503,8 +503,6 @@ public final class DapperMapSettingsPage
                 }
                 else if (isBooleanToggle(row.id)) this.toggleRow(builder, events, index, row, settings);
                 else this.dropdownRow(builder, events, index, row, settings);
-            } else if (row.kind == Kind.ACTION) {
-                this.actionRow(builder, events, index, row, settings);
             }
         }
     }
@@ -516,27 +514,6 @@ public final class DapperMapSettingsPage
         builder.set(selector + " #RowLabel.Text", row.label);
         builder.set(selector + " #RowDescription.Text", description(row.id));
         builder.set(selector + " #ValueLabel.Text", "Disabled");
-    }
-
-    private void actionRow(UICommandBuilder builder, UIEventBuilder events,
-                           int index, Row row, DynamicMinimapSetting settings) {
-        String selector = "#DapperMapSettingsList[" + index + "]";
-        if (!settings.enabled || !this.hasSettingPermission(permissionForSetting(row.id))) {
-            builder.append("#DapperMapSettingsList", "Pages/DapperMapDisabledDropdownRow.ui");
-            builder.set(selector + " #RowLabel.Text", row.label);
-            builder.set(selector + " #RowDescription.Text", description(row.id));
-            builder.set(selector + " #ValueLabel.Text", "Disabled");
-            return;
-        }
-        builder.append("#DapperMapSettingsList", "Pages/DapperMapMoveRow.ui");
-        builder.set(selector + " #RowLabel.Text", row.label);
-        builder.set(selector + " #RowDescription.Text", description(row.id));
-        builder.append(selector + " #BtnClickSlot", "Pages/BasicTextButton.ui");
-        builder.set(selector + " #BtnClickSlot[0].TextSpans", Message.raw(""));
-        builder.set(selector + " #BtnLabel.TextSpans",
-                Message.raw(row.id.equals("colours") ? "EDIT COLOURS" : "MOVE MINIMAP").color(BLUE));
-        events.addEventBinding(CustomUIEventBindingType.Activating, selector + " #BtnClickSlot[0]",
-                EventData.of("Action", row.id), false);
     }
 
     private void toggleRow(
@@ -926,7 +903,7 @@ public final class DapperMapSettingsPage
             case "players" -> "Show nearby players on your minimap.";
             case "entities" -> "Show nearby creatures on your minimap.";
             case "creature_limit" -> "Show up to 16, 32 or 64 nearby creatures, prioritising the nearest.";
-            case "death" -> "Mark the location of your last death.";
+            case "death" -> "Show Hytale's death markers (BetterMap's death settings apply).";
             case "worldmap" -> "Show Hytale personal, shared, POI, spawn and respawn world-map markers.";
             case "height" -> "Hide creatures far above or below you.";
             case "vrange" -> "Set how far above and below to show creatures.";
@@ -1105,25 +1082,6 @@ public final class DapperMapSettingsPage
         };
     }
 
-    private static String displayPanelPosition(int panelPosition) {
-        return switch (panelPosition) {
-            case DynamicMinimapSetting.INFO_LEFT -> "Left";
-            case DynamicMinimapSetting.INFO_RIGHT -> "Right";
-            case DynamicMinimapSetting.INFO_ABOVE -> "Above";
-            case DynamicMinimapSetting.INFO_BELOW -> "Below";
-            default -> "Right";
-        };
-    }
-
-    private static String displayPanelAlignment(int alignment) {
-        return switch (alignment) {
-            case DynamicMinimapSetting.INFO_ALIGN_CENTER -> "Centre";
-            case DynamicMinimapSetting.INFO_ALIGN_RIGHT -> "Right";
-            case DynamicMinimapSetting.INFO_ALIGN_LEFT -> "Left";
-            default -> "Left";
-        };
-    }
-
     private static int clampPercent(int value) {
         return Math.max(0, Math.min(100, value));
     }
@@ -1183,7 +1141,7 @@ public final class DapperMapSettingsPage
                 new Row("panel_position", "Info Panel Position", Kind.DROPDOWN),
                 new Row("panel_alignment", "Panel Text Alignment", Kind.DROPDOWN),
                 new Row("players", "Player Markers", Kind.DROPDOWN),
-                new Row("death", "Death Marker", Kind.DROPDOWN),
+                new Row("death", "Death Markers", Kind.DROPDOWN),
                 new Row("entities", "Creature Markers", Kind.DROPDOWN),
                 new Row("creature_limit", "Creature Marker Limit", Kind.DROPDOWN),
                 new Row("height", "Creature Height Detection", Kind.DROPDOWN),
@@ -1253,8 +1211,7 @@ public final class DapperMapSettingsPage
     private enum Kind {
         TOGGLE,
         HEADER,
-        DROPDOWN,
-        ACTION
+        DROPDOWN
     }
 
     private enum Tab {

@@ -108,7 +108,8 @@ public final class DapperMapPermissions {
             return;
         }
         DapperMapPermissions.grantPlayerSettingsByDefault = grantPlayerSettingsByDefault;
-        PermissionsModule.registerPermission(ADMIN_NODE, HytalePermissionsProvider.OP_GROUP);
+        // GROUP_ADMIN replaces the deprecated OP_GROUP (same group: "hytale:Admin").
+        PermissionsModule.registerPermission(ADMIN_NODE, HytalePermissionsProvider.GROUP_ADMIN);
         registered = true;
     }
 }

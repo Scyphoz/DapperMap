@@ -17,14 +17,51 @@ import java.util.function.Consumer;
  */
 public final class DynamicMinimapHud extends CustomUIHud {
     public static final String KEY = "DapperMapDynamicMinimapHud";
-    public static final int MARKER_SLOTS = 128;
-    private static final String[][] MARKER_SELECTORS = new String[2][MARKER_SLOTS];
-    static {
-        for (int i = 0; i < MARKER_SLOTS; i++) {
-            MARKER_SELECTORS[0][i] = "#WayfinderMmRoot #WayfinderMmClip #WayfinderMmMarkers #WayfinderMmMk" + i;
-            MARKER_SELECTORS[1][i] = "#WayfinderMmRoot #WayfinderMmEdges #WayfinderMmEdge" + i;
+    /** In-map dots (creatures and players): up to 64 creatures plus 32 players. */
+    public static final int MAP_MARKER_SLOTS = 96;
+    /** Edge-tracked icons (world-map, BetterMap waypoint and death markers). */
+    public static final int EDGE_MARKER_SLOTS = 64;
+    /** Total marker elements mounted in the HUD (previously 2 x 128 = 256). */
+    public static final int MARKER_SLOTS = MAP_MARKER_SLOTS + EDGE_MARKER_SLOTS;
+    /** Largest in-map marker movement (logical px) that does not trigger an Anchor update. */
+    private static final int MARKER_DEADBAND = 1;
+
+    /**
+     * Client-side state of one marker layer. Each layer has its own compact slot indices,
+     * so dots and edge icons no longer reserve an element in each other's layer.
+     */
+    private static final class MarkerLayer {
+        final boolean fixed;
+        final String elementPrefix;
+        final String[] selectors;
+        final String[] path;
+        final boolean[] visible;
+        final int[] left, top, size;
+        int active;
+
+        MarkerLayer(boolean fixed, int capacity, String elementPrefix, String selectorPrefix) {
+            this.fixed = fixed;
+            this.elementPrefix = elementPrefix;
+            this.selectors = new String[capacity];
+            for (int i = 0; i < capacity; i++) this.selectors[i] = selectorPrefix + elementPrefix + i;
+            this.path = new String[capacity];
+            this.visible = new boolean[capacity];
+            this.left = new int[capacity];
+            this.top = new int[capacity];
+            this.size = new int[capacity];
+        }
+
+        /** Forget what the client shows so the next update rebinds every used slot. */
+        void forget() {
+            java.util.Arrays.fill(this.path, null);
+            java.util.Arrays.fill(this.visible, false);
         }
     }
+
+    private final MarkerLayer mapLayer = new MarkerLayer(false, MAP_MARKER_SLOTS,
+            "WayfinderMmMk", "#WayfinderMmRoot #WayfinderMmClip #WayfinderMmMarkers #");
+    private final MarkerLayer edgeLayer = new MarkerLayer(true, EDGE_MARKER_SLOTS,
+            "WayfinderMmEdge", "#WayfinderMmRoot #WayfinderMmEdges #");
 
     // All constants below are logical HUD units. They are converted to display units
     // only when markup/Anchor values are produced.
@@ -174,18 +211,6 @@ public final class DynamicMinimapHud extends CustomUIHud {
     private String compassText = "N 0 deg";
     private String clockText = "Sun 06:00";
     private String biomeText = "Biome: unknown";
-    private final String[] slotPath = new String[MARKER_SLOTS];
-    private final boolean[] slotFixed = new boolean[MARKER_SLOTS];
-    private final boolean[] slotVisible = new boolean[MARKER_SLOTS];
-    private final int[] slotLeft = new int[MARKER_SLOTS];
-    private final int[] slotTop = new int[MARKER_SLOTS];
-    private final int[] slotSize = new int[MARKER_SLOTS];
-    private int activeMarkerSlots = 0;
-
-    public DynamicMinimapHud(PlayerRef playerRef, DynamicMinimapSetting settings,
-                             Consumer<Runnable> worldExecute) {
-        this(playerRef, settings, worldExecute, () -> settings.enabled);
-    }
 
     public DynamicMinimapHud(PlayerRef playerRef, DynamicMinimapSetting settings,
                              Consumer<Runnable> worldExecute, java.util.function.BooleanSupplier renderingAllowed) {
@@ -219,13 +244,16 @@ public final class DynamicMinimapHud extends CustomUIHud {
     public DynamicMinimapRenderer.LiveSnapshot snapshot(byte[] terrain, double selfAngle) {
         if (!this.built || !this.terrainShown || terrain == null) return null;
         java.util.List<DynamicMinimapRenderer.PreviewMarker> markers = new java.util.ArrayList<>();
-        for (int i = 0; i < this.slotPath.length; i++) {
-            if (!this.slotVisible[i] || this.slotPath[i] == null) continue;
-            byte[] icon = DynamicAssetPublisher.markerBytes(this.uuid, this.slotPath[i]);
-            if (icon != null) markers.add(new DynamicMinimapRenderer.PreviewMarker(
-                    icon, (this.slotFixed[i] ? 0 : this.panLeft) + this.slotLeft[i],
-                    (this.slotFixed[i] ? 0 : this.panTop) + this.slotTop[i],
-                    this.slotSize[i], this.slotPath[i].contains("/mk-") && this.slotSize[i] <= 9));
+        for (MarkerLayer layer : new MarkerLayer[]{this.mapLayer, this.edgeLayer}) {
+            for (int i = 0; i < layer.active; i++) {
+                if (!layer.visible[i] || layer.path[i] == null) continue;
+                byte[] icon = DynamicAssetPublisher.markerBytes(this.uuid, layer.path[i]);
+                // Edge icons are positioned in viewport space; map dots move with the pan.
+                if (icon != null) markers.add(new DynamicMinimapRenderer.PreviewMarker(
+                        icon, (layer.fixed ? 0 : this.panLeft) + layer.left[i],
+                        (layer.fixed ? 0 : this.panTop) + layer.top[i],
+                        layer.size[i], layer.path[i].contains("/mk-") && layer.size[i] <= 9));
+            }
         }
         return new DynamicMinimapRenderer.LiveSnapshot(terrain.clone(), this.logicalUiSize,
                 this.bufferPixels, this.panLeft, this.panTop, selfAngle, this.frameAngle,
@@ -344,15 +372,6 @@ public final class DynamicMinimapHud extends CustomUIHud {
         }
     }
 
-    /** left/top stay logical; conversion happens only when the Anchor is emitted. */
-    public int panLeft() {
-        return this.panLeft;
-    }
-
-    public int panTop() {
-        return this.panTop;
-    }
-
     public void pan(int left, int top) {
         if (this.built && this.terrainShown && (left != this.panLeft || top != this.panTop)) {
             this.panLeft = left;
@@ -461,66 +480,65 @@ public final class DynamicMinimapHud extends CustomUIHud {
 
     /** Force the next marker update to rebind client asset paths after teleportation. */
     public void invalidateMarkerSlots() {
-        java.util.Arrays.fill(this.slotPath, null);
-        java.util.Arrays.fill(this.slotVisible, false);
+        this.mapLayer.forget();
+        this.edgeLayer.forget();
     }
 
-    /** Slot coordinates and sizes are logical minimap values, converted here for display. */
+    /**
+     * Slot coordinates and sizes are logical minimap values, converted here for display.
+     * Slots are split by layer (fixed = edge layer) in their given order, so each layer is
+     * filled from index 0 and only the changed elements receive commands.
+     */
     public void setMarkers(Slot[] slots) {
-        if (this.built) {
-            UICommandBuilder builder = null;
-            boolean changed = false;
-            int occupied = 0;
-            if (slots != null) {
-                for (int i = Math.min(slots.length, MARKER_SLOTS) - 1; i >= 0; --i) {
-                    if (slots[i] != null && slots[i].path != null) {
-                        occupied = i + 1;
-                        break;
-                    }
-                }
+        if (!this.built) return;
+        Slot[] map = new Slot[MAP_MARKER_SLOTS];
+        Slot[] edge = new Slot[EDGE_MARKER_SLOTS];
+        int mapCount = 0, edgeCount = 0;
+        if (slots != null) {
+            for (Slot slot : slots) {
+                if (slot == null || slot.path == null) continue;
+                if (slot.fixed) { if (edgeCount < edge.length) edge[edgeCount++] = slot; }
+                else if (mapCount < map.length) map[mapCount++] = slot;
             }
-
-            for (int i = 0; i < Math.max(occupied, this.activeMarkerSlots); ++i) {
-                Slot slot = slots != null && i < slots.length ? slots[i] : null;
-                String path = slot != null ? slot.path : null;
-                boolean visible = path != null;
-                int left = visible ? slot.left : 0;
-                int top = visible ? slot.top : 0;
-                int size = visible ? slot.size : 0;
-                boolean fixed = visible ? slot.fixed : this.slotFixed[i];
-                boolean layerChanged = fixed != this.slotFixed[i];
-                if (!layerChanged && Objects.equals(path, this.slotPath[i])
-                        && visible == this.slotVisible[i] && (!visible
-                        || (left == this.slotLeft[i] && top == this.slotTop[i] && size == this.slotSize[i]))) continue;
-                if (builder == null) builder = new UICommandBuilder();
-                if (layerChanged && this.slotVisible[i]) {
-                    builder.set(markerSelector(i, this.slotFixed[i]) + ".Visible", false);
-                    changed = true;
-                }
-                String selector = markerSelector(i, fixed);
-                if (appendMarkerDelta(builder, selector, this.settings, this.blankPath,
-                        layerChanged ? null : this.slotPath[i], layerChanged ? false : this.slotVisible[i],
-                        this.slotLeft[i], this.slotTop[i], this.slotSize[i],
-                        path, visible, left, top, size)) {
-                    this.slotFixed[i] = fixed;
-                    this.slotPath[i] = path;
-                    this.slotVisible[i] = visible;
-                    this.slotLeft[i] = left;
-                    this.slotTop[i] = top;
-                    this.slotSize[i] = size;
-                    changed = true;
-                }
-            }
-
-            if (changed) {
-                this.update(false, builder);
-            }
-            this.activeMarkerSlots = occupied;
         }
+        UICommandBuilder builder = new UICommandBuilder();
+        boolean changed = this.applyLayer(builder, this.mapLayer, map, mapCount);
+        changed |= this.applyLayer(builder, this.edgeLayer, edge, edgeCount);
+        if (changed) this.update(false, builder);
     }
 
-    static String markerSelector(int slot, boolean fixed) {
-        return MARKER_SELECTORS[fixed ? 1 : 0][slot];
+    /** Emits commands for one layer's changed slots; returns true when any were added. */
+    private boolean applyLayer(UICommandBuilder builder, MarkerLayer layer, Slot[] slots, int count) {
+        boolean changed = false;
+        for (int i = 0; i < Math.max(count, layer.active); ++i) {
+            Slot slot = i < count ? slots[i] : null;
+            String path = slot != null ? slot.path : null;
+            boolean visible = path != null;
+            int left = visible ? slot.left : 0;
+            int top = visible ? slot.top : 0;
+            int size = visible ? slot.size : 0;
+            // Dead-band: an in-map icon that moved by only 1 logical px keeps its last sent
+            // position. Error stays within 1 px while moving creatures stop generating an
+            // Anchor update on almost every scan. Edge icons have their own EdgeTracker.
+            if (!layer.fixed && visible && layer.visible[i]
+                    && size == layer.size[i] && Objects.equals(path, layer.path[i])
+                    && Math.abs(left - layer.left[i]) <= MARKER_DEADBAND
+                    && Math.abs(top - layer.top[i]) <= MARKER_DEADBAND) continue;
+            if (Objects.equals(path, layer.path[i]) && visible == layer.visible[i] && (!visible
+                    || (left == layer.left[i] && top == layer.top[i] && size == layer.size[i]))) continue;
+            if (appendMarkerDelta(builder, layer.selectors[i], this.settings, this.blankPath,
+                    layer.path[i], layer.visible[i], layer.left[i], layer.top[i], layer.size[i],
+                    path, visible, left, top, size)) {
+                layer.path[i] = path;
+                layer.visible[i] = visible;
+                layer.left[i] = left;
+                layer.top[i] = top;
+                layer.size[i] = size;
+                changed = true;
+            }
+        }
+        layer.active = count;
+        return changed;
     }
 
     /** Moving an existing icon must not rebind its texture or visibility. */
@@ -545,8 +563,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
             this.overlayRevision++;
             this.publishOverlayAsset(false);
             this.rebuildPositionLayout();
-            java.util.Arrays.fill(this.slotPath, null);
-            java.util.Arrays.fill(this.slotVisible, false);
+            this.invalidateMarkerSlots();
         }
     }
 
@@ -652,45 +669,10 @@ public final class DynamicMinimapHud extends CustomUIHud {
             this.overlayDirty = false;
             this.terrainShown = false;
 
-            for(int i = 0; i < MARKER_SLOTS; ++i) {
-                this.slotPath[i] = null;
-                this.slotVisible[i] = false;
-            }
-            this.activeMarkerSlots = 0;
+            this.invalidateMarkerSlots();
+            this.mapLayer.active = 0;
+            this.edgeLayer.active = 0;
         }
-    }
-
-    /**
-     * Backward-compatible four-corner positioning entry point.
-     */
-    public void setPosition(int position) {
-        int x;
-        int y;
-
-        switch (position) {
-            case DynamicMinimapSetting.POS_TOP_LEFT -> {
-                x = 0;
-                y = 0;
-            }
-            case DynamicMinimapSetting.POS_BOTTOM_LEFT -> {
-                x = 0;
-                y = 100;
-            }
-            case DynamicMinimapSetting.POS_BOTTOM_RIGHT -> {
-                x = 100;
-                y = 100;
-            }
-            case DynamicMinimapSetting.POS_TOP_RIGHT -> {
-                x = 100;
-                y = 0;
-            }
-            default -> {
-                x = 100;
-                y = 0;
-            }
-        }
-
-        this.setLayoutPosition(x, y, this.infoPanelPosition);
     }
 
     /**
@@ -943,7 +925,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
                 .append(", Width: ").append(displayBuffer)
                 .append(", Height: ").append(displayBuffer).append("); ");
 
-        appendMarkerLayer(out, false);
+        appendMarkerLayer(out, this.mapLayer);
         out.append("} ");
         out.append("} ");
 
@@ -977,19 +959,20 @@ public final class DynamicMinimapHud extends CustomUIHud {
         out.append("Group #WayfinderMmEdges { Anchor: (Left: ").append(mapLeft)
                 .append(", Top: ").append(mapTop).append(", Width: ").append(displayUiSize)
                 .append(", Height: ").append(displayUiSize).append("); ");
-        appendMarkerLayer(out, true);
+        appendMarkerLayer(out, this.edgeLayer);
         out.append("} ");
     }
 
-    private void appendMarkerLayer(StringBuilder out, boolean fixed) {
-        for (int i = 0; i < MARKER_SLOTS; ++i) {
-            boolean visible = this.slotFixed[i] == fixed && this.slotVisible[i] && this.slotPath[i] != null;
-            out.append("AssetImage #").append(fixed ? "WayfinderMmEdge" : "WayfinderMmMk").append(i)
-                    .append(" { Anchor: (Left: ").append(visible ? this.displayCoordinate(this.slotLeft[i]) : 0)
-                    .append(", Top: ").append(visible ? this.displayCoordinate(this.slotTop[i]) : 0)
-                    .append(", Width: ").append(visible ? this.displaySize(this.slotSize[i]) : 0)
-                    .append(", Height: ").append(visible ? this.displaySize(this.slotSize[i]) : 0)
-                    .append("); AssetPath: ").append('"').append(visible ? this.slotPath[i] : this.blankPath)
+    /** Emits every element of a layer, restoring the currently shown icons on rebuilds. */
+    private void appendMarkerLayer(StringBuilder out, MarkerLayer layer) {
+        for (int i = 0; i < layer.path.length; ++i) {
+            boolean visible = layer.visible[i] && layer.path[i] != null;
+            out.append("AssetImage #").append(layer.elementPrefix).append(i)
+                    .append(" { Anchor: (Left: ").append(visible ? this.displayCoordinate(layer.left[i]) : 0)
+                    .append(", Top: ").append(visible ? this.displayCoordinate(layer.top[i]) : 0)
+                    .append(", Width: ").append(visible ? this.displaySize(layer.size[i]) : 0)
+                    .append(", Height: ").append(visible ? this.displaySize(layer.size[i]) : 0)
+                    .append("); AssetPath: ").append('"').append(visible ? layer.path[i] : this.blankPath)
                     .append('"').append("; Visible: ").append(visible).append("; } ");
         }
     }

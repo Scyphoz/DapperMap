@@ -93,15 +93,15 @@ public class MinimapCommand extends AbstractPlayerCommand {
     private static final String[] ON_OFF = {"on", "off"};
 
     protected void execute(@Nonnull CommandContext context, @Nonnull Store<EntityStore> store, @Nonnull Ref<EntityStore> ref, @Nonnull PlayerRef playerRef, @Nonnull World world) {
-        boolean enabled = this.sessions.toggle((Player)store.getComponent(ref, Player.getComponentType()), playerRef,
-                (MinimapConfig)DapperMap.getConfig().get());
+        boolean enabled = this.sessions.toggle(store.getComponent(ref, Player.getComponentType()), playerRef,
+                DapperMap.getConfig().get());
         context.sendMessage(Message.raw(enabled ? "DapperMap shown." : "DapperMap hidden."));
     }
 
     private void dispatch(@Nonnull CommandContext context, @Nonnull Store<EntityStore> store, @Nonnull Ref<EntityStore> ref,
                           @Nonnull PlayerRef playerRef, @Nonnull World world, String args) {
-        MinimapConfig config = (MinimapConfig)DapperMap.getConfig().get();
-        Player player = (Player)store.getComponent(ref, Player.getComponentType());
+        MinimapConfig config = DapperMap.getConfig().get();
+        Player player = store.getComponent(ref, Player.getComponentType());
         args = args.trim();
         if (!args.isEmpty() && !args.equalsIgnoreCase("toggle")) {
             String[] parts = args.split("\\s+", 3);
@@ -367,7 +367,7 @@ public class MinimapCommand extends AbstractPlayerCommand {
             context.sendMessage(Message.raw("You do not have permission to manage DapperMap server defaults."));
             return;
         }
-        MinimapConfig config = (MinimapConfig)DapperMap.getConfig().get();
+        MinimapConfig config = DapperMap.getConfig().get();
         Player player = store.getComponent(ref, Player.getComponentType());
         String args = arguments == null ? "" : arguments.trim();
         if (args.isEmpty() || args.equalsIgnoreCase("settings") || args.equalsIgnoreCase("menu") || args.equalsIgnoreCase("gui")) {
@@ -931,10 +931,10 @@ public class MinimapCommand extends AbstractPlayerCommand {
             super("admin", "Configure server defaults for new DapperMap players");
             this.root = root;
             this.requirePermission(DapperMapPermissions.ADMIN);
-            // Not setPermissionGroups(OP_GROUP) here: that call is a coarse "anyone in this
+            // Not setPermissionGroups(GROUP_ADMIN) here: that call is a coarse "anyone in this
             // group" fast path that bypasses the node-specific deny-aware check (see
             // DapperMapPermissions.DEFAULT_PLAYER_GROUP javadoc). ADMIN_NODE is already
-            // registered against OP_GROUP the deny-respecting way in DapperMapPermissions.register().
+            // registered against GROUP_ADMIN the deny-respecting way in DapperMapPermissions.register().
         }
 
         @Override

@@ -7,7 +7,6 @@ import com.hypixel.hytale.server.core.event.events.player.PlayerReadyEvent;
 import com.hypixel.hytale.server.core.universe.PlayerRef;
 import com.hypixel.hytale.server.core.universe.world.storage.EntityStore;
 import dev.scyphoz.dappermap.DapperMap;
-import dev.scyphoz.dappermap.config.MinimapConfig;
 import dev.scyphoz.dappermap.service.MinimapSessionManager;
 
 /** Starts or restores a player's minimap after Hytale reports that the player is ready. */
@@ -37,7 +36,7 @@ public class PlayerReadyListener {
         this.sessions.showIfEnabledByDefault(
                 player,
                 playerRef,
-                (MinimapConfig) DapperMap.getConfig().get()
+                DapperMap.getConfig().get()
         );
     }
 }

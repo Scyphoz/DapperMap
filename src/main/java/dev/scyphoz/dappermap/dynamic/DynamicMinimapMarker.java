@@ -4,7 +4,6 @@ import java.awt.Color;
 
 /** Immutable world-space marker description consumed by the session's HUD projection step. */
 public final class DynamicMinimapMarker {
-    public static final Color DEATH_COLOR = new Color(255, 255, 255, 235);
     public final double x;
     public final double z;
     public final Color color;
@@ -33,10 +32,6 @@ public final class DynamicMinimapMarker {
 
     public static DynamicMinimapMarker dot(double x, double z, Color color, int size) {
         return new DynamicMinimapMarker(x, z, color, size, Style.DOT, null, false);
-    }
-
-    public static DynamicMinimapMarker death(double x, double z, int size) {
-        return new DynamicMinimapMarker(x, z, DEATH_COLOR, size, Style.DEATH, null, false);
     }
 
     public static DynamicMinimapMarker betterMap(
@@ -81,7 +76,6 @@ public final class DynamicMinimapMarker {
 
     public enum Style {
         DOT,
-        DEATH,
         BETTERMAP,
         NATIVE_WORLDMAP
     }

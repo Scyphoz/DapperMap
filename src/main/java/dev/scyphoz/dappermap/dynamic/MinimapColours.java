@@ -19,7 +19,7 @@ public final class MinimapColours {
         BIOME_TEXT("biome-text", "Text", "Region", "The current-biome text.", 0xF4F2FF),
         SELF("self", "Markers", "Your Locator", "The locator marking your position.", 0xF4C76B),
         PLAYERS("players", "Markers", "Other Players", "Nearby player markers.", 0x74A7FF),
-        DEATH("death", "Markers", "Death Marker", "Your last-death marker.", 0xF2F0FF),
+        DEATH("death", "Markers", "Death Markers", "Tint for Hytale's death markers (white keeps the original look).", 0xF2F0FF),
         HOSTILE_ACTIVE("hostile-active", "Markers", "Attacking Creatures", "Hostiles currently targeting you.", 0xFF526B),
         HOSTILE("hostile", "Markers", "Hostile Creatures", "Nearby hostile creatures.", 0xFF9566),
         NEUTRAL("neutral", "Markers", "Neutral Creatures", "Neutral or retreating creatures.", 0xE9CA68),

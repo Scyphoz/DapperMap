@@ -9,7 +9,6 @@ import java.awt.Color;
 import static dev.scyphoz.dappermap.dynamic.MinimapColours.Key.*;
 import java.awt.Font;
 import java.awt.FontMetrics;
-import java.awt.GradientPaint;
 import java.awt.Graphics2D;
 import java.awt.RenderingHints;
 import java.awt.geom.AffineTransform;
@@ -58,7 +57,7 @@ public final class DynamicMinimapRenderer {
     }
     private static final double[][] SQUARE_COMPASS_POINTS = {{0,-1},{1,-1},{1,0},{1,1},{0,1},{-1,1},{-1,0},{-1,-1},{0,-1}};
     private static final Font CARDINAL_FONT = new Font("SansSerif", 1, 15);
-    private static final Map<String, byte[]> MASK_CACHE = new ConcurrentHashMap();
+    private static final Map<String, byte[]> MASK_CACHE = new ConcurrentHashMap<>();
     private static final PngCache FRAME_CACHE = new PngCache(256, 8 * 1024 * 1024);
     private record ArrowKey(long angle, int rgb) {}
     private static final PngCache ARROW_CACHE = new PngCache(512, 2 * 1024 * 1024);
@@ -102,10 +101,6 @@ public final class DynamicMinimapRenderer {
 
     public static double bufferOriginWorld(double center, DynamicMinimapSetting settings) {
         return center - (double)bufferPixels(settings) / (double)2.0F / pixelsPerBlock(settings);
-    }
-
-    public static Terrain renderTerrain(WorldMapManager worldMapManager, double centerX, double centerZ, DynamicMinimapSetting settings) {
-        return renderTerrain(worldMapManager, centerX, centerZ, settings, null);
     }
 
     public static Terrain renderTerrain(WorldMapManager worldMapManager, double centerX, double centerZ, DynamicMinimapSetting settings, BiFunction<Integer, Integer, MapImage> caveImages) {
@@ -183,10 +178,6 @@ public final class DynamicMinimapRenderer {
 
         graphics.dispose();
         return present == 0 ? new Terrain((byte[])null, 0, total) : new Terrain(toPng(terrain), present, total);
-    }
-
-    public static long terrainSignature(WorldMapManager worldMapManager, double centerX, double centerZ, DynamicMinimapSetting settings) {
-        return terrainSignature(worldMapManager, centerX, centerZ, settings, null);
     }
 
     public static long terrainSignature(WorldMapManager worldMapManager, double centerX, double centerZ, DynamicMinimapSetting settings, BiFunction<Integer, Integer, MapImage> caveImages) {
@@ -311,16 +302,6 @@ public final class DynamicMinimapRenderer {
         return png;
     }
 
-    /**
-     * Renders the shared instrument body behind the map and telemetry content.
-     * Terrain and marker assets remain separate; this image supplies only the
-     * contoured telemetry shell and the independent shape-aware divider.
-     */
-    public static byte[] renderHudChrome(DynamicMinimapSetting settings, int mapSize,
-                                         int sidePanelWidth, int panelHeight, int gap) {
-        return toPng(renderHudChromeImage(settings, mapSize, sidePanelWidth, panelHeight, gap));
-    }
-
     private static BufferedImage renderHudChromeImage(DynamicMinimapSetting settings, int mapSize,
                                                       int sidePanelWidth, int panelHeight, int gap) {
         boolean side = settings.infoPanelPosition == DynamicMinimapSetting.INFO_LEFT
@@ -409,116 +390,6 @@ public final class DynamicMinimapRenderer {
         synchronized int size() { return entries.size(); }
     }
 
-    public record OverlayRow(byte[] png, int top, int width, int height) {}
-    public record HudOverlayParts(byte[] frame, byte[] readout, OverlayRow[] rows) {}
-
-    /** Disjoint rasters preserve the original coordinate space and exact pixels.
-     * Only the part whose content changed needs another client asset transfer. */
-    public static HudOverlayParts renderHudOverlayParts(DynamicMinimapSetting settings, int mapSize,
-                                                        int sidePanelWidth, int panelHeight, int gap, double frameAngle,
-                                                        String coords, String compass, String clock, String biome) {
-        BufferedImage image = renderHudOverlayImage(settings, mapSize, sidePanelWidth, panelHeight, gap,
-                frameAngle, coords, compass, clock, biome, false);
-        if (image == null) return null;
-        boolean side = settings.infoPanelPosition == DynamicMinimapSetting.INFO_LEFT
-                || settings.infoPanelPosition == DynamicMinimapSetting.INFO_RIGHT;
-        int mapX = !settings.infoPanelEnabled ? 0 : settings.infoPanelPosition == DynamicMinimapSetting.INFO_LEFT
-                ? sidePanelWidth + gap : side ? 0 : Math.max(0, (image.getWidth() - mapSize) / 2);
-        int mapY = !settings.infoPanelEnabled ? 0 : settings.infoPanelPosition == DynamicMinimapSetting.INFO_ABOVE
-                ? panelHeight + gap : settings.infoPanelPosition == DynamicMinimapSetting.INFO_BELOW
-                ? 0 : Math.max(0, (image.getHeight() - mapSize) / 2);
-        boolean spill = false;
-        int[] mapRow = new int[mapSize];
-        for (int y = mapY; y < mapY + mapSize && !spill; y++) {
-            image.getRGB(mapX, y, mapSize, 1, mapRow, 0, mapSize);
-            for (int pixel : mapRow) if (pixel != 0) { spill = true; break; }
-        }
-        byte[] framePng;
-        if (spill) {
-            // Long left-panel text can extend into the map. Preserve its exact
-            // original compositing order instead of caching an unrelated frame.
-            BufferedImage original = renderHudOverlayImage(settings, mapSize, sidePanelWidth, panelHeight, gap,
-                    frameAngle, coords, compass, clock, biome);
-            if (original == null) return null;
-            BufferedImage frame = new BufferedImage(image.getWidth(), image.getHeight(), BufferedImage.TYPE_INT_ARGB);
-            for (int y = mapY; y < mapY + mapSize; y++) {
-                original.getRGB(mapX, y, mapSize, 1, mapRow, 0, mapSize);
-                frame.setRGB(mapX, y, mapSize, 1, mapRow, 0, mapSize);
-            }
-            framePng = toPng(frame);
-        } else {
-            var key = new FrameLayerKey(mapSize, image.getWidth(), image.getHeight(), mapX, mapY,
-                    settings.textureResolution, settings.shape, settings.infoPanelEnabled,
-                    rotationBucket(frameAngle), settings.colours.frameKey());
-            framePng = OVERLAY_LAYERS.get(key);
-            if (framePng == null) {
-                BufferedImage frame = new BufferedImage(image.getWidth(), image.getHeight(), BufferedImage.TYPE_INT_ARGB);
-                byte[] source = renderFrame(settings, frameAngle);
-                if (source == null) return null;
-                try {
-                    BufferedImage decoded = ImageIO.read(new ByteArrayInputStream(source));
-                    if (decoded == null) return null;
-                    Graphics2D graphics = frame.createGraphics();
-                    if (!settings.infoPanelEnabled)
-                        graphics.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC);
-                    else {
-                        graphics.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-                        graphics.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
-                        graphics.setRenderingHint(RenderingHints.KEY_FRACTIONALMETRICS, RenderingHints.VALUE_FRACTIONALMETRICS_ON);
-                        graphics.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
-                    }
-                    graphics.drawImage(decoded, mapX, mapY, mapSize, mapSize, null);
-                    graphics.dispose();
-                } catch (IOException ignored) { return null; }
-                framePng = toPng(frame);
-                OVERLAY_LAYERS.put(key, framePng);
-            }
-        }
-        Graphics2D clear = image.createGraphics();
-        clear.setComposite(java.awt.AlphaComposite.Clear);
-        clear.fillRect(mapX, mapY, mapSize, mapSize);
-        clear.dispose();
-        int flags = (settings.infoPanelEnabled ? 16 : 0) | (settings.showCoordinates ? 1 : 0)
-                | (settings.showCompass ? 2 : 0) | (settings.showClock ? 4 : 0) | (settings.showBiome ? 8 : 0);
-        var layout = new OverlayLayout(mapSize, image.getWidth(), image.getHeight(), panelHeight, gap,
-                settings.shape, settings.infoPanelPosition, settings.infoPanelTextAlignment, flags, settings.colours);
-        String[] values = {coords, compass, clock, biome};
-        OverlayRow[] rows = new OverlayRow[4];
-        boolean[] enabled = {settings.showCoordinates, settings.showCompass, settings.showClock, settings.showBiome};
-        int panelY = settings.infoPanelPosition == DynamicMinimapSetting.INFO_BELOW ? mapSize + gap
-                : settings.infoPanelPosition == DynamicMinimapSetting.INFO_ABOVE ? 0
-                : Math.max(0, (image.getHeight() - panelHeight) / 2);
-        int cursor = panelY + 30;
-        for (int i = 0; i < rows.length; i++) {
-            if (!settings.infoPanelEnabled || !enabled[i]) {
-                rows[i] = new OverlayRow(BLANK_PNG, 0, 0, 0);
-                continue;
-            }
-            var key = new RowLayerKey(layout, i, values[i]);
-            byte[] png = OVERLAY_LAYERS.get(key);
-            if (png == null) {
-                BufferedImage rowImage = new BufferedImage(image.getWidth(), 43, BufferedImage.TYPE_INT_ARGB);
-                int[] pixels = image.getRGB(0, cursor, image.getWidth(), 43, null, 0, image.getWidth());
-                rowImage.setRGB(0, 0, image.getWidth(), 43, pixels, 0, image.getWidth());
-                png = toPng(rowImage);
-                OVERLAY_LAYERS.put(key, png);
-            }
-            clear = image.createGraphics();
-            clear.setComposite(java.awt.AlphaComposite.Clear);
-            clear.fillRect(0, cursor, image.getWidth(), 43);
-            clear.dispose();
-            if (png == null) return null;
-            rows[i] = new OverlayRow(png, cursor, image.getWidth(), 43);
-            cursor += 43;
-        }
-        var chromeKey = new RowLayerKey(layout, -1, "");
-        byte[] readoutPng = OVERLAY_LAYERS.get(chromeKey);
-        if (readoutPng == null) {
-            readoutPng = toPng(image);
-            OVERLAY_LAYERS.put(chromeKey, readoutPng);
-        }
-        return framePng == null || readoutPng == null ? null : new HudOverlayParts(framePng, readoutPng, rows);
-    }
 
     public record NativeHudParts(byte[] frame, byte[] readout) {}
 
@@ -1149,23 +1020,6 @@ public final class DynamicMinimapRenderer {
         return toPng(image);
     }
 
-    public static byte[] renderDeath(MinimapColours colours) {
-        BufferedImage image = new BufferedImage(32, 32, 2);
-        Graphics2D graphics = image.createGraphics();
-        graphics.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-        int inset = 6;
-        graphics.setStroke(new BasicStroke(6.0F, 1, 1));
-        graphics.setColor(withAlpha(FIXED_MARKER_OUTLINE, 220));
-        graphics.drawLine(inset, inset, 32 - inset, 32 - inset);
-        graphics.drawLine(inset, 32 - inset, 32 - inset, inset);
-        graphics.setStroke(new BasicStroke(3.0F, 1, 1));
-        graphics.setColor(colours.awt(DEATH, 235));
-        graphics.drawLine(inset, inset, 32 - inset, 32 - inset);
-        graphics.drawLine(inset, 32 - inset, 32 - inset, inset);
-        graphics.dispose();
-        return toPng(image);
-    }
-
     public static byte[] renderSelfArrow(double angle, MinimapColours colours) {
         ArrowKey key = new ArrowKey(Double.doubleToLongBits(angle), colours.rgb(MinimapColours.Key.SELF));
         byte[] cached = ARROW_CACHE.get(key);
@@ -1267,39 +1121,40 @@ public final class DynamicMinimapRenderer {
     }
 
     /**
-     * Rotates a previously rendered north-up terrain PNG around its center.
-     * The terrain buffer is deliberately larger than the visible viewport, so
-     * the viewport remains covered while the square buffer rotates.
+     * One immutable decoded source per accepted terrain. It also remembers the most recent
+     * rotated frames of this terrain (encoded and hashed), so turning back to a recent
+     * heading skips the rotate + PNG encode + hash work. The cache lives and dies with the
+     * source, so a new terrain render can never reuse a stale frame.
      */
-    public static byte[] rotateTerrain(byte[] northUpPng, double mapAngle) {
-        return rotateTerrain(northUpPng, mapAngle, MinimapColours.defaults());
-    }
-
-    public static byte[] rotateTerrain(byte[] northUpPng, double mapAngle, MinimapColours colours) {
-        if (northUpPng == null || northUpPng.length == 0) {
-            return null;
-        }
-
-        int bucket = rotationBucket(mapAngle);
-        if (bucket == 0) {
-            return northUpPng;
-        }
-
-        try {
-            return rotateTerrain(new RotationSource(ImageIO.read(new ByteArrayInputStream(northUpPng)), northUpPng), mapAngle);
-        } catch (Exception ignored) {
-            return null;
-        }
-    }
-
-    /** One immutable decoded source per accepted terrain, never a cache of angles. */
     public static final class RotationSource {
+        private static final int FRAME_LIMIT = 12;
+        private static final int FRAME_BYTE_LIMIT = 3 * 1024 * 1024;
         private final BufferedImage image;
         private final byte[] png;
+        private final java.util.LinkedHashMap<Integer, DynamicAssetPublisher.PreparedAsset> frames =
+                new java.util.LinkedHashMap<>(16, 0.75F, true);
+        private int frameBytes;
 
         private RotationSource(BufferedImage image, byte[] png) {
             this.image = image;
             this.png = png;
+        }
+
+        /** Previously rotated frame for a heading bucket, or null. Thread-safe. */
+        public synchronized DynamicAssetPublisher.PreparedAsset cachedFrame(int bucket) {
+            return this.frames.get(bucket);
+        }
+
+        /** Remembers a rotated frame; least recently used frames are evicted by count and bytes. */
+        public synchronized void rememberFrame(int bucket, DynamicAssetPublisher.PreparedAsset frame) {
+            if (frame == null) return;
+            var old = this.frames.put(bucket, frame);
+            this.frameBytes += frame.data().length - (old == null ? 0 : old.data().length);
+            var iterator = this.frames.values().iterator();
+            while (iterator.hasNext() && (this.frames.size() > FRAME_LIMIT || this.frameBytes > FRAME_BYTE_LIMIT)) {
+                this.frameBytes -= iterator.next().data().length;
+                iterator.remove();
+            }
         }
     }
 

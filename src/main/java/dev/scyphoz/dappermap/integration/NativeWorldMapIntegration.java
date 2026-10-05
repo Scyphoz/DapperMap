@@ -8,7 +8,6 @@ import com.hypixel.hytale.server.core.asset.common.CommonAssetRegistry;
 import com.hypixel.hytale.server.core.entity.entities.Player;
 import com.hypixel.hytale.server.core.universe.PlayerRef;
 import com.hypixel.hytale.server.core.universe.world.World;
-import com.hypixel.hytale.server.core.universe.world.worldmap.WorldMapManager;
 import com.hypixel.hytale.server.core.universe.world.worldmap.markers.MarkersCollector;
 import dev.scyphoz.dappermap.dynamic.DynamicMinimapMarker;
 import dev.scyphoz.dappermap.dynamic.MinimapColours;
@@ -29,10 +28,13 @@ import java.util.function.Predicate;
 public final class NativeWorldMapIntegration {
     // Built-in systems also register "portals", "warps", "objectives" and
     // "prefabs". Keep their markers (and future providers), excluding only
-    // marker types rendered separately by the minimap. "BetterMapPlayerRadar" is
+    // marker types rendered separately by the minimap ("death" is handled by its own
+    // Death Marker switch below). "BetterMapPlayerRadar" is
     // BetterMap's own player-position provider: DapperMap draws players itself
     // (honouring the Other Players toggle), so radar icons would only duplicate them.
-    private static final Set<String> EXCLUDED = Set.of("playerIcons", "death", "BetterMapPlayerRadar");
+    private static final Set<String> EXCLUDED = Set.of("playerIcons", "BetterMapPlayerRadar");
+    /** Hytale's death-marker provider key (BetterMap wraps it under the same key). */
+    public static final String DEATH_PROVIDER = "death";
     /** BetterMap swaps Hytale's "personal"/"shared" waypoint providers for this one. */
     public static final String BETTERMAP_WAYPOINT_PROVIDER = "bettermap_usermarkers";
     /** A single filename, or a forward-slash relative path without "..", ending in .png. */
@@ -59,9 +61,12 @@ public final class NativeWorldMapIntegration {
      * @param betterMapWaypoints  BetterMap integration and its waypoint markers enabled; its
      *                            waypoints then use BetterMap styling. When false they are
      *                            still shown as ordinary world-map markers if includeNative.
+     * @param includeDeaths       Death Marker switch: Hytale's (or BetterMap's) death markers,
+     *                            independent of includeNative and tinted with the Death colour.
      */
     public static List<DynamicMinimapMarker> getMarkers(World world, Player player, MinimapColours colours,
-                                                        boolean includeNative, boolean betterMapWaypoints) {
+                                                        boolean includeNative, boolean betterMapWaypoints,
+                                                        boolean includeDeaths) {
         List<DynamicMinimapMarker> result = new ArrayList<>();
         MarkersCollector nativeCollector = collector(marker -> {
             double mx = marker.transform.position.x, mz = marker.transform.position.z;
@@ -79,10 +84,18 @@ public final class NativeWorldMapIntegration {
             result.add(DynamicMinimapMarker.betterMap(marker.transform.position.x,
                     marker.transform.position.z, image, markerTint(marker), BETTERMAP_MARKER_SIZE));
         });
+        java.awt.Color deathTint = colours.awt(MinimapColours.Key.DEATH, 255);
+        MarkersCollector deathCollector = collector(marker -> {
+            String image = markerImage(marker.markerImage);
+            if (image == null) return;
+            result.add(DynamicMinimapMarker.nativeWorldMap(marker.transform.position.x,
+                    marker.transform.position.z, image, deathTint, MARKER_SIZE));
+        });
         world.getWorldMapManager().getMarkerProviders().forEach((key, provider) -> {
             if (EXCLUDED.contains(key)) return;
             boolean waypoints = BETTERMAP_WAYPOINT_PROVIDER.equals(key);
-            MarkersCollector target = waypoints && betterMapWaypoints ? betterMapCollector
+            MarkersCollector target = DEATH_PROVIDER.equals(key) ? (includeDeaths ? deathCollector : null)
+                    : waypoints && betterMapWaypoints ? betterMapCollector
                     : includeNative ? nativeCollector : null;
             if (target == null) return;
             try {

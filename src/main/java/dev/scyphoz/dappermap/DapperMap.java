@@ -32,7 +32,8 @@ public class DapperMap extends JavaPlugin {
     protected void setup() {
         config.save();
         DapperMapPermissions.register(config.get().isGrantPlayerSettingsByDefault());
-        this.imageCleanup = com.hypixel.hytale.server.core.HytaleServer.SCHEDULED_EXECUTOR.scheduleAtFixedRate(
+        // Runs on DapperMap's own heartbeat thread, not the server's shared scheduler.
+        this.imageCleanup = dev.scyphoz.dappermap.dynamic.DynamicMinimapSession.heartbeat().scheduleAtFixedRate(
                 dev.scyphoz.dappermap.integration.BetterMapIntegration::pruneImages,
                 5L, 5L, java.util.concurrent.TimeUnit.SECONDS);
         this.sessions.setDataDirectory(this.getDataDirectory());
