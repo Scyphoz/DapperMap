@@ -34,6 +34,14 @@ public final class DynamicMinimapMarker {
         return new DynamicMinimapMarker(x, z, color, size, Style.DOT, null, false);
     }
 
+    /**
+     * Creature face icon; {@code iconKey} identifies the creature type (see CreatureIcons) and
+     * {@code color} is its threat colour, used for the icon's outer edge.
+     */
+    public static DynamicMinimapMarker creature(double x, double z, String iconKey, Color color, int size) {
+        return new DynamicMinimapMarker(x, z, color, size, Style.CREATURE, iconKey, false);
+    }
+
     public static DynamicMinimapMarker betterMap(
             double x,
             double z,
@@ -76,6 +84,8 @@ public final class DynamicMinimapMarker {
 
     public enum Style {
         DOT,
+        /** Creature face icon (Creature Markers: Icons). */
+        CREATURE,
         BETTERMAP,
         NATIVE_WORLDMAP
     }

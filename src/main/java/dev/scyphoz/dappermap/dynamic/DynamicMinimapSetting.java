@@ -39,6 +39,10 @@ public final class DynamicMinimapSetting {
     public boolean showOtherPlayers = true;
     public boolean showEntities = true;
     public int creatureMarkerLimit = 16;
+    /** Creature marker style: true = creature face icons (default), false = coloured threat dots. */
+    public boolean creatureIcons = true;
+    /** Creature markers shown: false = all creatures (default), true = hostile and attacking only. */
+    public boolean hostileCreaturesOnly = false;
     public boolean showDeathMarker = true;
     public boolean showWorldMapMarkers = true;
     public boolean limitMobHeight = true;
@@ -105,6 +109,8 @@ public final class DynamicMinimapSetting {
         copy.showOtherPlayers = this.showOtherPlayers;
         copy.showEntities = this.showEntities;
         copy.creatureMarkerLimit = this.creatureMarkerLimit;
+        copy.creatureIcons = this.creatureIcons;
+        copy.hostileCreaturesOnly = this.hostileCreaturesOnly;
         copy.showDeathMarker = this.showDeathMarker;
         copy.showWorldMapMarkers = this.showWorldMapMarkers;
         copy.limitMobHeight = this.limitMobHeight;

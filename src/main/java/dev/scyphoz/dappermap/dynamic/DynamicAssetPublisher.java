@@ -113,9 +113,10 @@ public final class DynamicAssetPublisher {
                         packetHandler.writeNoCache((ToClientPacket)packet);
                     }
 
+                    // Marker images (including creature icons) are kept for the settings preview.
                     if (uuid != null && path.startsWith("UI/DapperMap/")
                             && (path.contains("/mk-") || path.contains("/bettermap-")
-                            || path.contains("/worldmap-"))) {
+                            || path.contains("/worldmap-") || path.contains("/creature-"))) {
                         Map<String, byte[]> markers = MARKER_BYTES.computeIfAbsent(uuid, ignored -> new ConcurrentHashMap<>());
                         if (markers.size() < DynamicMinimapHud.MARKER_SLOTS || markers.containsKey(path))
                             markers.put(path, data); // Reference, not a copy: the bytes are immutable.

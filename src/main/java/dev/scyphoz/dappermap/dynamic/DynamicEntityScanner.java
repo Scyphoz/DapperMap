@@ -45,21 +45,29 @@ import org.joml.Vector3d;
 import static dev.scyphoz.dappermap.dynamic.MinimapColours.Key.*;
 
 
-/** Converts nearby NPC and player entities into coloured minimap markers. */
+/** Converts nearby NPC and player entities into coloured minimap markers (or creature icons). */
 public final class DynamicEntityScanner {
 
     private DynamicEntityScanner() {
     }
 
-    /** @param threats per-viewer colour cache (may be null to classify every creature afresh). */
+    /**
+     * @param threats per-viewer colour cache (may be null to classify every creature afresh).
+     * @param icons   per-viewer creature icon keys, used when Creature Markers is set to Icons.
+     */
     public static List<DynamicMinimapMarker> scan(Store<EntityStore> store, Ref<EntityStore> playerRef, Vector3d playerPosition,
-                                                  double radius, DynamicMinimapSetting settings, ThreatCache threats) {
+                                                  double radius, DynamicMinimapSetting settings, ThreatCache threats,
+                                                  CreatureIcons.KeyCache icons) {
         ArrayList<DynamicMinimapMarker> markers = new ArrayList<>();
         double radiusSq = radius * radius;
         double playerX = playerPosition.x();
         double playerY = playerPosition.y();
         double playerZ = playerPosition.z();
-        NearestNpcs creatures = settings.showEntities ? new NearestNpcs(settings.creatureMarkerLimit, playerX, playerZ) : null;
+        // Hostile-only keeps a larger nearest-first pool so passive creatures nearby cannot
+        // use up the marker limit before more distant hostiles are reached.
+        boolean hostileOnly = settings.hostileCreaturesOnly;
+        NearestNpcs creatures = settings.showEntities
+                ? new NearestNpcs(settings.creatureMarkerLimit, hostileOnly, playerX, playerZ) : null;
         double verticalRange = settings.limitMobHeight ? (double)settings.mobVerticalRange : (double)0.0F;
         if (settings.showEntities) {
             List<Ref<EntityStore>> nearby = nearby(store, playerPosition, radius, verticalRange, true);
@@ -111,18 +119,34 @@ public final class DynamicEntityScanner {
         // replaced by closer creatures, and need no attitude or intent reads.
         if (creatures != null) {
             long now = System.currentTimeMillis();
+            boolean useIcons = settings.creatureIcons && icons != null;
+            int iconSize = CreatureIcons.markerSize(settings); // Grows with map size (20-32 units).
+            int shown = 0;
             for (NearestNpcs.Candidate candidate : creatures.sorted()) {
+                if (shown >= creatures.shown) break; // Marker limit reached (nearest first).
                 try {
                     if (!candidate.ref().isValid()) continue;
                     NPCEntity npc = store.getComponent(candidate.ref(), NPCEntity.getComponentType());
                     if (npc == null) continue;
                     MinimapColours.Key key = threats == null
                             ? colourFor(candidate.ref(), npc, playerRef, store)
-                            : threats.classify(candidate.ref(), npc, playerRef, store, now);
-                    markers.add(DynamicMinimapMarker.dot(candidate.x(), candidate.z(), settings.colours.awt(key, 255), 7));
+                            : threats.classify(candidate.ref(), npc, playerRef, store, now,
+                            hostileOnly ? ThreatCache.HIDDEN_TTL_MS : ThreatCache.TTL_MS);
+                    // Hostile-only: skip neutral and friendly creatures (attacking ones always show).
+                    if (hostileOnly && key != HOSTILE && key != HOSTILE_ACTIVE) continue;
+                    Color colour = settings.colours.awt(key, 255);
+                    // Icons mode: the same threat colour edges the creature's face icon
+                    // (the icon key itself is a cached map read per creature).
+                    markers.add(useIcons
+                            ? DynamicMinimapMarker.creature(candidate.x(), candidate.z(),
+                            icons.key(candidate.ref(), npc, store), colour, iconSize)
+                            : DynamicMinimapMarker.dot(candidate.x(), candidate.z(), colour, 7));
+                    shown++;
                 } catch (RuntimeException ignored) { }
             }
+            // Both caches keep only the creatures of this scan (the unused one empties itself).
             if (threats != null) threats.endScan();
+            if (icons != null) icons.endScan();
         }
 
         PlayerVisibility visibility = settings.showOtherPlayers ? PlayerVisibility.forViewer(store, playerRef) : null;
@@ -249,12 +273,17 @@ public final class DynamicEntityScanner {
     /** Retains positions/references only; expensive AI inspection follows selection. */
     static final class NearestNpcs {
         record Candidate(Ref<EntityStore> ref, double x, double z, double distanceSquared) { }
+        /** Hostile-only pool: 4x the marker limit, capped so classification work stays bounded. */
+        private static final int HOSTILE_POOL_FACTOR = 4, HOSTILE_POOL_MAX = 128;
+        /** Markers to show (16/32/64); {@code limit} is how many nearest candidates are kept. */
+        final int shown;
         private final int limit;
         private final double x, z;
         private static final Comparator<Candidate> NEAREST = Comparator.comparingDouble(Candidate::distanceSquared);
         private final PriorityQueue<Candidate> candidates;
-        NearestNpcs(int limit, double x, double z) {
-            this.limit = limit == 32 || limit == 64 ? limit : 16;
+        NearestNpcs(int limit, boolean hostileOnly, double x, double z) {
+            this.shown = limit == 32 || limit == 64 ? limit : 16;
+            this.limit = hostileOnly ? Math.min(this.shown * HOSTILE_POOL_FACTOR, HOSTILE_POOL_MAX) : this.shown;
             this.x = x;
             this.z = z;
             candidates = new PriorityQueue<>(this.limit, NEAREST.reversed());
@@ -292,21 +321,29 @@ public final class DynamicEntityScanner {
      * change to that fingerprint (a creature starting or stopping an attack on the player)
      * forces an immediate reclassification on that same scan.
      *
-     * <p>Only creatures shown in the latest scan are kept, so the cache is bounded by the
-     * creature marker limit and never retains removed entities. World thread only.
+     * <p>Only creatures classified in the latest scan are kept, so the cache is bounded by the
+     * candidate pool (the marker limit, or up to 128 in hostile-only mode) and never retains
+     * removed entities. World thread only.
      */
     public static final class ThreatCache {
         static final long TTL_MS = 750L;
+        /**
+         * Hostile-only mode: neutral/friendly results (hidden markers) are re-checked less often.
+         * A creature turning on the player still changes its engagement and shows at once.
+         */
+        static final long HIDDEN_TTL_MS = 2000L;
         private record Entry(MinimapColours.Key key, int engagement, long expiresAt) { }
         private java.util.Map<Ref<EntityStore>, Entry> current = new java.util.HashMap<>();
         private java.util.Map<Ref<EntityStore>, Entry> next = new java.util.HashMap<>();
 
         MinimapColours.Key classify(Ref<EntityStore> npcRef, NPCEntity npc, Ref<EntityStore> playerRef,
-                                    ComponentAccessor<EntityStore> accessor, long now) {
+                                    ComponentAccessor<EntityStore> accessor, long now, long passiveTtl) {
             int engagement = engagement(npcRef, npc, playerRef, accessor);
             Entry cached = this.current.get(npcRef);
             if (cached == null || cached.engagement() != engagement || now >= cached.expiresAt()) {
-                cached = new Entry(colourFor(npcRef, npc, playerRef, accessor), engagement, now + TTL_MS);
+                MinimapColours.Key key = colourFor(npcRef, npc, playerRef, accessor);
+                long ttl = key == HOSTILE || key == HOSTILE_ACTIVE ? TTL_MS : passiveTtl;
+                cached = new Entry(key, engagement, now + ttl);
             }
             this.next.put(npcRef, cached);
             return cached.key();
@@ -720,8 +757,13 @@ public final class DynamicEntityScanner {
         boolean offensiveState(String state) {
             if (!combatStates || state == null) return false;
             // Combat.Maybe decides whether to accept a flock request; it is not engagement yet.
-            return !state.equals("Combat.Maybe") && offensiveRoots.stream()
-                    .anyMatch(root -> state.equals(root) || state.startsWith(root + "."));
+            if (state.equals("Combat.Maybe")) return false;
+            // Plain loop: no stream or string concatenation on this per-classification path.
+            for (String root : offensiveRoots) {
+                if (state.startsWith(root) && (state.length() == root.length()
+                        || state.charAt(root.length()) == '.')) return true;
+            }
+            return false;
         }
 
         /** Recognise the actual state/action contract in renamed or independently built

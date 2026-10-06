@@ -17,7 +17,7 @@ import java.util.function.Consumer;
  */
 public final class DynamicMinimapHud extends CustomUIHud {
     public static final String KEY = "DapperMapDynamicMinimapHud";
-    /** In-map dots (creatures and players): up to 64 creatures plus 32 players. */
+    /** In-map markers (creature dots/icons and players): up to 64 creatures plus 32 players. */
     public static final int MAP_MARKER_SLOTS = 96;
     /** Edge-tracked icons (world-map, BetterMap waypoint and death markers). */
     public static final int EDGE_MARKER_SLOTS = 64;
@@ -486,8 +486,8 @@ public final class DynamicMinimapHud extends CustomUIHud {
 
     /**
      * Slot coordinates and sizes are logical minimap values, converted here for display.
-     * Slots are split by layer (fixed = edge layer) in their given order, so each layer is
-     * filled from index 0 and only the changed elements receive commands.
+     * Edge icons fill their layer from index 0. In-map markers keep the element that already
+     * shows the same image (see arrangeMapSlots), so only changed elements receive commands.
      */
     public void setMarkers(Slot[] slots) {
         if (!this.built) return;
@@ -501,10 +501,56 @@ public final class DynamicMinimapHud extends CustomUIHud {
                 else if (mapCount < map.length) map[mapCount++] = slot;
             }
         }
+        Slot[] arranged = arrangeMapSlots(this.mapLayer, map, mapCount);
+        int arrangedCount = 0;
+        for (int i = 0; i < arranged.length; i++) if (arranged[i] != null) arrangedCount = i + 1;
         UICommandBuilder builder = new UICommandBuilder();
-        boolean changed = this.applyLayer(builder, this.mapLayer, map, mapCount);
+        boolean changed = this.applyLayer(builder, this.mapLayer, arranged, arrangedCount);
         changed |= this.applyLayer(builder, this.edgeLayer, edge, edgeCount);
         if (changed) this.update(false, builder);
+    }
+
+    /**
+     * Places in-map markers so each one reuses the HUD element already showing the same
+     * image nearest to it. Creatures are listed nearest-first, so their order changes as
+     * they move; without this, swapped neighbours would each need a new AssetPath (most
+     * noticeable with creature icons, where every creature type has its own image).
+     * Unmatched markers take the lowest free elements. At most a few 96 x 96 cheap comparisons.
+     */
+    private static Slot[] arrangeMapSlots(MarkerLayer layer, Slot[] slots, int count) {
+        Slot[] placed = new Slot[layer.path.length];
+        boolean[] taken = new boolean[count];
+        for (int i = 0; i < layer.active; i++) {
+            String path = layer.path[i];
+            if (!layer.visible[i] || path == null) continue;
+            int best = -1, bestDistance = Integer.MAX_VALUE;
+            for (int j = 0; j < count; j++) {
+                if (taken[j] || !path.equals(slots[j].path)) continue;
+                int distance = Math.abs(slots[j].left - layer.left[i]) + Math.abs(slots[j].top - layer.top[i]);
+                if (distance < bestDistance) { best = j; bestDistance = distance; }
+            }
+            if (best >= 0) { placed[i] = slots[best]; taken[best] = true; }
+        }
+        // Markers whose image changed (e.g. a creature's threat colour or attack pulse) take the
+        // nearest element left over from the last update, so only its AssetPath changes.
+        for (int j = 0; j < count; j++) {
+            if (taken[j]) continue;
+            int best = -1, bestDistance = Integer.MAX_VALUE;
+            for (int i = 0; i < layer.active; i++) {
+                if (placed[i] != null || !layer.visible[i] || layer.path[i] == null) continue;
+                int distance = Math.abs(slots[j].left - layer.left[i]) + Math.abs(slots[j].top - layer.top[i]);
+                if (distance < bestDistance) { best = i; bestDistance = distance; }
+            }
+            if (best >= 0 && bestDistance <= 2 * slots[j].size) { placed[best] = slots[j]; taken[j] = true; }
+        }
+        int free = 0;
+        for (int j = 0; j < count; j++) {
+            if (taken[j]) continue;
+            while (free < placed.length && placed[free] != null) free++;
+            if (free == placed.length) break;
+            placed[free++] = slots[j];
+        }
+        return placed;
     }
 
     /** Emits commands for one layer's changed slots; returns true when any were added. */

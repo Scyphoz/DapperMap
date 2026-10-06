@@ -311,6 +311,9 @@ public final class DapperMapSettingsPage
         World world = this.previewWorld;
         if (world == null || this.closed || !this.previewQueued.compareAndSet(false, true)) return;
         DynamicMinimapSetting draft = settings.copy();
+        // In Icons mode the live creature icons are drawn from the HUD snapshot itself, so the
+        // preview's sample threat-colour dots (shown only for showEntities) are skipped.
+        if (draft.creatureIcons) draft.showEntities = false;
         DynamicMinimapRenderer.LiveSnapshot snapshot = this.previewSnapshot;
         boolean position = this.activeTab == Tab.POSITION;
         String slug = this.playerRef.getUuid() == null ? "anon" : this.playerRef.getUuid().toString().replace("-", "");
@@ -438,7 +441,7 @@ public final class DapperMapSettingsPage
             case "texture_resolution" -> "resolution";
             case "info_panel" -> "info";
             case "panel_position", "panel_alignment" -> "panel";
-            case "players", "entities", "death", "creature_limit" -> "markers";
+            case "players", "entities", "death", "creature_limit", "creature_style", "creature_filter" -> "markers";
             case "vrange" -> "height-range";
             case "clock_format" -> "clock";
             case "worldmap", "bettermap", "bettermap_markers", "bettermap_caves" -> "integration";
@@ -903,6 +906,8 @@ public final class DapperMapSettingsPage
             case "players" -> "Show nearby players on your minimap.";
             case "entities" -> "Show nearby creatures on your minimap.";
             case "creature_limit" -> "Show up to 16, 32 or 64 nearby creatures, prioritising the nearest.";
+            case "creature_style" -> "Show creatures as face icons or as threat-coloured dots.";
+            case "creature_filter" -> "Show all creatures, or only hostile and attacking ones.";
             case "death" -> "Show Hytale's death markers (BetterMap's death settings apply).";
             case "worldmap" -> "Show Hytale personal, shared, POI, spawn and respawn world-map markers.";
             case "height" -> "Hide creatures far above or below you.";
@@ -930,7 +935,8 @@ public final class DapperMapSettingsPage
                 || (id.startsWith("bettermap_") && (!settings.betterMapEnabled
                 || !BetterMapIntegration.isAvailable()))
                 || ("bettermap_caves".equals(id) && !this.betterMapCaveAvailable)
-                || (("height".equals(id) || "vrange".equals(id) || "creature_limit".equals(id)) && !settings.showEntities)
+                || (("height".equals(id) || "vrange".equals(id) || "creature_limit".equals(id)
+                || "creature_style".equals(id) || "creature_filter".equals(id)) && !settings.showEntities)
                 || ("vrange".equals(id) && !settings.limitMobHeight)
                 || ("clock_format".equals(id) && !settings.showClock);
     }
@@ -964,6 +970,8 @@ public final class DapperMapSettingsPage
             case "rotation" -> settings.rotationMode = Integer.parseInt(value);
             case "vrange" -> settings.mobVerticalRange = Integer.parseInt(value);
             case "creature_limit" -> settings.creatureMarkerLimit = Integer.parseInt(value);
+            case "creature_style" -> settings.creatureIcons = "icons".equals(value);
+            case "creature_filter" -> settings.hostileCreaturesOnly = "hostile".equals(value);
             case "players" -> settings.showOtherPlayers = Boolean.parseBoolean(value);
             case "entities" -> settings.showEntities = Boolean.parseBoolean(value);
             case "death" -> settings.showDeathMarker = Boolean.parseBoolean(value);
@@ -988,6 +996,14 @@ public final class DapperMapSettingsPage
             case "size" -> addNumericEntries(entries, settings.sizePixels, 120, 360, 20, " px");
             case "creature_limit" -> {
                 for (int limit : new int[]{16, 32, 64}) entries.add(entry(Integer.toString(limit), Integer.toString(limit)));
+            }
+            case "creature_style" -> {
+                entries.add(entry("Icons", "icons"));
+                entries.add(entry("Dots", "dots"));
+            }
+            case "creature_filter" -> {
+                entries.add(entry("All", "all"));
+                entries.add(entry("Hostile Only", "hostile"));
             }
             case "vrange" -> {
                 TreeSet<Integer> values = new TreeSet<>(List.of(4));
@@ -1065,6 +1081,8 @@ public final class DapperMapSettingsPage
             case "rotation" -> Integer.toString(settings.rotationMode);
             case "vrange" -> Integer.toString(settings.mobVerticalRange);
             case "creature_limit" -> Integer.toString(settings.creatureMarkerLimit);
+            case "creature_style" -> settings.creatureIcons ? "icons" : "dots";
+            case "creature_filter" -> settings.hostileCreaturesOnly ? "hostile" : "all";
             case "players" -> Boolean.toString(settings.showOtherPlayers);
             case "entities" -> Boolean.toString(settings.showEntities);
             case "death" -> Boolean.toString(settings.showDeathMarker);
@@ -1117,7 +1135,8 @@ public final class DapperMapSettingsPage
 
     private static Tab tabFor(String id) {
         return switch (id) {
-            case "players", "death", "entities", "height", "vrange", "creature_limit" -> Tab.MARKERS;
+            case "players", "death", "entities", "height", "vrange", "creature_limit", "creature_style",
+                 "creature_filter" -> Tab.MARKERS;
             case "section_4", "section_5", "worldmap", "bettermap", "bettermap_markers",
                  "bettermap_caves" -> Tab.INTEGRATIONS;
             case "info_panel", "panel_position", "panel_alignment", "section_3",
@@ -1143,6 +1162,8 @@ public final class DapperMapSettingsPage
                 new Row("players", "Player Markers", Kind.DROPDOWN),
                 new Row("death", "Death Markers", Kind.DROPDOWN),
                 new Row("entities", "Creature Markers", Kind.DROPDOWN),
+                new Row("creature_style", "Creature Marker Style", Kind.DROPDOWN),
+                new Row("creature_filter", "Creatures Shown", Kind.DROPDOWN),
                 new Row("creature_limit", "Creature Marker Limit", Kind.DROPDOWN),
                 new Row("height", "Creature Height Detection", Kind.DROPDOWN),
                 new Row("vrange", "Creature Height Range", Kind.DROPDOWN),

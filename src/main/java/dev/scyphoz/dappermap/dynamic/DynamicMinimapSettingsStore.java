@@ -72,6 +72,8 @@ public final class DynamicMinimapSettingsStore {
                                 + "  \"showOtherPlayers\": %s,\n"
                                 + "  \"showEntities\": %s,\n"
                                 + "  \"creatureMarkerLimit\": %d,\n"
+                                + "  \"creatureIcons\": %s,\n"
+                                + "  \"hostileCreaturesOnly\": %s,\n"
                                 + "  \"showDeathMarker\": %s,\n"
                                 + "  \"showWorldMapMarkers\": %s,\n"
                                 + "  \"limitMobHeight\": %s,\n"
@@ -102,6 +104,8 @@ public final class DynamicMinimapSettingsStore {
                                 settings.showOtherPlayers,
                                 settings.showEntities,
                                 settings.creatureMarkerLimit,
+                                settings.creatureIcons,
+                                settings.hostileCreaturesOnly,
                                 settings.showDeathMarker,
                                 settings.showWorldMapMarkers,
                                 settings.limitMobHeight,
@@ -156,6 +160,8 @@ public final class DynamicMinimapSettingsStore {
                     Boolean showWorldMapMarkers = extractBool(json, "showWorldMapMarkers");
                     Boolean limitMobHeight = extractBool(json, "limitMobHeight");
                     Integer creatureMarkerLimit = extractInt(json, "creatureMarkerLimit");
+                    Boolean creatureIcons = extractBool(json, "creatureIcons");
+                    Boolean hostileCreaturesOnly = extractBool(json, "hostileCreaturesOnly");
                     Integer mobVerticalRange = extractInt(json, "mobVerticalRange");
                     Integer position = extractInt(json, "position");
                     Integer hudPositionX = extractInt(json, "hudPositionX");
@@ -221,6 +227,9 @@ public final class DynamicMinimapSettingsStore {
                     }
 
                     if (creatureMarkerLimit != null) settings.creatureMarkerLimit = creatureMarkerLimit;
+                    // Files without this key (pre-v12) take the inherited default (icons, unless an admin changed it).
+                    if (creatureIcons != null) settings.creatureIcons = creatureIcons;
+                    if (hostileCreaturesOnly != null) settings.hostileCreaturesOnly = hostileCreaturesOnly;
                     if (mobVerticalRange != null) {
                         settings.mobVerticalRange = mobVerticalRange;
                     }

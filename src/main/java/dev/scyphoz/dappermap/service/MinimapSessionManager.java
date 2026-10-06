@@ -137,6 +137,8 @@ public class MinimapSessionManager {
             session.settings().showOtherPlayers = settings.showOtherPlayers;
             session.settings().showEntities = settings.showEntities;
             session.settings().creatureMarkerLimit = settings.creatureMarkerLimit;
+            session.settings().creatureIcons = settings.creatureIcons;
+            session.settings().hostileCreaturesOnly = settings.hostileCreaturesOnly;
             session.settings().showDeathMarker = settings.showDeathMarker;
             session.settings().showWorldMapMarkers = settings.showWorldMapMarkers;
             session.settings().limitMobHeight = settings.limitMobHeight;

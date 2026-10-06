@@ -173,6 +173,9 @@ public final class DynamicMinimapSession {
     private boolean builtShowCompass;
     private boolean builtShowClock;
     private boolean builtShowBiome;
+    /** Creature marker style the cached markers were scanned with (dots / icons). */
+    private boolean builtCreatureIcons;
+    private boolean builtHostileOnly;
     private int lastMapRotationBucket = -1;
     private long terrainGeneration = 0L;
     private DynamicMinimapRenderer.RotationSource rotationSource = null;
@@ -203,6 +206,8 @@ public final class DynamicMinimapSession {
     private final EdgeTracker edgeTracker = new EdgeTracker();
     /** Creature threat colours for this player's view (see DynamicEntityScanner.ThreatCache). */
     private final DynamicEntityScanner.ThreatCache threatCache = new DynamicEntityScanner.ThreatCache();
+    /** Creature icon keys for this player's view (Creature Markers: Icons). */
+    private final CreatureIcons.KeyCache creatureIconKeys = new CreatureIcons.KeyCache();
     private final MarkerOrder markerOrder = new MarkerOrder();
     private record MarkerAssetKey(Style style, String source, int rgb) {}
     private final java.util.concurrent.ConcurrentMap<MarkerAssetKey, String> markerAssets = new java.util.concurrent.ConcurrentHashMap<>();
@@ -212,21 +217,49 @@ public final class DynamicMinimapSession {
     /** Icons whose preparation failed, with the failure time, to avoid retry storms. */
     private final java.util.concurrent.ConcurrentMap<MarkerAssetKey, Long> failedMarkerAssets = new java.util.concurrent.ConcurrentHashMap<>();
     private static final long FAILED_ICON_RETRY_MS = 30000L;
+    /** Last icon path shown per creature type, used while a new colour variant is prepared. */
+    private final java.util.Map<String, String> creatureIconFallback = new java.util.HashMap<>();
+    /** Attacking creature icons alternate between two edge colours at this interval (or slower). */
+    private static final long PULSE_MS = 300L;
+    private boolean pulseOn;
+    private long lastPulseToggleMs;
 
     private void invalidateMarkerAssets() {
         ++this.markerAssetGeneration;
         this.markerAssets.clear();
         this.preparedMarkerAssets.clear();
         this.failedMarkerAssets.clear(); // New generation (teleport/colours): allow a fresh attempt.
+        this.creatureIconFallback.clear(); // The client may no longer hold those images.
         // Pending jobs finish naturally; their generation check rejects stale results.
     }
 
-    /** Resource loading, PNG tinting and hashing never block the entity/world tick. */
     private String markerIcon(DynamicMinimapMarker marker) {
+        return this.markerIcon(marker, marker.color == null ? 0xFFFFFF : marker.color.getRGB() & 0xFFFFFF);
+    }
+
+    /**
+     * Creature icon edged in its threat colour. Attacking creatures alternate with a pale edge
+     * (a pulse: one AssetPath swap per toggle, only for creatures attacking this player). While
+     * a colour variant is still being prepared, the creature type's last shown icon is reused
+     * so it never blinks out. World thread only.
+     */
+    private String creatureIcon(DynamicMinimapMarker marker, int attackingRgb) {
+        int rgb = marker.color == null ? 0xFFFFFF : marker.color.getRGB() & 0xFFFFFF;
+        String path = null;
+        if (this.pulseOn && rgb == attackingRgb) path = this.markerIcon(marker, CreatureIcons.pulseColour(rgb));
+        if (path == null) path = this.markerIcon(marker, rgb);
+        if (path == null) return this.creatureIconFallback.get(marker.assetPath);
+        if (this.creatureIconFallback.size() >= 256 && !this.creatureIconFallback.containsKey(marker.assetPath))
+            this.creatureIconFallback.clear();
+        this.creatureIconFallback.put(marker.assetPath, path);
+        return path;
+    }
+
+    /** Resource loading, PNG tinting and hashing never block the entity/world tick. */
+    private String markerIcon(DynamicMinimapMarker marker, int rgb) {
         if (!this.canRenderHud(this.hud)) return null;
         if (marker.style == Style.DOT && marker.color == null) return null;
         MinimapColours palette = this.settings.colours;
-        int rgb = marker.color == null ? 0xFFFFFF : marker.color.getRGB() & 0xFFFFFF;
         MarkerAssetKey key = new MarkerAssetKey(marker.style, marker.assetPath, rgb);
         String ready = this.markerAssets.get(key);
         if (ready != null) return ready;
@@ -261,6 +294,8 @@ public final class DynamicMinimapSession {
                             marker.assetPath, marker.color, this.slug);
                     case NATIVE_WORLDMAP -> asset = NativeWorldMapIntegration.prepareIconAsset(
                             marker.assetPath, marker.color, this.slug);
+                    // Creature face icons are built once per creature type and shared by all players.
+                    case CREATURE -> asset = CreatureIcons.prepareAsset(marker.assetPath, this.slug, rgb);
                     default -> {
                         byte[] png = DynamicMinimapRenderer.renderDot(rgb, palette);
                         String path = "UI/DapperMap/mk-" + this.slug + "-" + String.format("%06X", rgb) + ".png";
@@ -649,6 +684,14 @@ public final class DynamicMinimapSession {
                 this.lastMarkerMs = 0L;
                 this.updateRotatingFrame(Math.max(0, this.lastMapRotationBucket));
                 this.hud.setColours(this.renderedColours);
+            }
+
+            // Switching creature dots/icons or the hostile-only filter rescans markers straight away.
+            if (this.settings.creatureIcons != this.builtCreatureIcons
+                    || this.settings.hostileCreaturesOnly != this.builtHostileOnly) {
+                this.builtCreatureIcons = this.settings.creatureIcons;
+                this.builtHostileOnly = this.settings.hostileCreaturesOnly;
+                this.lastMarkerMs = 0L;
             }
 
 
@@ -1213,7 +1256,8 @@ public final class DynamicMinimapSession {
                     playerPosition,
                     (double)(this.settings.zoomBlocks + 16),
                     this.settings,
-                    this.threatCache
+                    this.threatCache,
+                    this.creatureIconKeys
             );
         } catch (Throwable ignored) {
             markers = new ArrayList<>();
@@ -1292,6 +1336,12 @@ public final class DynamicMinimapSession {
         // Each HUD layer has its own capacity: edge icons and map dots never crowd each other out.
         int edgeFree = DynamicMinimapHud.EDGE_MARKER_SLOTS, mapFree = DynamicMinimapHud.MAP_MARKER_SLOTS;
         long projectionTime = System.currentTimeMillis();
+        // Advance the attacking-creature pulse at most every PULSE_MS (it follows projection cadence).
+        if (projectionTime - this.lastPulseToggleMs >= PULSE_MS) {
+            this.pulseOn = !this.pulseOn;
+            this.lastPulseToggleMs = projectionTime;
+        }
+        int attackingRgb = this.settings.colours.rgb(MinimapColours.Key.HOSTILE_ACTIVE);
 
         // The native POI provider returns world-wide markers from a map with no
         // useful display order. Select nearby markers before the fixed HUD slots
@@ -1340,7 +1390,8 @@ public final class DynamicMinimapSession {
                 continue;
             }
 
-            String path = this.markerIcon(marker);
+            String path = marker.style == Style.CREATURE
+                    ? this.creatureIcon(marker, attackingRgb) : this.markerIcon(marker);
 
             if (path == null || path.isBlank()) {
                 continue;
@@ -1610,7 +1661,7 @@ public final class DynamicMinimapSession {
         private static Comparator<DynamicMinimapMarker> comparator(double x, double z) {
             return Comparator.comparingInt((DynamicMinimapMarker marker) -> switch (marker.style) {
                 case BETTERMAP, NATIVE_WORLDMAP -> 1;
-                case DOT -> 2;
+                case DOT, CREATURE -> 2;
             }).thenComparingDouble(marker -> {
                 double dx = marker.x - x, dz = marker.z - z;
                 return dx * dx + dz * dz;
@@ -1636,12 +1687,12 @@ public final class DynamicMinimapSession {
                 }
                 var moving = new ArrayList<>(snapshot);
                 moving.sort(compare);
-                // Normal local snapshots contain only dots. Reuse the entire immutable
-                // integration segment rather than copying every waypoint whenever a
-                // creature moves. General mixed snapshots keep stable merge.
+                // Normal local snapshots contain only in-map markers (dots or creature icons).
+                // Reuse the entire immutable integration segment rather than copying every
+                // waypoint whenever a creature moves. General mixed snapshots keep stable merge.
                 boolean localOnly = true;
                 for (int i = 0; i < moving.size(); i++)
-                    localOnly &= moving.get(i).style == DynamicMinimapMarker.Style.DOT;
+                    localOnly &= !moving.get(i).clampToEdge;
                 if (integrations.isEmpty()) ordered = moving;
                 else if (localOnly) ordered = new SegmentedMarkers(moving, integrations);
                 else {

@@ -75,6 +75,8 @@ public class MinimapCommand extends AbstractPlayerCommand {
         addString(parent, scope, "panel", "Set Info Panel position", new String[]{"below", "above", "left", "right"});
         addString(parent, scope, "panel-alignment", "Align Info Panel text left, centre or right", new String[]{"left", "centre", "right"}, "alignment", "text-alignment");
         addInt(parent, scope, "creature-limit", "Set visible creature markers: 16, 32 or 64", "creature-marker-limit");
+        addString(parent, scope, "creature-markers", "Show creatures as face icons or dots", new String[]{"icons", "dots"}, "creature-icons", "creature-style");
+        addString(parent, scope, "creature-filter", "Show all creatures or only hostile ones", new String[]{"all", "hostile"}, "creatures-shown", "hostile-only");
         addString(parent, scope, "height", "Toggle creature height detection", ON_OFF, "height-detection");
         addString(parent, scope, "clock", "Configure World Time and Clock Format", new String[]{"on", "off", "12", "24"}, "world-time");
         addString(parent, scope, "coordinates", "Toggle coordinates", ON_OFF, "coords");
@@ -140,6 +142,16 @@ public class MinimapCommand extends AbstractPlayerCommand {
                     if (!setCreatureLimit(settings, value)) { context.sendMessage(Message.raw("Usage: /mm creature-limit 16|32|64")); return; }
                     this.sessions.applySettings(playerRef, settings);
                     context.sendMessage(Message.raw("DapperMap visible creature limit: " + settings.creatureMarkerLimit + "."));
+                    break;
+                case "creature-markers":
+                    if (!setCreatureStyle(settings, value)) { context.sendMessage(Message.raw("Usage: /mm creature-markers icons|dots")); return; }
+                    this.sessions.applySettings(playerRef, settings);
+                    context.sendMessage(Message.raw("DapperMap creature markers: " + creatureStyleName(settings) + "."));
+                    break;
+                case "creature-filter":
+                    if (!setCreatureFilter(settings, value)) { context.sendMessage(Message.raw("Usage: /mm creature-filter all|hostile")); return; }
+                    this.sessions.applySettings(playerRef, settings);
+                    context.sendMessage(Message.raw("DapperMap creatures shown: " + creatureFilterName(settings) + "."));
                     break;
                 case "on":
                     settings.enabled = true;
@@ -389,6 +401,8 @@ public class MinimapCommand extends AbstractPlayerCommand {
             case "help" -> { showHelp(context); context.sendMessage(Message.raw("Admin defaults: use /mm admin <setting> <value> with the same values. Admin permission is required.")); return; }
             case "panel-alignment" -> { changed=setPanelAlignment(settings,value); usage="admin panel-alignment left|centre|right"; }
             case "creature-limit" -> { changed=setCreatureLimit(settings,value); usage="admin creature-limit 16|32|64"; }
+            case "creature-markers" -> { changed=setCreatureStyle(settings,value); usage="admin creature-markers icons|dots"; }
+            case "creature-filter" -> { changed=setCreatureFilter(settings,value); usage="admin creature-filter all|hostile"; }
             case "status" -> { context.sendMessage(Message.raw("DapperMap admin defaults: " + status(settings))); return; }
             case "reset", "defaults" -> { this.sessions.resetAdminDefaults(config); context.sendMessage(Message.raw("DapperMap admin defaults reset to mod defaults.")); return; }
             case "on" -> { settings.enabled = true; changed = true; }
@@ -582,6 +596,34 @@ public class MinimapCommand extends AbstractPlayerCommand {
             settings.creatureMarkerLimit = limit;
             return true;
         } catch (NumberFormatException ignored) { return false; }
+    }
+
+    /** Creature marker style for both scopes: dots (threat colours) or face icons. */
+    private static boolean setCreatureStyle(DynamicMinimapSetting settings, String value) {
+        switch (value) {
+            case "dots", "dot", "off" -> settings.creatureIcons = false;
+            case "icons", "icon", "faces", "on" -> settings.creatureIcons = true;
+            default -> { return false; }
+        }
+        return true;
+    }
+
+    private static String creatureStyleName(DynamicMinimapSetting settings) {
+        return settings.creatureIcons ? "icons" : "dots";
+    }
+
+    /** Creature filter for both scopes: all creatures, or hostile and attacking ones only (players unaffected). */
+    private static boolean setCreatureFilter(DynamicMinimapSetting settings, String value) {
+        switch (value) {
+            case "all", "everything", "off" -> settings.hostileCreaturesOnly = false;
+            case "hostile", "hostiles", "hostile-only", "on" -> settings.hostileCreaturesOnly = true;
+            default -> { return false; }
+        }
+        return true;
+    }
+
+    private static String creatureFilterName(DynamicMinimapSetting settings) {
+        return settings.hostileCreaturesOnly ? "hostile" : "all";
     }
 
     private static boolean setPanelAlignment(DynamicMinimapSetting settings, String value) {
@@ -786,6 +828,8 @@ public class MinimapCommand extends AbstractPlayerCommand {
                 + ", panel=" + panelPositionName(settings.infoPanelPosition)
                 + ", panel-alignment=" + panelAlignmentName(settings.infoPanelTextAlignment)
                 + ", creature-limit=" + settings.creatureMarkerLimit
+                + ", creature-markers=" + creatureStyleName(settings)
+                + ", creature-filter=" + creatureFilterName(settings)
                 + ", markers[players=" + settings.showOtherPlayers
                 + ", entities=" + settings.showEntities
                 + ", death=" + settings.showDeathMarker
@@ -813,6 +857,7 @@ public class MinimapCommand extends AbstractPlayerCommand {
         context.sendMessage(Message.raw("/mm position <x 0..100> <y 0..100>"));
         context.sendMessage(Message.raw("/mm info on|off | /mm panel below|above|left|right"));
         context.sendMessage(Message.raw("/mm panel-alignment left|centre|right | /mm creature-limit 16|32|64"));
+        context.sendMessage(Message.raw("/mm creature-markers icons|dots | /mm creature-filter all|hostile"));
         context.sendMessage(Message.raw("/mm markers players|entities|death|worldmap on|off"));
         context.sendMessage(Message.raw("/mm height on|off | /mm height-range <4..256>"));
         context.sendMessage(Message.raw("/mm coordinates on|off | /mm clock on|off|12|24"));
@@ -877,9 +922,10 @@ public class MinimapCommand extends AbstractPlayerCommand {
                 // DapperMapPermissions.player(...) registers it against the default player
                 // group via PermissionsModule, not via setPermissionGroups — see that
                 // method's javadoc for why setPermissionGroups was dropped here.
+                // Creature options share the existing "markers" node (no new node to grant).
                 this.requirePermission(DapperMapPermissions.player(switch (name.toLowerCase(java.util.Locale.ROOT)) {
                     case "panel-alignment" -> "panel";
-                    case "creature-limit" -> "markers";
+                    case "creature-limit", "creature-markers", "creature-filter" -> "markers";
                     default -> name.toLowerCase(java.util.Locale.ROOT);
                 }));
             }
