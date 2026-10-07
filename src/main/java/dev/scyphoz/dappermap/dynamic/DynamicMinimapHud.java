@@ -886,13 +886,18 @@ public final class DynamicMinimapHud extends CustomUIHud {
         out.append("AssetImage #WayfinderMmFrame { Anchor: (Left: ").append(this.mapOriginX())
                 .append(", Top: ").append(this.mapOriginY()).append(", Width: ").append(this.displaySize(this.logicalUiSize))
                 .append(", Height: ").append(this.displaySize(this.logicalUiSize)).append("); AssetPath: \"")
-                .append(this.framePath).append("\"; Visible: true; } ");
+                .append(this.displayedFramePath != null ? this.displayedFramePath : this.framePath)
+                .append("\"; Visible: true; } ");
         this.appendEdgeLayer(out);
         // Locator goes after the frame and edge-marker layer: UI elements draw in markup
         // order, so this keeps it above any marker at the player's position.
         this.appendSelf(out);
+        // Rebuilds use the image the client already has. overlayPath/framePath may already name
+        // a newer image that is still being rendered; pointing at it showed the missing-image
+        // cross until something else re-sent the overlay (e.g. reset to defaults, then a teleport).
         out.append("AssetImage #WayfinderMmOverlay { Anchor: (Full: 0); AssetPath: \"")
-                .append(this.overlayPath).append("\"; Visible: true; } ");
+                .append(this.displayedOverlayPath != null ? this.displayedOverlayPath : this.overlayPath)
+                .append("\"; Visible: true; } ");
         this.appendReadoutLabels(out);
         out.append("} ");
 
@@ -1128,6 +1133,8 @@ public final class DynamicMinimapHud extends CustomUIHud {
                 this.worldExecute.accept(() -> {
                     this.overlayRenderQueued = false;
                     if (!this.overlayWorkAllowed()) return;
+                    // A newer change superseded this render: render again rather than stay stale.
+                    if (generation != this.overlayGeneration) this.overlayDirty = true;
                     if (generation == this.overlayGeneration && prepared != null) {
                         String publishedPath = this.publishPart(this.overlayPublications, prepared);
                         String publishedFrame = this.publishPart(this.framePublications, preparedFrame);
@@ -1209,6 +1216,11 @@ public final class DynamicMinimapHud extends CustomUIHud {
             return;
         }
 
+        // The rebuilt markup shows the last delivered overlay; if a newer one is pending,
+        // make sure it is (re)rendered and swapped in afterwards.
+        if (this.overlayRenderQueued || !java.util.Objects.equals(this.overlayPath, this.displayedOverlayPath)) {
+            this.overlayDirty = true;
+        }
         UICommandBuilder builder = new UICommandBuilder();
         builder.remove("#WayfinderMmRoot #WayfinderMmPositionLayout");
         builder.appendInline("#WayfinderMmRoot", this.buildPositionLayoutMarkup());
