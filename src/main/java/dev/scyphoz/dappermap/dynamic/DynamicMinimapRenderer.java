@@ -1006,7 +1006,18 @@ public final class DynamicMinimapRenderer {
         return path;
     }
 
+    /** Dot PNGs by colour: identical for every player, so each colour is drawn and encoded once. */
+    private static final PngCache DOT_CACHE = new PngCache(64, 512 * 1024);
+
     public static byte[] renderDot(int rgb, MinimapColours colours) {
+        byte[] cached = DOT_CACHE.get(rgb);
+        if (cached != null) return cached;
+        byte[] png = drawDot(rgb);
+        DOT_CACHE.put(rgb, png);
+        return png;
+    }
+
+    private static byte[] drawDot(int rgb) {
         BufferedImage image = new BufferedImage(32, 32, 2);
         Graphics2D graphics = image.createGraphics();
         graphics.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);

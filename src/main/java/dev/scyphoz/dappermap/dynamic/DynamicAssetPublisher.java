@@ -8,6 +8,7 @@ import com.hypixel.hytale.protocol.packets.setup.AssetPart;
 import com.hypixel.hytale.protocol.packets.setup.RequestCommonAssetsRebuild;
 import com.hypixel.hytale.server.core.io.PacketHandler;
 import com.hypixel.hytale.server.core.universe.PlayerRef;
+import dev.scyphoz.dappermap.service.ServerLoad;
 import java.util.Map;
 import java.util.LinkedHashMap;
 import java.util.UUID;
@@ -61,6 +62,13 @@ public final class DynamicAssetPublisher {
 
     }
 
+    /** Total delivered-image records across online players (for /dappermap admin stats). */
+    public static int deliveredEntries() {
+        int total = 0;
+        for (Map<String, String> delivered : DELIVERED.values()) total += delivered.size();
+        return total;
+    }
+
     public static byte[] markerBytes(UUID uuid, String path) {
         Map<String, byte[]> assets = uuid == null ? null : MARKER_BYTES.get(uuid);
         byte[] bytes = assets == null ? null : assets.get(path);
@@ -112,6 +120,7 @@ public final class DynamicAssetPublisher {
                     for(Packet packet : packets) {
                         packetHandler.writeNoCache((ToClientPacket)packet);
                     }
+                    ServerLoad.recordAsset(data.length); // Counter only (admin stats).
 
                     // Marker images (including creature icons) are kept for the settings preview.
                     if (uuid != null && path.startsWith("UI/DapperMap/")

@@ -2,6 +2,7 @@ package dev.scyphoz.dappermap.service;
 
 import com.hypixel.hytale.server.core.entity.entities.Player;
 import com.hypixel.hytale.server.core.universe.PlayerRef;
+import dev.scyphoz.dappermap.DapperMap;
 import dev.scyphoz.dappermap.config.MinimapConfig;
 import dev.scyphoz.dappermap.dynamic.DynamicMinimapSession;
 import dev.scyphoz.dappermap.dynamic.DynamicMinimapSetting;
@@ -120,47 +121,113 @@ public class MinimapSessionManager {
 
     public void setSettings(UUID playerUuid, DynamicMinimapSetting settings) {
         settings.normalize();
-        if (playerUuid != null) {
-            this.customisedPlayers.add(playerUuid);
-        }
+        if (playerUuid == null) return; // ConcurrentHashMap rejects null keys.
+        this.customisedPlayers.add(playerUuid);
         this.settingsByPlayer.put(playerUuid, settings);
         DynamicMinimapSession session = this.sessionsByPlayer.get(playerUuid);
-        if (session != null) {
-            session.settings().colours = settings.colours;
-            session.settings().enabled = settings.enabled;
-            session.settings().rotationMode = settings.rotationMode;
-            session.settings().zoomBlocks = settings.zoomBlocks;
-            session.settings().sizePixels = settings.sizePixels;
-            session.settings().textureResolution = settings.textureResolution;
-            session.settings().interfaceScalePercent = settings.interfaceScalePercent;
-            session.settings().shape = settings.shape;
-            session.settings().showOtherPlayers = settings.showOtherPlayers;
-            session.settings().showEntities = settings.showEntities;
-            session.settings().creatureMarkerLimit = settings.creatureMarkerLimit;
-            session.settings().creatureIcons = settings.creatureIcons;
-            session.settings().hostileCreaturesOnly = settings.hostileCreaturesOnly;
-            session.settings().showDeathMarker = settings.showDeathMarker;
-            session.settings().showWorldMapMarkers = settings.showWorldMapMarkers;
-            session.settings().limitMobHeight = settings.limitMobHeight;
-            session.settings().mobVerticalRange = settings.mobVerticalRange;
-            session.settings().position = settings.position;
-            session.settings().hudPositionX = settings.hudPositionX;
-            session.settings().hudPositionY = settings.hudPositionY;
-            session.settings().infoPanelEnabled = settings.infoPanelEnabled;
-            session.settings().infoPanelPosition = settings.infoPanelPosition;
-            session.settings().infoPanelTextAlignment = settings.infoPanelTextAlignment;
-            session.settings().updateSpeed = settings.updateSpeed;
-            session.settings().clock24Hour = settings.clock24Hour;
-            session.settings().showCoordinates = settings.showCoordinates;
-            session.settings().showClock = settings.showClock;
-            session.settings().showCompass = settings.showCompass;
-            session.settings().showBiome = settings.showBiome;
-            session.settings().betterMapEnabled = settings.betterMapEnabled;
-            session.settings().betterMapMarkersEnabled = settings.betterMapMarkersEnabled;
-            session.settings().betterMapCaveModeEnabled = settings.betterMapCaveModeEnabled;
-        }
+        // The live session runs on its own copy, clamped to the admin limits.
+        if (session != null) this.pushLive(playerUuid, session);
 
         this.save(playerUuid);
+    }
+
+    /**
+     * Settings a live minimap actually runs with: the player's settings clamped to the admin
+     * limits, then slowed one update-speed step while load shedding is active. Always a copy,
+     * so the player's saved settings are never changed by limits or load shedding.
+     */
+    public static DynamicMinimapSetting liveSettings(DynamicMinimapSetting settings) {
+        DynamicMinimapSetting live = settings.copy();
+        MinimapConfig config = DapperMap.getConfig() == null ? null : DapperMap.getConfig().get();
+        if (config != null) config.applyLimits(live);
+        live.updateSpeed = Math.min(3, live.updateSpeed + ServerLoad.sheddingLevel());
+        live.normalize();
+        return live;
+    }
+
+    /**
+     * Re-applies limits and load shedding to every live minimap. Called when an admin changes
+     * a limit or the load-shedding level changes; each session picks up the new values on its
+     * next tick (only changed values cause any client update).
+     */
+    public void refreshLiveSettings() {
+        for (Map.Entry<UUID, DynamicMinimapSession> entry : this.sessionsByPlayer.entrySet())
+            this.pushLive(entry.getKey(), entry.getValue());
+    }
+
+    /**
+     * Copies the player's current settings (limited) into their live session. The player's
+     * settings are read inside the lock, so a refresh from the heartbeat thread can never
+     * overwrite a newer change applied on the world thread with older values. The same lock
+     * guards {@link DynamicMinimapSetting#copy()}, so render snapshots are never half-updated.
+     */
+    private void pushLive(UUID uuid, DynamicMinimapSession session) {
+        DynamicMinimapSetting target = session.settings();
+        synchronized (target) {
+            DynamicMinimapSetting own = this.settingsByPlayer.get(uuid);
+            if (own != null) copyLiveFields(target, liveSettings(own));
+        }
+    }
+
+    /** Number of players with a running minimap. */
+    public int liveSessionCount() {
+        return this.sessionsByPlayer.size();
+    }
+
+    /** Live minimaps by the update speed they currently run at (0 very fast .. 3 slow). */
+    public int[] liveSpeedCounts() {
+        int[] counts = new int[4];
+        for (DynamicMinimapSession session : this.sessionsByPlayer.values())
+            counts[Math.max(0, Math.min(3, session.settings().updateSpeed))]++;
+        return counts;
+    }
+
+    /** Players with a running minimap whose own settings exceed at least one admin limit. */
+    public int limitedPlayerCount() {
+        MinimapConfig config = DapperMap.getConfig() == null ? null : DapperMap.getConfig().get();
+        if (config == null || !config.hasLimits()) return 0;
+        int count = 0;
+        for (UUID uuid : this.sessionsByPlayer.keySet()) {
+            DynamicMinimapSetting own = this.settingsByPlayer.get(uuid);
+            if (own != null && !config.describeLimitsApplied(own).isEmpty()) count++;
+        }
+        return count;
+    }
+
+    /** Copies every setting into a live session's settings object (identity is kept). */
+    private static void copyLiveFields(DynamicMinimapSetting target, DynamicMinimapSetting source) {
+        target.colours = source.colours;
+        target.enabled = source.enabled;
+        target.rotationMode = source.rotationMode;
+        target.zoomBlocks = source.zoomBlocks;
+        target.sizePixels = source.sizePixels;
+        target.textureResolution = source.textureResolution;
+        target.interfaceScalePercent = source.interfaceScalePercent;
+        target.shape = source.shape;
+        target.showOtherPlayers = source.showOtherPlayers;
+        target.showEntities = source.showEntities;
+        target.creatureMarkerLimit = source.creatureMarkerLimit;
+        target.creatureIcons = source.creatureIcons;
+        target.hostileCreaturesOnly = source.hostileCreaturesOnly;
+        target.showDeathMarker = source.showDeathMarker;
+        target.showWorldMapMarkers = source.showWorldMapMarkers;
+        target.limitMobHeight = source.limitMobHeight;
+        target.mobVerticalRange = source.mobVerticalRange;
+        target.position = source.position;
+        target.hudPositionX = source.hudPositionX;
+        target.hudPositionY = source.hudPositionY;
+        target.infoPanelEnabled = source.infoPanelEnabled;
+        target.infoPanelPosition = source.infoPanelPosition;
+        target.infoPanelTextAlignment = source.infoPanelTextAlignment;
+        target.updateSpeed = source.updateSpeed;
+        target.clock24Hour = source.clock24Hour;
+        target.showCoordinates = source.showCoordinates;
+        target.showClock = source.showClock;
+        target.showCompass = source.showCompass;
+        target.showBiome = source.showBiome;
+        target.betterMapEnabled = source.betterMapEnabled;
+        target.betterMapMarkersEnabled = source.betterMapMarkersEnabled;
+        target.betterMapCaveModeEnabled = source.betterMapCaveModeEnabled;
     }
 
     public void applySettings(PlayerRef playerRef, DynamicMinimapSetting settings) {
@@ -217,8 +284,10 @@ public class MinimapSessionManager {
             for(UUID uuid : this.settingsByPlayer.keySet()) {
                 this.save(uuid);
             }
+            // Settings files are written on a background thread; finish them before shutdown.
+            this.settingsStore.shutdown();
         }
-
+        if (this.adminSettingsStore != null) this.adminSettingsStore.shutdown();
     }
 
     private void start(PlayerRef playerRef, DynamicMinimapSetting settings) {
@@ -229,7 +298,8 @@ public class MinimapSessionManager {
         }
 
         settings.normalize();
-        DynamicMinimapSession session = new DynamicMinimapSession(playerRef, settings);
+        // The session gets its own (limited) copy; the player's settings object stays as saved.
+        DynamicMinimapSession session = new DynamicMinimapSession(playerRef, liveSettings(settings));
         this.sessionsByPlayer.put(uuid, session);
         session.start();
     }

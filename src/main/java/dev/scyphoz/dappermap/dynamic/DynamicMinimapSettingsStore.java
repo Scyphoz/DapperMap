@@ -13,6 +13,22 @@ import java.util.regex.Pattern;
 public final class DynamicMinimapSettingsStore {
     private final Path dataDir;
     private final ConcurrentHashMap<UUID, DynamicMinimapSetting> cache = new ConcurrentHashMap<>();
+    /** Whether each player has a file, remembered so the check doesn't touch the disk again. */
+    private final ConcurrentHashMap<UUID, Boolean> hasFile = new ConcurrentHashMap<>();
+    /**
+     * Writes waiting for the background writer: a settings snapshot, or DELETE. Several changes
+     * to one player before the writer runs collapse into a single write of the latest values.
+     */
+    private final ConcurrentHashMap<UUID, DynamicMinimapSetting> pendingWrites = new ConcurrentHashMap<>();
+    private static final DynamicMinimapSetting DELETE = new DynamicMinimapSetting();
+    /** One background thread per store: settings files are never written on a world thread. */
+    private final java.util.concurrent.ExecutorService writer = java.util.concurrent.Executors.newSingleThreadExecutor(runnable -> {
+        Thread thread = new Thread(runnable, "DapperMap-Settings-IO");
+        thread.setDaemon(true);
+        return thread;
+    });
+    /** Matches every "key": value pair (booleans and integers) in one pass over the file. */
+    private static final Pattern FIELD = Pattern.compile("\"([A-Za-z_][\\w-]*)\"\\s*:\\s*(true|false|-?\\d+)");
 
     public DynamicMinimapSettingsStore(Path pluginDataDir) {
         this.dataDir = pluginDataDir.resolve("players");
@@ -24,7 +40,12 @@ public final class DynamicMinimapSettingsStore {
 
     /** True when this player has a settings file on disk, i.e. they are not a new player. */
     public boolean hasStoredSettings(UUID uuid) {
-        return uuid != null && Files.exists(this.dataDir.resolve(String.valueOf(uuid) + ".json"), new LinkOption[0]);
+        return uuid != null && this.hasFile.computeIfAbsent(uuid,
+                ignored -> Files.exists(this.file(uuid), new LinkOption[0]));
+    }
+
+    private Path file(UUID uuid) {
+        return this.dataDir.resolve(String.valueOf(uuid) + ".json");
     }
 
     /**
@@ -34,6 +55,7 @@ public final class DynamicMinimapSettingsStore {
     public void evict(UUID uuid) {
         if (uuid != null) {
             this.cache.remove(uuid);
+            this.hasFile.remove(uuid);
         }
     }
 
@@ -41,10 +63,8 @@ public final class DynamicMinimapSettingsStore {
     public void delete(UUID uuid) {
         if (uuid == null) return;
         this.cache.remove(uuid);
-        try {
-            Files.deleteIfExists(this.dataDir.resolve(String.valueOf(uuid) + ".json"));
-        } catch (IOException ignored) {
-        }
+        this.hasFile.put(uuid, false);
+        this.enqueue(uuid, DELETE); // Same queue as writes, so a queued write can't bring the file back.
     }
 
     public void put(UUID uuid, DynamicMinimapSetting settings) {
@@ -52,15 +72,56 @@ public final class DynamicMinimapSettingsStore {
         this.save(uuid);
     }
 
+    /** Queues a write of the player's current settings (a snapshot taken now). */
     public void save(UUID uuid) {
-        DynamicMinimapSetting settings = this.cache.get(uuid);
-        if (uuid != null && settings != null) {
-            try {
+        DynamicMinimapSetting settings = uuid == null ? null : this.cache.get(uuid);
+        if (settings == null) return;
+        this.hasFile.put(uuid, true);
+        this.enqueue(uuid, settings.copy());
+    }
+
+    private void enqueue(UUID uuid, DynamicMinimapSetting snapshot) {
+        // Only the first queued change for a player schedules a job; later ones replace its data.
+        if (this.pendingWrites.put(uuid, snapshot) != null) return;
+        try {
+            this.writer.execute(() -> this.flushOne(uuid));
+        } catch (java.util.concurrent.RejectedExecutionException shutDown) {
+            this.flushOne(uuid); // Writer stopped (server shutting down): write directly.
+        }
+    }
+
+    private void flushOne(UUID uuid) {
+        DynamicMinimapSetting snapshot = this.pendingWrites.remove(uuid);
+        if (snapshot == null) return;
+        try {
+            if (snapshot == DELETE) Files.deleteIfExists(this.file(uuid));
+            else this.write(uuid, snapshot);
+        } catch (IOException | RuntimeException ignored) {
+            // A failed write keeps the in-memory settings; the next change writes again.
+        }
+    }
+
+    /** Writes everything still queued and stops the writer. Called on plugin shutdown. */
+    public void shutdown() {
+        this.writer.shutdown();
+        try {
+            if (!this.writer.awaitTermination(5, java.util.concurrent.TimeUnit.SECONDS)) this.writer.shutdownNow();
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+        }
+        for (UUID uuid : this.pendingWrites.keySet()) this.flushOne(uuid); // Anything left over.
+    }
+
+    private void write(UUID uuid, DynamicMinimapSetting settings) throws IOException {
+        {
+            { // (Indentation kept from the original block so the field list diff stays readable.)
                 Files.createDirectories(this.dataDir);
-                Path file = this.dataDir.resolve(String.valueOf(uuid) + ".json");
+                Path file = this.file(uuid);
+                // Write a temp file, then swap it in, so a crash mid-write never leaves half a file.
+                Path temp = file.resolveSibling(file.getFileName() + ".tmp");
 
                 Files.writeString(
-                        file,
+                        temp,
                         ("{\n"
                                 + "  \"enabled\": %s,\n"
                                 + "  \"rotationMode\": %d,\n"
@@ -128,7 +189,12 @@ public final class DynamicMinimapSettingsStore {
                                 colourFields(settings.colours)
                         )
                 );
-            } catch (IOException ignored) {
+                try {
+                    Files.move(temp, file, java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+                            java.nio.file.StandardCopyOption.ATOMIC_MOVE);
+                } catch (java.nio.file.AtomicMoveNotSupportedException notAtomic) {
+                    Files.move(temp, file, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                }
             }
         }
     }
@@ -139,10 +205,12 @@ public final class DynamicMinimapSettingsStore {
             settings.normalize();
             return settings;
         } else {
-            Path file = this.dataDir.resolve(String.valueOf(uuid) + ".json");
-            if (Files.exists(file, new LinkOption[0])) {
+            Path file = this.file(uuid);
+            boolean exists = Files.exists(file, new LinkOption[0]);
+            this.hasFile.put(uuid, exists);
+            if (exists) {
                 try {
-                    String json = Files.readString(file);
+                    java.util.Map<String, String> json = fields(Files.readString(file));
                     for (MinimapColours.Key key : MinimapColours.Key.values()) {
                         Integer rgb = extractColour(json, "colour_" + key.id);
                         if (rgb != null) settings.colours = settings.colours.with(key, rgb);
@@ -313,20 +381,29 @@ public final class DynamicMinimapSettingsStore {
         return out.toString();
     }
 
-    private static Integer extractColour(String json, String key) {
+    /** Every "key": value pair in the file (first occurrence wins, as before). */
+    private static java.util.Map<String, String> fields(String json) {
+        java.util.Map<String, String> out = new java.util.HashMap<>(96);
+        Matcher matcher = FIELD.matcher(json);
+        while (matcher.find()) out.putIfAbsent(matcher.group(1), matcher.group(2));
+        return out;
+    }
+
+    private static Integer extractColour(java.util.Map<String, String> json, String key) {
         try {
             Integer value = extractInt(json, key);
             return value != null && value >= 0 && value <= 0xffffff ? value : null;
         } catch (NumberFormatException ignored) { return null; }
     }
 
-    private static Boolean extractBool(String json, String key) {
-        Matcher matcher = Pattern.compile("\"" + Pattern.quote(key) + "\"\\s*:\\s*(true|false)").matcher(json);
-        return matcher.find() ? Boolean.parseBoolean(matcher.group(1)) : null;
+    private static Boolean extractBool(java.util.Map<String, String> json, String key) {
+        String value = json.get(key);
+        return "true".equals(value) ? Boolean.TRUE : "false".equals(value) ? Boolean.FALSE : null;
     }
 
-    private static Integer extractInt(String json, String key) {
-        Matcher matcher = Pattern.compile("\"" + Pattern.quote(key) + "\"\\s*:\\s*(-?\\d+)").matcher(json);
-        return matcher.find() ? Integer.parseInt(matcher.group(1)) : null;
+    private static Integer extractInt(java.util.Map<String, String> json, String key) {
+        String value = json.get(key);
+        if (value == null || value.equals("true") || value.equals("false")) return null;
+        try { return Integer.parseInt(value); } catch (NumberFormatException tooLarge) { return null; }
     }
 }

@@ -182,8 +182,13 @@ public final class CreatureIcons {
                     synchronized (lock) {
                         base = BASES.get(key);
                         if (base == null) {
-                            base = renderBase(source);
-                            if (base == null) return null;
+                            // Saved from an earlier server run? Skips the 15-60 ms model render.
+                            base = loadCachedBase(key);
+                            if (base == null) {
+                                base = renderBase(source);
+                                if (base == null) return null;
+                                storeCachedBase(key, base);
+                            }
                             BASES.put(key, base);
                         }
                     }
@@ -196,6 +201,134 @@ public final class CreatureIcons {
             ICONS.put(variant, shared);
         }
         return shared.withPath("UI/DapperMap/creature-" + playerSlug + "-" + variant + ".png");
+    }
+
+    // ---------------------------------------------------------------------------------
+    // Disk cache of uncoloured base icons (survives server restarts)
+    // ---------------------------------------------------------------------------------
+
+    /** Bump when the icon drawing changes, so icons saved by older versions are replaced. */
+    private static final String CACHE_VERSION = "v1";
+    /** Largest file accepted from the cache (a base icon is ~10-15 KB). */
+    private static final int CACHE_FILE_LIMIT = 512 * 1024;
+    private static final byte[] PNG_SIGNATURE = {(byte) 0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n'};
+    /** Cache folder, or null when the disk cache is off. */
+    private static volatile java.nio.file.Path cacheDir;
+    private static volatile long cacheMaxBytes;
+    /** Bytes currently in the cache folder; -1 until it is first scanned. */
+    private static final java.util.concurrent.atomic.AtomicLong CACHE_BYTES = new java.util.concurrent.atomic.AtomicLong(-1);
+    private static final java.util.concurrent.atomic.AtomicInteger CACHE_HITS = new java.util.concurrent.atomic.AtomicInteger();
+
+    /** Called once from plugin setup. Face icons are saved under {@code dir}, up to {@code maxBytes}. */
+    public static void configureDiskCache(java.nio.file.Path dir, boolean enabled, long maxBytes) {
+        cacheDir = enabled ? dir : null;
+        cacheMaxBytes = Math.max(1024L * 1024L, maxBytes);
+        CACHE_BYTES.set(-1);
+    }
+
+    /** One-line cache summary for /dappermap admin stats. */
+    public static String cacheSummary() {
+        long disk = CACHE_BYTES.get();
+        return "creature sources " + SOURCES.size() + ", base icons " + BASES.size()
+                + ", icon variants " + ICONS.size()
+                + (cacheDir == null ? ", disk cache off"
+                : ", disk cache " + (disk < 0 ? "not yet used" : (disk / 1024) + " KB") + " (" + CACHE_HITS.get() + " loaded from disk)");
+    }
+
+    /** File for an icon key; null when the cache is off or the key is not a plain hex string. */
+    private static java.nio.file.Path cacheFile(String key) {
+        java.nio.file.Path dir = cacheDir;
+        if (dir == null || key.isEmpty() || key.length() > 16) return null;
+        for (int i = 0; i < key.length(); i++) {
+            char c = key.charAt(i);
+            if ((c < '0' || c > '9') && (c < 'a' || c > 'f')) return null; // Never build paths from other text.
+        }
+        return dir.resolve(CACHE_VERSION + "-" + key + ".png");
+    }
+
+    /** Saved face icon for this creature type, or null. Render pool only. */
+    private static Base loadCachedBase(String key) {
+        java.nio.file.Path file = cacheFile(key);
+        if (file == null) return null;
+        try {
+            if (!java.nio.file.Files.isRegularFile(file) || java.nio.file.Files.size(file) > CACHE_FILE_LIMIT) return null;
+            byte[] png = java.nio.file.Files.readAllBytes(file);
+            if (png.length < PNG_SIGNATURE.length
+                    || !java.util.Arrays.equals(png, 0, PNG_SIGNATURE.length, PNG_SIGNATURE, 0, PNG_SIGNATURE.length)) return null;
+            // Recently used icons are kept when the cache is pruned (oldest first).
+            java.nio.file.Files.setLastModifiedTime(file, java.nio.file.attribute.FileTime.fromMillis(System.currentTimeMillis()));
+            CACHE_HITS.incrementAndGet();
+            return new Base(png, true);
+        } catch (java.io.IOException | RuntimeException ignored) {
+            return null;
+        }
+    }
+
+    /**
+     * Saves a face icon. Initials badges are not saved: they can be the result of a model that
+     * failed to load in time, and should get another chance after a restart. Render pool only.
+     */
+    private static void storeCachedBase(String key, Base base) {
+        java.nio.file.Path file = cacheFile(key);
+        if (file == null || base == null || !base.sticker() || base.png().length > CACHE_FILE_LIMIT) return;
+        try {
+            java.nio.file.Files.createDirectories(file.getParent());
+            java.nio.file.Path temp = file.resolveSibling(file.getFileName() + ".tmp");
+            java.nio.file.Files.write(temp, base.png());
+            try { // Atomic where the file system supports it, so a reader never sees half a file.
+                java.nio.file.Files.move(temp, file, java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+                        java.nio.file.StandardCopyOption.ATOMIC_MOVE);
+            } catch (java.nio.file.AtomicMoveNotSupportedException notAtomic) {
+                java.nio.file.Files.move(temp, file, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            }
+            if (CACHE_BYTES.get() < 0) pruneCache(); // First write this run: measure the folder.
+            else if (CACHE_BYTES.addAndGet(base.png().length) > cacheMaxBytes) pruneCache();
+        } catch (java.io.IOException | RuntimeException ignored) {
+            // A read-only or full disk only means icons are rendered again next time.
+        }
+    }
+
+    /**
+     * Measures the cache folder, removes icons saved by older versions, and deletes the
+     * least recently used icons until it is under 80% of the size limit.
+     */
+    private static synchronized void pruneCache() {
+        java.nio.file.Path dir = cacheDir;
+        if (dir == null) return;
+        record Entry(java.nio.file.Path path, long size, long modified) { }
+        List<Entry> entries = new ArrayList<>();
+        long total = 0;
+        try (var files = java.nio.file.Files.list(dir)) {
+            for (java.nio.file.Path path : (Iterable<java.nio.file.Path>) files::iterator) {
+                String name = path.getFileName().toString();
+                if (!name.endsWith(".png") && !name.endsWith(".tmp")) continue;
+                var attributes = java.nio.file.Files.readAttributes(path, java.nio.file.attribute.BasicFileAttributes.class);
+                boolean staleTemp = name.endsWith(".tmp")
+                        && System.currentTimeMillis() - attributes.lastModifiedTime().toMillis() > 60_000L;
+                if (staleTemp || (!name.endsWith(".tmp") && !name.startsWith(CACHE_VERSION + "-"))) {
+                    java.nio.file.Files.deleteIfExists(path); // Interrupted write or older icon style.
+                    continue;
+                }
+                if (name.endsWith(".tmp")) continue; // Another render thread is writing it right now.
+                entries.add(new Entry(path, attributes.size(), attributes.lastModifiedTime().toMillis()));
+                total += attributes.size();
+            }
+        } catch (java.io.IOException | RuntimeException ignored) {
+            CACHE_BYTES.compareAndSet(-1, 0); // Don't re-list the folder on every store.
+            return;
+        }
+        if (total > cacheMaxBytes) {
+            entries.sort(java.util.Comparator.comparingLong(Entry::modified)); // Oldest first.
+            long target = cacheMaxBytes * 8 / 10;
+            for (Entry entry : entries) {
+                if (total <= target) break;
+                try {
+                    java.nio.file.Files.deleteIfExists(entry.path());
+                    total -= entry.size();
+                } catch (java.io.IOException ignored) { }
+            }
+        }
+        CACHE_BYTES.set(total);
     }
 
     /** Model face, then portrait crop, then initials; returned uncoloured. */

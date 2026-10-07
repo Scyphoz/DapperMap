@@ -34,6 +34,8 @@ public final class DynamicMinimapHud extends CustomUIHud {
         final boolean fixed;
         final String elementPrefix;
         final String[] selectors;
+        /** Property selectors built once, so marker updates don't concatenate strings. */
+        final String[] anchorSel, assetSel, visibleSel;
         final String[] path;
         final boolean[] visible;
         final int[] left, top, size;
@@ -43,7 +45,15 @@ public final class DynamicMinimapHud extends CustomUIHud {
             this.fixed = fixed;
             this.elementPrefix = elementPrefix;
             this.selectors = new String[capacity];
-            for (int i = 0; i < capacity; i++) this.selectors[i] = selectorPrefix + elementPrefix + i;
+            this.anchorSel = new String[capacity];
+            this.assetSel = new String[capacity];
+            this.visibleSel = new String[capacity];
+            for (int i = 0; i < capacity; i++) {
+                this.selectors[i] = selectorPrefix + elementPrefix + i;
+                this.anchorSel[i] = this.selectors[i] + ".Anchor";
+                this.assetSel[i] = this.selectors[i] + ".AssetPath";
+                this.visibleSel[i] = this.selectors[i] + ".Visible";
+            }
             this.path = new String[capacity];
             this.visible = new boolean[capacity];
             this.left = new int[capacity];
@@ -364,8 +374,8 @@ public final class DynamicMinimapHud extends CustomUIHud {
             this.panTop = top;
             UICommandBuilder builder = new UICommandBuilder();
             builder.set("#WayfinderMmRoot #WayfinderMmClip #WayfinderMmTerrain.AssetPath", assetPath);
-            builder.setObject("#WayfinderMmRoot #WayfinderMmClip #WayfinderMmTerrain.Anchor", this.fullAnchor(left, top));
-            builder.setObject("#WayfinderMmRoot #WayfinderMmClip #WayfinderMmMarkers.Anchor", this.fullAnchor(left, top));
+            // Terrain and markers share one pan group: one Anchor update moves both.
+            builder.setObject("#WayfinderMmRoot #WayfinderMmClip #WayfinderMmPan.Anchor", this.fullAnchor(left, top));
             builder.set("#WayfinderMmRoot #WayfinderMmClip #WayfinderMmTerrain.Visible", true);
             this.terrainShown = true;
             this.update(false, builder);
@@ -377,8 +387,8 @@ public final class DynamicMinimapHud extends CustomUIHud {
             this.panLeft = left;
             this.panTop = top;
             UICommandBuilder builder = new UICommandBuilder();
-            builder.setObject("#WayfinderMmRoot #WayfinderMmClip #WayfinderMmTerrain.Anchor", this.fullAnchor(left, top));
-            builder.setObject("#WayfinderMmRoot #WayfinderMmClip #WayfinderMmMarkers.Anchor", this.fullAnchor(left, top));
+            // Terrain and markers share one pan group: one Anchor update moves both.
+            builder.setObject("#WayfinderMmRoot #WayfinderMmClip #WayfinderMmPan.Anchor", this.fullAnchor(left, top));
             this.update(false, builder);
         }
     }
@@ -491,8 +501,9 @@ public final class DynamicMinimapHud extends CustomUIHud {
      */
     public void setMarkers(Slot[] slots) {
         if (!this.built) return;
-        Slot[] map = new Slot[MAP_MARKER_SLOTS];
-        Slot[] edge = new Slot[EDGE_MARKER_SLOTS];
+        // Scratch arrays reused on every update (world thread only), cleared at the end.
+        Slot[] map = this.scratchMap;
+        Slot[] edge = this.scratchEdge;
         int mapCount = 0, edgeCount = 0;
         if (slots != null) {
             for (Slot slot : slots) {
@@ -501,14 +512,22 @@ public final class DynamicMinimapHud extends CustomUIHud {
                 else if (mapCount < map.length) map[mapCount++] = slot;
             }
         }
-        Slot[] arranged = arrangeMapSlots(this.mapLayer, map, mapCount);
+        Slot[] arranged = arrangeMapSlots(this.mapLayer, map, mapCount, this.scratchPlaced, this.scratchTaken);
         int arrangedCount = 0;
         for (int i = 0; i < arranged.length; i++) if (arranged[i] != null) arrangedCount = i + 1;
         UICommandBuilder builder = new UICommandBuilder();
         boolean changed = this.applyLayer(builder, this.mapLayer, arranged, arrangedCount);
         changed |= this.applyLayer(builder, this.edgeLayer, edge, edgeCount);
         if (changed) this.update(false, builder);
+        java.util.Arrays.fill(map, null);
+        java.util.Arrays.fill(edge, null);
+        java.util.Arrays.fill(arranged, null);
     }
+
+    private final Slot[] scratchMap = new Slot[MAP_MARKER_SLOTS];
+    private final Slot[] scratchEdge = new Slot[EDGE_MARKER_SLOTS];
+    private final Slot[] scratchPlaced = new Slot[MAP_MARKER_SLOTS];
+    private final boolean[] scratchTaken = new boolean[MAP_MARKER_SLOTS];
 
     /**
      * Places in-map markers so each one reuses the HUD element already showing the same
@@ -517,9 +536,10 @@ public final class DynamicMinimapHud extends CustomUIHud {
      * noticeable with creature icons, where every creature type has its own image).
      * Unmatched markers take the lowest free elements. At most a few 96 x 96 cheap comparisons.
      */
-    private static Slot[] arrangeMapSlots(MarkerLayer layer, Slot[] slots, int count) {
-        Slot[] placed = new Slot[layer.path.length];
-        boolean[] taken = new boolean[count];
+    private static Slot[] arrangeMapSlots(MarkerLayer layer, Slot[] slots, int count,
+                                          Slot[] placed, boolean[] taken) {
+        java.util.Arrays.fill(placed, null);
+        java.util.Arrays.fill(taken, 0, count, false);
         for (int i = 0; i < layer.active; i++) {
             String path = layer.path[i];
             if (!layer.visible[i] || path == null) continue;
@@ -572,7 +592,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
                     && Math.abs(top - layer.top[i]) <= MARKER_DEADBAND) continue;
             if (Objects.equals(path, layer.path[i]) && visible == layer.visible[i] && (!visible
                     || (left == layer.left[i] && top == layer.top[i] && size == layer.size[i]))) continue;
-            if (appendMarkerDelta(builder, layer.selectors[i], this.settings, this.blankPath,
+            if (appendMarkerDelta(builder, layer, i, this.settings, this.blankPath,
                     layer.path[i], layer.visible[i], layer.left[i], layer.top[i], layer.size[i],
                     path, visible, left, top, size)) {
                 layer.path[i] = path;
@@ -588,18 +608,18 @@ public final class DynamicMinimapHud extends CustomUIHud {
     }
 
     /** Moving an existing icon must not rebind its texture or visibility. */
-    static boolean appendMarkerDelta(UICommandBuilder builder, String selector,
+    static boolean appendMarkerDelta(UICommandBuilder builder, MarkerLayer layer, int slot,
                                      DynamicMinimapSetting settings, String blankPath,
                                      String oldPath, boolean oldVisible, int oldLeft, int oldTop, int oldSize,
                                      String path, boolean visible, int left, int top, int size) {
         boolean imageChanged = !Objects.equals(oldPath, path);
         boolean visibilityChanged = oldVisible != visible;
         boolean anchorChanged = visible && (!oldVisible || oldLeft != left || oldTop != top || oldSize != size);
-        if (anchorChanged) builder.setObject(selector + ".Anchor", anchor(
+        if (anchorChanged) builder.setObject(layer.anchorSel[slot], anchor(
                 settings.displayCoordinate(left), settings.displayCoordinate(top),
                 settings.displaySize(size), settings.displaySize(size)));
-        if (imageChanged) builder.set(selector + ".AssetPath", visible ? path : blankPath);
-        if (visibilityChanged) builder.set(selector + ".Visible", visible);
+        if (imageChanged) builder.set(layer.assetSel[slot], visible ? path : blankPath);
+        if (visibilityChanged) builder.set(layer.visibleSel[slot], visible);
         return anchorChanged || imageChanged || visibilityChanged;
     }
 
@@ -957,23 +977,27 @@ public final class DynamicMinimapHud extends CustomUIHud {
                 .append("MaskTexturePath: \"").append(this.maskFile).append("\"; ")
                 .append("Background: ").append("#0B0D18").append("(0.94); ");
 
-        out.append("AssetImage #WayfinderMmTerrain { ")
-                .append("Anchor: (Left: ").append(this.displayCoordinate(this.panLeft))
-                .append(", Top: ").append(this.displayCoordinate(this.panTop))
-                .append(", Width: ").append(displayBuffer)
-                .append(", Height: ").append(displayBuffer)
-                .append("); AssetPath: \"").append(this.terrainPath)
-                .append("\"; Visible: ").append(this.terrainShown).append("; } ");
-
-        out.append("Group #WayfinderMmMarkers { ")
+        // Pan group: terrain and in-map markers move together with a single Anchor update.
+        out.append("Group #WayfinderMmPan { ")
                 .append("Anchor: (Left: ").append(this.displayCoordinate(this.panLeft))
                 .append(", Top: ").append(this.displayCoordinate(this.panTop))
                 .append(", Width: ").append(displayBuffer)
                 .append(", Height: ").append(displayBuffer).append("); ");
 
+        out.append("AssetImage #WayfinderMmTerrain { ")
+                .append("Anchor: (Left: 0, Top: 0, Width: ").append(displayBuffer)
+                .append(", Height: ").append(displayBuffer)
+                .append("); AssetPath: \"").append(this.terrainPath)
+                .append("\"; Visible: ").append(this.terrainShown).append("; } ");
+
+        out.append("Group #WayfinderMmMarkers { ")
+                .append("Anchor: (Left: 0, Top: 0, Width: ").append(displayBuffer)
+                .append(", Height: ").append(displayBuffer).append("); ");
+
         appendMarkerLayer(out, this.mapLayer);
-        out.append("} ");
-        out.append("} ");
+        out.append("} "); // Markers
+        out.append("} "); // Pan
+        out.append("} "); // Clip
 
         return out.toString();
     }

@@ -598,6 +598,8 @@ public final class DynamicEntityScanner {
         private record Cached(BuilderInfo info, long generation, NpcThreatProfile profile) { }
         private static final ConcurrentHashMap<Integer, Cached> CACHE = new ConcurrentHashMap<>();
         private static final AtomicLong GENERATION = new AtomicLong();
+        /** Role indexes whose profile is being read on the render pool. */
+        private static final java.util.Set<Integer> PENDING = ConcurrentHashMap.newKeySet();
         private static volatile BuilderManager observedManager;
 
         private NpcThreatClassifier() { }
@@ -613,15 +615,28 @@ public final class DynamicEntityScanner {
                 long generation = GENERATION.get();
                 Cached cached = CACHE.get(roleIndex);
                 if (cached != null && cached.info == info && cached.generation == generation) return cached.profile;
-                // Components can be referenced repeatedly by one resolved role. Read
-                // each asset once per resolution, including missing/unreadable assets.
-                var assets = new java.util.HashMap<String, JsonObject>();
-                NpcThreatProfile profile = NpcThreatProfile.resolve(info.getKeyName(), name -> {
-                    if (!assets.containsKey(name)) assets.put(name, read(manager, name));
-                    return assets.get(name);
-                });
-                CACHE.put(roleIndex, new Cached(info, generation, profile));
-                return profile;
+                // Reading and parsing the role's JSON assets is file I/O: do it on the render
+                // pool, never on the world thread. Until it lands, use the previous profile for
+                // this role (after an asset reload) or UNKNOWN, which classifies conservatively
+                // from live attitude/AI state. The threat cache re-checks within 750 ms.
+                if (PENDING.add(roleIndex) && !DynamicMinimapSession.renderAsync(() -> {
+                    try {
+                        // Components can be referenced repeatedly by one resolved role. Read
+                        // each asset once per resolution, including missing/unreadable assets.
+                        var assets = new java.util.HashMap<String, JsonObject>();
+                        NpcThreatProfile profile = NpcThreatProfile.resolve(info.getKeyName(), name -> {
+                            if (!assets.containsKey(name)) assets.put(name, read(manager, name));
+                            return assets.get(name);
+                        });
+                        // Drop the result if assets were reloaded while it was being read.
+                        if (GENERATION.get() == generation) CACHE.put(roleIndex, new Cached(info, generation, profile));
+                    } catch (RuntimeException | LinkageError ignored) {
+                        // Stays UNKNOWN; retried on a later scan.
+                    } finally {
+                        PENDING.remove(roleIndex);
+                    }
+                })) PENDING.remove(roleIndex); // Render pool busy: retry on a later scan.
+                return cached != null ? cached.profile : NpcThreatProfile.UNKNOWN;
             } catch (RuntimeException | LinkageError failure) {
                 return NpcThreatProfile.UNKNOWN;
             }

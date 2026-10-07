@@ -96,7 +96,8 @@ public final class DynamicMinimapSetting {
         return this.shape == 1;
     }
 
-    public DynamicMinimapSetting copy() {
+    /** Synchronized: live session settings are updated under this object's lock (MinimapSessionManager). */
+    public synchronized DynamicMinimapSetting copy() {
         DynamicMinimapSetting copy = new DynamicMinimapSetting();
         copy.colours = this.colours; // immutable, safe to share
         copy.enabled = this.enabled;

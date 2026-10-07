@@ -46,8 +46,26 @@ public final class DynamicMinimapSession {
 
     /** False means saturation or shutdown; callers can retry on a later tick. */
     public static boolean renderAsync(Runnable work) {
-        try { RENDER_POOL.execute(work); return true; }
-        catch (java.util.concurrent.RejectedExecutionException rejected) { return false; }
+        try { RENDER_POOL.execute(timed(work)); return true; }
+        catch (java.util.concurrent.RejectedExecutionException rejected) {
+            dev.scyphoz.dappermap.service.ServerLoad.recordRejection(); // Admin stats / load shedding.
+            return false;
+        }
+    }
+
+    /** Wraps a render job so its run time feeds the admin stats (two nanoTime reads per job). */
+    private static Runnable timed(Runnable work) {
+        return () -> {
+            long start = System.nanoTime();
+            try { work.run(); }
+            finally { dev.scyphoz.dappermap.service.ServerLoad.recordRender(System.nanoTime() - start); }
+        };
+    }
+
+    /** {running jobs, queued jobs, pool threads} for /dappermap admin stats. */
+    public static int[] renderPoolStatus() {
+        var pool = (java.util.concurrent.ThreadPoolExecutor) RENDER_POOL;
+        return new int[]{pool.getActiveCount(), pool.getQueue().size(), pool.getPoolSize()};
     }
 
     private final java.util.concurrent.ConcurrentMap<String, java.util.concurrent.atomic.AtomicBoolean> renderPending = new java.util.concurrent.ConcurrentHashMap<>();
@@ -75,6 +93,12 @@ public final class DynamicMinimapSession {
     }
 
     // Coalesce each kind of work: slow PNG compression must not build an unbounded backlog.
+    /** True while a render of this kind is queued or running (submitRender would drop a new one). */
+    private boolean renderBusy(String kind) {
+        var pending = renderPending.get(kind);
+        return pending != null && pending.get();
+    }
+
     private boolean submitRender(String kind, Runnable work) {
         if (!this.canRenderHud(this.hud)) return false;
         var pending = renderPending.computeIfAbsent(kind, ignored -> new java.util.concurrent.atomic.AtomicBoolean());
@@ -327,6 +351,8 @@ public final class DynamicMinimapSession {
     private int lastSelfBucket = -1;
     /** Locator images already sent to this client for the current colour (skips re-hashing). */
     private final boolean[] selfArrowDelivered = new boolean[SELF_BUCKETS];
+    /** Scratch array for marker projection (world thread only). */
+    private final DynamicMinimapHud.Slot[] projectionSlots = new DynamicMinimapHud.Slot[DynamicMinimapHud.MARKER_SLOTS];
     /** True once every locator image for the current colour is on the client. */
     private boolean selfArrowsComplete = false;
     /** Last locator heading change; the tick runs at the faster rotation cadence while turning. */
@@ -853,6 +879,10 @@ public final class DynamicMinimapSession {
             if (this.settings.zoomBlocks != this.builtZoom) {
                 this.builtZoom = this.settings.zoomBlocks;
                 this.bufferCenterX = Double.NaN;
+                // Discard renders still in flight at the old zoom (they would show the wrong scale).
+                ++this.terrainGeneration;
+                this.rotationSequence.incrementAndGet();
+                this.rotationSource = null;
             }
         } else {
             // Prepare PNG masks off the world thread before sending the initial HUD.
@@ -865,19 +895,21 @@ public final class DynamicMinimapSession {
                 this.hud.removeFromClient();
             }
 
-            this.settings.normalize();
-            this.hud = new DynamicMinimapHud(this.playerRef, this.settings, work -> executeWorld(world, "overlay delivery", work),
+            // One consistent snapshot builds the HUD and records what it was built with, so a
+            // settings refresh landing mid-build is picked up on the next tick, never lost.
+            DynamicMinimapSetting snap = this.settings.copy();
+            this.hud = new DynamicMinimapHud(this.playerRef, snap, work -> executeWorld(world, "overlay delivery", work),
                     () -> this.running && this.settings.enabled);
-            this.builtSize = this.settings.sizePixels;
-            this.builtShape = this.settings.shape;
-            this.builtZoom = this.settings.zoomBlocks;
-            this.builtHudPositionX = this.settings.hudPositionX;
-            this.builtHudPositionY = this.settings.hudPositionY;
-            this.builtInfoPanelEnabled = this.settings.infoPanelEnabled;
-            this.builtInfoPanelPosition = this.settings.infoPanelPosition;
-            this.builtInfoPanelTextAlignment = this.settings.infoPanelTextAlignment;
-            this.builtInterfaceScale = this.settings.interfaceScalePercent;
-            this.builtTextureResolution = this.settings.textureResolution;
+            this.builtSize = snap.sizePixels;
+            this.builtShape = snap.shape;
+            this.builtZoom = snap.zoomBlocks;
+            this.builtHudPositionX = snap.hudPositionX;
+            this.builtHudPositionY = snap.hudPositionY;
+            this.builtInfoPanelEnabled = snap.infoPanelEnabled;
+            this.builtInfoPanelPosition = snap.infoPanelPosition;
+            this.builtInfoPanelTextAlignment = snap.infoPanelTextAlignment;
+            this.builtInterfaceScale = snap.interfaceScalePercent;
+            this.builtTextureResolution = snap.textureResolution;
             this.builtRotationMode = -1;
             this.lastMapRotationBucket = -1;
             this.rotationSource = null;
@@ -958,6 +990,7 @@ public final class DynamicMinimapSession {
      * do not hold up world ticks. Only the latest matching buffer can request a redraw. */
     private void scheduleSignatureCheck(World world, double centerX, double centerZ,
                                         BetterMapIntegration.CaveView caveView) {
+        if (this.renderBusy("signature")) return; // Would be dropped anyway: skip the copy.
         DynamicMinimapSetting probeSettings = this.settings.copy();
         DynamicMinimapHud probeHud = this.hud;
         long generation = this.terrainGeneration;
@@ -992,6 +1025,7 @@ public final class DynamicMinimapSession {
             double yaw,
             BetterMapIntegration.CaveView caveView
     ) {
+        if (this.renderBusy("terrain")) return false; // Would be dropped anyway: skip the copy.
         long sequence = this.renderSequence.incrementAndGet();
         DynamicMinimapSetting renderSettings = this.settings.copy();
         DynamicMinimapHud renderHud = this.hud;
@@ -1043,6 +1077,7 @@ public final class DynamicMinimapSession {
                         || !java.util.Objects.equals(caveView, this.lastCaveView)
                         || sequence <= this.deliveredSequence
                         || this.settings.textureResolution != renderSettings.textureResolution
+                        || this.settings.zoomBlocks != renderSettings.zoomBlocks
                         || this.settings.rotationMode != renderSettings.rotationMode
                         || this.settings.sizePixels != renderSettings.sizePixels
                         || this.settings.shape != renderSettings.shape
@@ -1116,6 +1151,7 @@ public final class DynamicMinimapSession {
             return false;
         }
 
+        if (this.renderBusy("rotation")) return false; // Would be dropped anyway: skip the copy.
         DynamicMinimapRenderer.RotationSource base = this.rotationSource;
         long generation = this.terrainGeneration;
         DynamicMinimapHud renderHud = this.hud;
@@ -1154,6 +1190,7 @@ public final class DynamicMinimapSession {
                         || generation != this.terrainGeneration
                         || rotationRequest != this.rotationSequence.get()
                         || this.settings.rotationMode != expectedRotationMode
+                        || this.settings.zoomBlocks != renderSettings.zoomBlocks
                         || this.settings.sizePixels != renderSettings.sizePixels
                         || this.settings.shape != renderSettings.shape
                         || this.settings.textureResolution != renderSettings.textureResolution
@@ -1330,8 +1367,8 @@ public final class DynamicMinimapSession {
 
         double mapAngle = this.acceptedMapAngle(yaw);
         double cos = Math.cos(mapAngle), sin = Math.sin(mapAngle);
-        DynamicMinimapHud.Slot[] slots =
-                new DynamicMinimapHud.Slot[DynamicMinimapHud.MARKER_SLOTS];
+        // Reused every projection (world thread only); cleared after the HUD has read it.
+        DynamicMinimapHud.Slot[] slots = this.projectionSlots;
         int slot = 0;
         // Each HUD layer has its own capacity: edge icons and map dots never crowd each other out.
         int edgeFree = DynamicMinimapHud.EDGE_MARKER_SLOTS, mapFree = DynamicMinimapHud.MAP_MARKER_SLOTS;
@@ -1411,6 +1448,7 @@ public final class DynamicMinimapSession {
         }
 
         this.hud.setMarkers(slots);
+        java.util.Arrays.fill(slots, null); // Don't hold marker objects until the next projection.
     }
 
     /**

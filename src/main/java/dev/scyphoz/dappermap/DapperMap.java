@@ -37,6 +37,12 @@ public class DapperMap extends JavaPlugin {
                 dev.scyphoz.dappermap.integration.BetterMapIntegration::pruneImages,
                 5L, 5L, java.util.concurrent.TimeUnit.SECONDS);
         this.sessions.setDataDirectory(this.getDataDirectory());
+        // Creature face icons saved between restarts (render pool I/O only; size-capped).
+        dev.scyphoz.dappermap.dynamic.CreatureIcons.configureDiskCache(
+                this.getDataDirectory().resolve("icon-cache"),
+                config.get().isCreatureIconDiskCache(), config.get().getCreatureIconDiskCacheBytes());
+        // Once-a-second load sampler for /dappermap admin stats and optional load shedding.
+        dev.scyphoz.dappermap.service.ServerLoad.start(this.sessions);
         this.getCommandRegistry().registerCommand(new MinimapCommand("dappermap", "Configure DapperMap", this.sessions));
         this.getEventRegistry().registerGlobal(
                 com.hypixel.hytale.server.core.universe.world.events.RemoveWorldEvent.class,
@@ -49,6 +55,7 @@ public class DapperMap extends JavaPlugin {
     @Override
     protected void shutdown() {
         if (this.imageCleanup != null) this.imageCleanup.cancel(false);
+        dev.scyphoz.dappermap.service.ServerLoad.stop();
         this.sessions.stopAll();
         dev.scyphoz.dappermap.integration.BetterMapIntegration.clearImages();
         dev.scyphoz.dappermap.dynamic.DynamicMinimapSession.shutdownRendering();
@@ -56,5 +63,10 @@ public class DapperMap extends JavaPlugin {
 
     public static Config<MinimapConfig> getConfig() {
         return config;
+    }
+
+    /** Writes dappermap_minimap.json after an admin changes limits or load shedding in game. */
+    public static void saveConfig() {
+        if (config != null) config.save();
     }
 }
