@@ -2,7 +2,6 @@ package dev.scyphoz.dappermap.dynamic;
 
 import java.awt.Color;
 import java.util.Arrays;
-import java.util.Locale;
 
 /** Immutable per-player RGB palette. Existing opacity and terrain colours are retained. */
 public final class MinimapColours {
@@ -54,7 +53,7 @@ public final class MinimapColours {
         this.hexValues = new String[values.length];
         this.opaqueColours = new Color[values.length];
         for (int i = 0; i < values.length; i++) {
-            this.hexValues[i] = String.format(Locale.ROOT, "#%06X", values[i]);
+            this.hexValues[i] = "#" + dev.scyphoz.dappermap.util.DapperMapUtil.hex6(values[i]);
             this.opaqueColours[i] = new Color(0xFF000000 | values[i], true);
         }
         this.frameKey = hexValues[Key.EDGE.ordinal()].substring(1)

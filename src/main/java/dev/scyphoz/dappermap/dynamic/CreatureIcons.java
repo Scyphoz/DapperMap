@@ -6,8 +6,6 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.hypixel.hytale.component.ComponentAccessor;
 import com.hypixel.hytale.component.Ref;
-import com.hypixel.hytale.server.core.asset.common.CommonAsset;
-import com.hypixel.hytale.server.core.asset.common.CommonAssetRegistry;
 import com.hypixel.hytale.server.core.asset.type.model.config.Model;
 import com.hypixel.hytale.server.core.asset.type.model.config.ModelAsset;
 import com.hypixel.hytale.server.core.asset.type.model.config.ModelAttachment;
@@ -22,7 +20,6 @@ import java.awt.Graphics2D;
 import java.awt.RenderingHints;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -31,8 +28,12 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.TimeUnit;
 import javax.imageio.ImageIO;
+import dev.scyphoz.dappermap.util.DapperMapUtil;
+import static dev.scyphoz.dappermap.util.DapperMapUtil.jsonBool;
+import static dev.scyphoz.dappermap.util.DapperMapUtil.jsonNumber;
+import static dev.scyphoz.dappermap.util.DapperMapUtil.jsonObject;
+import static dev.scyphoz.dappermap.util.DapperMapUtil.jsonString;
 
 /**
  * Creature face icons for the optional "Icons" creature-marker style.
@@ -168,7 +169,7 @@ public final class CreatureIcons {
      */
     public static DynamicAssetPublisher.PreparedAsset prepareAsset(String key, String playerSlug, int rgb) {
         if (key == null || playerSlug == null) return null;
-        String hex = String.format("%06X", rgb & 0xFFFFFF);
+        String hex = DapperMapUtil.hex6(rgb);
         String variant = key + "-" + hex;
         DynamicAssetPublisher.PreparedAsset shared = ICONS.get(variant);
         if (shared == null) {
@@ -272,15 +273,8 @@ public final class CreatureIcons {
         java.nio.file.Path file = cacheFile(key);
         if (file == null || base == null || !base.sticker() || base.png().length > CACHE_FILE_LIMIT) return;
         try {
-            java.nio.file.Files.createDirectories(file.getParent());
-            java.nio.file.Path temp = file.resolveSibling(file.getFileName() + ".tmp");
-            java.nio.file.Files.write(temp, base.png());
-            try { // Atomic where the file system supports it, so a reader never sees half a file.
-                java.nio.file.Files.move(temp, file, java.nio.file.StandardCopyOption.REPLACE_EXISTING,
-                        java.nio.file.StandardCopyOption.ATOMIC_MOVE);
-            } catch (java.nio.file.AtomicMoveNotSupportedException notAtomic) {
-                java.nio.file.Files.move(temp, file, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-            }
+            // Atomic where the file system supports it, so a reader never sees half a file.
+            DapperMapUtil.writeAtomically(file, base.png());
             if (CACHE_BYTES.get() < 0) pruneCache(); // First write this run: measure the folder.
             else if (CACHE_BYTES.addAndGet(base.png().length) > cacheMaxBytes) pruneCache();
         } catch (java.io.IOException | RuntimeException ignored) {
@@ -407,7 +401,7 @@ public final class CreatureIcons {
             g.dispose();
         }
         if (trimmed != null) outline(canvas, DARK_OUTLINE, DARK_EDGE, null);
-        byte[] png = toPng(canvas);
+        byte[] png = DapperMapUtil.encodePng(canvas, 2048);
         return png == null ? null : new Base(png, trimmed != null);
     }
 
@@ -441,7 +435,7 @@ public final class CreatureIcons {
                 g.dispose();
             }
         }
-        return toPng(scale(canvas, ICON_PX));
+        return DapperMapUtil.encodePng(scale(canvas, ICON_PX), 2048);
     }
 
     /** Crops to the visible pixels and centres them on a transparent square. */
@@ -475,10 +469,22 @@ public final class CreatureIcons {
         }
         while (head < tail) { // Breadth-first flood fill over fully transparent pixels.
             int i = queue[head++], x = i % w, y = i / w;
-            int[] next = {x > 0 ? i - 1 : -1, x < w - 1 ? i + 1 : -1, y > 0 ? i - w : -1, y < h - 1 ? i + w : -1};
-            for (int n : next) if (n >= 0 && !outside[n] && (pixels[n] >>> 24) == 0) { outside[n] = true; queue[tail++] = n; }
+            // Left, right, up, down (same order as before; no per-pixel array allocation).
+            if (x > 0) tail = floodVisit(i - 1, pixels, outside, queue, tail);
+            if (x < w - 1) tail = floodVisit(i + 1, pixels, outside, queue, tail);
+            if (y > 0) tail = floodVisit(i - w, pixels, outside, queue, tail);
+            if (y < h - 1) tail = floodVisit(i + w, pixels, outside, queue, tail);
         }
         return outside;
+    }
+
+    /** Marks a transparent, unvisited pixel as outside and queues it; returns the new queue tail. */
+    private static int floodVisit(int pixel, int[] pixels, boolean[] outside, int[] queue, int tail) {
+        if (!outside[pixel] && (pixels[pixel] >>> 24) == 0) {
+            outside[pixel] = true;
+            queue[tail++] = pixel;
+        }
+        return tail;
     }
 
     /**
@@ -643,9 +649,9 @@ public final class CreatureIcons {
             for (JsonElement element : nodes) {
                 if (!element.isJsonObject()) continue;
                 JsonObject node = element.getAsJsonObject();
-                String name = string(node.get("name"));
-                JsonObject shape = object(node.get("shape"));
-                String type = shape == null ? null : string(shape.get("type"));
+                String name = jsonString(node.get("name"));
+                JsonObject shape = jsonObject(node.get("shape"));
+                String type = shape == null ? null : jsonString(shape.get("type"));
                 if (name != null && ("box".equals(type) || "quad".equals(type))) {
                     String lower = name.toLowerCase(java.util.Locale.ROOT);
                     if (lower.contains("leg") || lower.contains("thigh") || lower.contains("calf")
@@ -702,9 +708,9 @@ public final class CreatureIcons {
         /** A child node's frame: its parent's frame moved by its position and turned by its rotation. */
         private static Frame child(Frame parent, JsonObject node) {
             double[] position = vector(node.get("position"), 0);
-            JsonObject q = object(node.get("orientation"));
-            double[] rotation = q == null ? IDENTITY : quaternion(number(q.get("w"), 1), number(q.get("x"), 0),
-                    number(q.get("y"), 0), number(q.get("z"), 0));
+            JsonObject q = jsonObject(node.get("orientation"));
+            double[] rotation = q == null ? IDENTITY : quaternion(jsonNumber(q.get("w"), 1), jsonNumber(q.get("x"), 0),
+                    jsonNumber(q.get("y"), 0), jsonNumber(q.get("z"), 0));
             return new Frame(multiply(parent.rotation(), rotation), add(parent.origin(), apply(parent.rotation(), position)));
         }
 
@@ -714,7 +720,7 @@ public final class CreatureIcons {
             for (JsonElement element : nodes) {
                 if (!element.isJsonObject()) continue;
                 JsonObject node = element.getAsJsonObject();
-                Frame frame = frames.get(string(node.get("name")));
+                Frame frame = frames.get(jsonString(node.get("name")));
                 if (frame != null) collect(node, frame, texture, faces, null, 0); // Its children come with it.
                 else attach(node.getAsJsonArray("children"), frames, texture, faces, depth + 1);
             }
@@ -726,7 +732,7 @@ public final class CreatureIcons {
             for (JsonElement element : nodes) {
                 if (!element.isJsonObject()) continue;
                 JsonObject node = element.getAsJsonObject();
-                String name = string(node.get("name"));
+                String name = jsonString(node.get("name"));
                 if ("head".equalsIgnoreCase(name) || "skull".equalsIgnoreCase(name)) return node;
             }
             for (JsonElement element : nodes) {
@@ -741,9 +747,9 @@ public final class CreatureIcons {
         private static void collect(JsonObject node, Frame frame, Texture texture, List<Face> faces,
                                     Map<String, Frame> frames, int depth) {
             if (depth > 64 || faces.size() >= FACE_LIMIT) return;
-            if (frames != null) frames.putIfAbsent(string(node.get("name")), frame);
-            JsonObject shape = object(node.get("shape"));
-            if (shape != null && !Boolean.FALSE.equals(bool(shape.get("visible")))) addShape(shape, frame, texture, faces);
+            if (frames != null) frames.putIfAbsent(jsonString(node.get("name")), frame);
+            JsonObject shape = jsonObject(node.get("shape"));
+            if (shape != null && !Boolean.FALSE.equals(jsonBool(shape.get("visible")))) addShape(shape, frame, texture, faces);
             JsonArray children = node.getAsJsonArray("children");
             if (children == null) return;
             for (JsonElement element : children) {
@@ -755,20 +761,20 @@ public final class CreatureIcons {
 
         /** Converts a box or quad shape into textured faces. */
         private static void addShape(JsonObject shape, Frame frame, Texture texture, List<Face> faces) {
-            String type = string(shape.get("type"));
+            String type = jsonString(shape.get("type"));
             boolean box = "box".equals(type);
             if (!box && !"quad".equals(type)) return;
-            JsonObject settings = object(shape.get("settings"));
-            JsonObject layouts = object(shape.get("textureLayout"));
+            JsonObject settings = jsonObject(shape.get("settings"));
+            JsonObject layouts = jsonObject(shape.get("textureLayout"));
             if (settings == null || layouts == null) return;
             double[] size = vector(settings.get("size"), 0);
             double[] stretch = vector(shape.get("stretch"), 1);
             double[] offset = vector(shape.get("offset"), 0);
-            boolean doubleSided = Boolean.TRUE.equals(bool(shape.get("doubleSided")));
+            boolean doubleSided = Boolean.TRUE.equals(jsonBool(shape.get("doubleSided")));
             if (box) {
                 double[] half = {size[0] * stretch[0] / 2, size[1] * stretch[1] / 2, size[2] * stretch[2] / 2};
                 for (int k = 0; k < KEYS.length; k++) {
-                    JsonObject layout = object(layouts.get(KEYS[k]));
+                    JsonObject layout = jsonObject(layouts.get(KEYS[k]));
                     if (layout == null) continue;
                     double[] corner = new double[3], a = new double[3], b = new double[3];
                     for (int i = 0; i < 3; i++) {
@@ -780,11 +786,11 @@ public final class CreatureIcons {
                 }
             } else {
                 // A quad is one face in the plane through its offset, facing its normal.
-                int k = switch (String.valueOf(string(settings.get("normal")))) {
+                int k = switch (String.valueOf(jsonString(settings.get("normal")))) {
                     case "-Z" -> 1; case "+X" -> 2; case "-X" -> 3; case "+Y" -> 4; case "-Y" -> 5; default -> 0;
                 };
-                JsonObject layout = object(layouts.get("front"));
-                if (layout == null) layout = object(layouts.get(KEYS[k]));
+                JsonObject layout = jsonObject(layouts.get("front"));
+                if (layout == null) layout = jsonObject(layouts.get(KEYS[k]));
                 if (layout == null) return;
                 double lengthA = size[0] * stretch[axisOf(AXIS_A[k])], lengthB = size[1] * stretch[axisOf(AXIS_B[k])];
                 double[] corner = new double[3], a = new double[3], b = new double[3];
@@ -841,12 +847,12 @@ public final class CreatureIcons {
                 int x1 = Math.min(size - 1, (int) Math.ceil(toPixel(max(xs), centreX, scale, size)));
                 int y0 = Math.max(0, (int) Math.floor(toPixel(min(ys), centreY, scale, size)));
                 int y1 = Math.min(size - 1, (int) Math.ceil(toPixel(max(ys), centreY, scale, size)));
-                JsonObject mirror = object(face.layout().get("mirror"));
-                boolean mirrorX = mirror != null && Boolean.TRUE.equals(bool(mirror.get("x")));
-                boolean mirrorY = mirror != null && Boolean.TRUE.equals(bool(mirror.get("y")));
-                int angle = Math.floorMod((int) Math.round(number(face.layout().get("angle"), 0)), 360);
-                JsonObject uv = object(face.layout().get("offset"));
-                double u0 = uv == null ? 0 : number(uv.get("x"), 0), v0 = uv == null ? 0 : number(uv.get("y"), 0);
+                JsonObject mirror = jsonObject(face.layout().get("mirror"));
+                boolean mirrorX = mirror != null && Boolean.TRUE.equals(jsonBool(mirror.get("x")));
+                boolean mirrorY = mirror != null && Boolean.TRUE.equals(jsonBool(mirror.get("y")));
+                int angle = Math.floorMod((int) Math.round(jsonNumber(face.layout().get("angle"), 0)), 360);
+                JsonObject uv = jsonObject(face.layout().get("offset"));
+                double u0 = uv == null ? 0 : jsonNumber(uv.get("x"), 0), v0 = uv == null ? 0 : jsonNumber(uv.get("y"), 0);
                 Texture texture = face.texture();
                 for (int py = y0; py <= y1; py++) {
                     double dy = (py + 0.5 - size / 2.0) / scale + centreY - oy;
@@ -936,14 +942,14 @@ public final class CreatureIcons {
         private static double max(double[] values) { double r = values[0]; for (double v : values) r = Math.max(r, v); return r; }
 
         private static double[] vector(JsonElement element, double fallback) {
-            JsonObject o = object(element);
+            JsonObject o = jsonObject(element);
             return o == null ? new double[]{fallback, fallback, fallback}
-                    : new double[]{number(o.get("x"), fallback), number(o.get("y"), fallback), number(o.get("z"), fallback)};
+                    : new double[]{jsonNumber(o.get("x"), fallback), jsonNumber(o.get("y"), fallback), jsonNumber(o.get("z"), fallback)};
         }
     }
 
     // ---------------------------------------------------------------------------------
-    // Asset and JSON helpers
+    // Asset and image helpers (JSON helpers: DapperMapUtil)
     // ---------------------------------------------------------------------------------
 
     /** Bytes of a Hytale common asset (including mod-pack assets). Bounded wait; render pool only. */
@@ -953,17 +959,7 @@ public final class CreatureIcons {
         String name = path.replace('\\', '/');
         while (name.startsWith("/")) name = name.substring(1);
         if (name.startsWith("Common/")) name = name.substring("Common/".length());
-        try {
-            CommonAsset asset = CommonAssetRegistry.getByName(name);
-            if (asset == null) return null;
-            byte[] bytes = asset.getBlob().get(LOAD_TIMEOUT_MS, TimeUnit.MILLISECONDS);
-            return bytes == null || bytes.length == 0 ? null : bytes;
-        } catch (InterruptedException interrupted) {
-            Thread.currentThread().interrupt();
-            return null;
-        } catch (Exception ignored) {
-            return null;
-        }
+        return DapperMapUtil.commonAssetBytes(name, LOAD_TIMEOUT_MS);
     }
 
     static BufferedImage readImage(String path) {
@@ -995,33 +991,5 @@ public final class CreatureIcons {
             g.dispose();
         }
         return out;
-    }
-
-    private static byte[] toPng(BufferedImage image) {
-        try {
-            ByteArrayOutputStream out = new ByteArrayOutputStream(2048);
-            try (var stream = new javax.imageio.stream.MemoryCacheImageOutputStream(out)) {
-                if (!ImageIO.write(image, "PNG", stream)) return null;
-            }
-            return out.toByteArray();
-        } catch (Exception ignored) {
-            return null;
-        }
-    }
-
-    private static JsonObject object(JsonElement value) {
-        return value != null && value.isJsonObject() ? value.getAsJsonObject() : null;
-    }
-
-    private static String string(JsonElement value) {
-        return value != null && value.isJsonPrimitive() && value.getAsJsonPrimitive().isString() ? value.getAsString() : null;
-    }
-
-    private static Boolean bool(JsonElement value) {
-        return value != null && value.isJsonPrimitive() && value.getAsJsonPrimitive().isBoolean() ? value.getAsBoolean() : null;
-    }
-
-    private static double number(JsonElement value, double fallback) {
-        return value != null && value.isJsonPrimitive() && value.getAsJsonPrimitive().isNumber() ? value.getAsDouble() : fallback;
     }
 }

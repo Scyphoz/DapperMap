@@ -28,6 +28,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import org.joml.Vector3d;
+import dev.scyphoz.dappermap.util.DapperMapUtil;
 
 /**
  * Runs one player's minimap update loop, coordinating terrain renders, marker scans,
@@ -38,11 +39,8 @@ public final class DynamicMinimapSession {
     private static final int RENDER_THREADS = Math.min(4, Math.max(2, Runtime.getRuntime().availableProcessors() / 4));
     private static final ExecutorService RENDER_POOL = new java.util.concurrent.ThreadPoolExecutor(
             RENDER_THREADS, RENDER_THREADS, 0L, TimeUnit.MILLISECONDS,
-            new java.util.concurrent.ArrayBlockingQueue<>(64), runnable -> {
-        Thread thread = new Thread(runnable, "DapperMap-Render");
-        thread.setDaemon(true);
-        return thread;
-    }, new java.util.concurrent.ThreadPoolExecutor.AbortPolicy());
+            new java.util.concurrent.ArrayBlockingQueue<>(64), DapperMapUtil.daemonThreads("DapperMap-Render"),
+            new java.util.concurrent.ThreadPoolExecutor.AbortPolicy());
 
     /** False means saturation or shutdown; callers can retry on a later tick. */
     public static boolean renderAsync(Runnable work) {
@@ -78,11 +76,8 @@ public final class DynamicMinimapSession {
      * Work on this thread is limited to cheap checks and handing tasks to world threads.
      */
     private static final java.util.concurrent.ScheduledExecutorService HEARTBEAT =
-            java.util.concurrent.Executors.newSingleThreadScheduledExecutor(runnable -> {
-                Thread thread = new Thread(runnable, "DapperMap-Heartbeat");
-                thread.setDaemon(true);
-                return thread;
-            });
+            java.util.concurrent.Executors.newSingleThreadScheduledExecutor(
+                    DapperMapUtil.daemonThreads("DapperMap-Heartbeat"));
 
     /** Shared scheduler for DapperMap's periodic housekeeping (e.g. cave image pruning). */
     public static java.util.concurrent.ScheduledExecutorService heartbeat() { return HEARTBEAT; }
@@ -322,7 +317,7 @@ public final class DynamicMinimapSession {
                     case CREATURE -> asset = CreatureIcons.prepareAsset(marker.assetPath, this.slug, rgb);
                     default -> {
                         byte[] png = DynamicMinimapRenderer.renderDot(rgb, palette);
-                        String path = "UI/DapperMap/mk-" + this.slug + "-" + String.format("%06X", rgb) + ".png";
+                        String path = "UI/DapperMap/mk-" + this.slug + "-" + DapperMapUtil.hex6(rgb) + ".png";
                         asset = DynamicAssetPublisher.prepare(path, png);
                     }
                 }
@@ -376,12 +371,25 @@ public final class DynamicMinimapSession {
     public DynamicMinimapSession(PlayerRef playerRef, DynamicMinimapSetting settings) {
         this.playerRef = playerRef;
         this.uuid = playerRef.getUuid();
-        this.slug = this.uuid != null ? this.uuid.toString().replace("-", "") : "anon";
+        this.slug = DapperMapUtil.playerSlug(this.uuid);
         this.settings = settings;
     }
 
     public DynamicMinimapSetting settings() {
         return this.settings;
+    }
+
+    /**
+     * Drops the current terrain buffer so the next tick renders a fresh, player-centred one, and
+     * makes any render already in flight stale. Shared by teleports, world changes and setting
+     * changes; each caller adds what else its change invalidates.
+     */
+    private void forceTerrainRender() {
+        this.bufferCenterX = Double.NaN;
+        this.bufferCenterZ = Double.NaN;
+        this.bufferComplete = false;
+        this.lastTerrainMs = 0L;
+        ++this.terrainGeneration;
     }
 
     public void start() {
@@ -469,7 +477,8 @@ public final class DynamicMinimapSession {
                 this.lastDispatchedYaw = yaw;
                 this.tick();
             }
-        } catch (Throwable var3) {
+        } catch (Throwable ignored) {
+            // Never let one bad tick stop the heartbeat; the next tick retries.
         } finally {
             // stop() clears running first, so a stopped session never reschedules itself.
             this.scheduleNextTick(Math.min(this.settings.panIntervalMs(), this.rotationPollIntervalMs()));
@@ -537,13 +546,9 @@ public final class DynamicMinimapSession {
                 // slot paths to be rebound rather than relying on cached values.
                 this.invalidateMarkerAssets();
                 this.terrainPublications.clear();
-                this.bufferCenterX = Double.NaN;
-                this.bufferCenterZ = Double.NaN;
-                this.bufferComplete = false;
-                this.lastTerrainMs = 0L;
+                this.forceTerrainRender();
                 this.lastSignatureMs = 0L;
                 this.deliveredSequence = this.renderSequence.incrementAndGet();
-                ++this.terrainGeneration;
                 this.rotationSequence.incrementAndGet();
                 if (this.hud != null) this.hud.invalidateVisualAssets();
                 DynamicAssetPublisher.clear(this.uuid);
@@ -562,11 +567,7 @@ public final class DynamicMinimapSession {
                     this.rotationSource = null;
                     this.displayedTerrainPng = null;
                     this.terrainPublications.clear();
-                    this.bufferCenterX = Double.NaN;
-                    this.bufferCenterZ = Double.NaN;
-                    this.bufferComplete = false;
-                    this.lastTerrainMs = 0L;
-                    ++this.terrainGeneration;
+                    this.forceTerrainRender();
                     this.rotationSequence.incrementAndGet();
                     this.cachedMarkers = new ArrayList<>();
                     this.cachedWorldMapMarkers = List.of();
@@ -603,17 +604,13 @@ public final class DynamicMinimapSession {
                 // Force a genuinely fresh, player-centred terrain render. Keeping the
                 // previous buffer centre can leave needsTerrain false until the next
                 // signature/recenter event, making the resolution control appear inert.
-                this.bufferCenterX = Double.NaN;
-                this.bufferCenterZ = Double.NaN;
-                this.bufferComplete = false;
+                this.forceTerrainRender();
                 this.warmupUntilMs = 0L;
                 this.lastSignature = 0L;
                 this.lastSignatureMs = 0L;
-                this.lastTerrainMs = 0L;
                 this.rotationSource = null;
                 this.displayedTerrainPng = null;
                 this.terrainPublications.clear();
-                ++this.terrainGeneration;
                 this.rotationSequence.incrementAndGet();
             }
 
@@ -624,18 +621,14 @@ public final class DynamicMinimapSession {
                 // Logical size changes pixels-per-block and buffer dimensions.
                 // Invalidate the old terrain buffer and let the normal render
                 // path create a fresh one without recreating the Custom HUD.
-                this.bufferCenterX = Double.NaN;
-                this.bufferCenterZ = Double.NaN;
-                this.bufferComplete = false;
+                this.forceTerrainRender();
                 this.warmupUntilMs = 0L;
                 this.lastSignature = 0L;
                 this.lastSignatureMs = 0L;
-                this.lastTerrainMs = 0L;
                 this.lastMarkerMs = 0L;
                 this.rotationSource = null;
                 this.displayedTerrainPng = null;
                 this.terrainPublications.clear();
-                ++this.terrainGeneration;
             }
 
             if (this.settings.interfaceScalePercent != this.builtInterfaceScale) {
@@ -726,12 +719,8 @@ public final class DynamicMinimapSession {
                 // Changing mode also changes raster quality. Force new terrain;
                 // the previous decoded source must not survive the transition.
                 this.rotationSource = null;
-                this.bufferCenterX = Double.NaN;
-                this.bufferCenterZ = Double.NaN;
-                this.bufferComplete = false;
-                this.lastTerrainMs = 0L;
+                this.forceTerrainRender();
                 this.lastSignatureMs = 0L;
-                ++this.terrainGeneration;
                 this.lastMapRotationBucket = -1;
                 this.lastSelfBucket = -1;
                 this.lastMarkerMs = 0L;
@@ -786,24 +775,15 @@ public final class DynamicMinimapSession {
                     this.signatureChangedPending = false;
                 }
             } else if (!noBuffer) {
-                double dx = (x - this.bufferCenterX) * pixelsPerBlock;
-                double dz = (z - this.bufferCenterZ) * pixelsPerBlock;
-                double mapAngle = this.acceptedMapAngle(yaw);
-                double[] rotated =
-                        DynamicMinimapRenderer.rotateMapDelta(dx, dz, mapAngle);
-                int left = (int)Math.round(
-                        (double)mapCenter - (double)bufferPixels / 2.0D - rotated[0]
-                );
-                int top = (int)Math.round(
-                        (double)mapCenter - (double)bufferPixels / 2.0D - rotated[1]
-                );
-                this.hud.pan(left, top);
+                int[] pan = panOffset(x, z, this.bufferCenterX, this.bufferCenterZ, pixelsPerBlock,
+                        bufferPixels, mapCenter, this.acceptedMapAngle(yaw));
+                this.hud.pan(pan[0], pan[1]);
             }
 
             if (!Double.isNaN(this.bufferCenterX)
                     && now - this.lastMarkerMs > this.settings.markerIntervalMs()) {
                 this.lastMarkerMs = now;
-                this.scanMarkers(store, ref, position);
+                this.scanMarkers(store, ref, position, world, player);
                 this.projectCachedMarkers(pixelsPerBlock, bufferPixels, yaw);
             }
 
@@ -814,9 +794,9 @@ public final class DynamicMinimapSession {
             String biome = panel && this.settings.showBiome ? this.readouts.biome(rawBiome(player)) : "";
             this.hud.setStatus(coords, compass, clock, biome);
             this.hud.flushPendingVisuals(this.settings.updateSpeed);
-        } catch (Throwable var34) {
+        } catch (Throwable ignored) {
+            // A failed tick only skips this update; the next tick starts afresh.
         }
-
     }
 
     /**
@@ -1037,25 +1017,28 @@ public final class DynamicMinimapSession {
         return submitRender("terrain", () -> {
             if (!this.canRenderHud(renderHud)) return;
 
+            boolean playerUp = renderSettings.rotationMode == 1;
+            // Player-up maps rotate the stitched image directly, so no north-up PNG is encoded
+            // (and decoded again) unless the player is facing exactly north.
             DynamicMinimapRenderer.Terrain terrain =
                     DynamicMinimapRenderer.renderTerrain(
                             world.getWorldMapManager(),
                             centerX,
                             centerZ,
                             renderSettings,
-                            caveView
+                            caveView,
+                            !playerUp
                     );
 
-            byte[] northUpPng = terrain.png;
-            if (northUpPng == null || northUpPng.length == 0) {
+            if (terrain.present == 0) {
                 return;
             }
 
-            DynamicMinimapRenderer.RotationSource source = renderSettings.rotationMode == 1
-                    ? DynamicMinimapRenderer.prepareRotationSource(northUpPng) : null;
-            byte[] displayPng = renderSettings.rotationMode == 1
+            DynamicMinimapRenderer.RotationSource source = playerUp
+                    ? DynamicMinimapRenderer.prepareRotationSource(terrain.image) : null;
+            byte[] displayPng = playerUp
                     ? DynamicMinimapRenderer.rotateTerrain(source, mapAngle)
-                    : northUpPng;
+                    : terrain.png;
 
             if (displayPng == null || displayPng.length == 0) {
                 return;
@@ -1069,9 +1052,8 @@ public final class DynamicMinimapSession {
             if (framePng == null) return;
             DynamicAssetPublisher.PreparedAsset preparedFrame = DynamicAssetPublisher.prepare(
                     compassFramePath(prepared.path()), framePng);
-            // Hash the stitched map off the world thread as well as rendering its PNG.
-            long renderSignature = DynamicMinimapRenderer.terrainSignature(
-                    world.getWorldMapManager(), centerX, centerZ, renderSettings, caveView);
+            // Change signature of exactly the chunk images drawn, hashed while stitching.
+            long renderSignature = terrain.signature;
             executeWorld(world, "terrain delivery", () -> {
                 if (!this.canRenderHud(renderHud)
                         || !java.util.Objects.equals(caveView, this.lastCaveView)
@@ -1260,20 +1242,23 @@ public final class DynamicMinimapSession {
                     currentZ = position.z();
                 }
             }
-        } catch (Throwable var17) {
+        } catch (Throwable ignored) {
+            // Position unavailable: keep the buffer centre.
         }
 
-        double dx = (currentX - centerX) * pixelsPerBlock;
-        double dz = (currentZ - centerZ) * pixelsPerBlock;
-        double[] rotated = DynamicMinimapRenderer.rotateMapDelta(dx, dz, mapAngle);
+        return panOffset(currentX, currentZ, centerX, centerZ, pixelsPerBlock, bufferPixels, mapCenter, mapAngle);
+    }
 
-        int left = (int)Math.round(
-                (double)mapCenter - (double)bufferPixels / 2.0D - rotated[0]
-        );
-        int top = (int)Math.round(
-                (double)mapCenter - (double)bufferPixels / 2.0D - rotated[1]
-        );
-        return new int[]{left, top};
+    /**
+     * Pan offset {left, top} (logical px) of a terrain buffer centred on (centerX, centerZ) that
+     * puts the player at (playerX, playerZ) in the middle of the map, at the given map rotation.
+     */
+    private static int[] panOffset(double playerX, double playerZ, double centerX, double centerZ,
+                                   double pixelsPerBlock, int bufferPixels, int mapCenter, double mapAngle) {
+        double[] rotated = DynamicMinimapRenderer.rotateMapDelta(
+                (playerX - centerX) * pixelsPerBlock, (playerZ - centerZ) * pixelsPerBlock, mapAngle);
+        double origin = (double)mapCenter - (double)bufferPixels / 2.0D;
+        return new int[]{(int)Math.round(origin - rotated[0]), (int)Math.round(origin - rotated[1])};
     }
 
     /**
@@ -1283,7 +1268,9 @@ public final class DynamicMinimapSession {
     private void scanMarkers(
             Store<EntityStore> store,
             Ref<EntityStore> playerRef,
-            Vector3d playerPosition
+            Vector3d playerPosition,
+            World world,
+            Player player
     ) {
         List<DynamicMinimapMarker> markers;
         try {
@@ -1316,13 +1303,13 @@ public final class DynamicMinimapSession {
                 this.lastWorldMapScanMs = 0L;
                 this.emptyWorldMapScans = 3; // Accept the new switch state's result immediately.
             }
-            Player player = store.getComponent(playerRef, Player.getComponentType());
+            // The tick's own Player component and world: no second component lookup per scan.
             long now = System.currentTimeMillis();
             if (player != null && now - this.lastWorldMapScanMs >= 2000L) {
                 this.lastWorldMapScanMs = now;
                 try {
                     List<DynamicMinimapMarker> current = NativeWorldMapIntegration.getMarkers(
-                            store.getExternalData().getWorld(), player, this.settings.colours,
+                            world, player, this.settings.colours,
                             includeNative, betterMapWaypoints, includeDeaths);
                     if (current.isEmpty() && !this.cachedWorldMapMarkers.isEmpty()
                             && ++this.emptyWorldMapScans < 3) {
@@ -1384,7 +1371,7 @@ public final class DynamicMinimapSession {
         // useful display order. Select nearby markers before the fixed HUD slots
         // are exhausted by distant POIs clamped to the edge.
         List<DynamicMinimapMarker> orderedMarkers = this.markerOrder.get(
-                this.cachedMarkers, this.cachedWorldMapMarkers, List.of(),
+                this.cachedMarkers, this.cachedWorldMapMarkers,
                 this.bufferCenterX, this.bufferCenterZ);
 
         for (DynamicMinimapMarker marker : orderedMarkers) {
@@ -1540,7 +1527,7 @@ public final class DynamicMinimapSession {
         try {
             TimeModule timeModule = TimeModule.get();
             return timeModule == null ? null : world.getEntityStore().getStore().getResource(timeModule.getWorldTimeResourceType());
-        } catch (RuntimeException var2) {
+        } catch (RuntimeException ignored) {
             return null;
         }
     }
@@ -1657,31 +1644,50 @@ public final class DynamicMinimapSession {
             positions.put(key, new Position(x, z, mapSize, shape, iconSize, now));
             return new double[]{x, z};
         }
+        /**
+         * Pulls a marker position (visible map coordinates) in along its bearing from the map
+         * centre so it sits inside the aperture edge, and stays clear of the N/E/S/W badges.
+         */
         static double[] clamp(DynamicMinimapSetting settings, double x, double z, int markerSize, double angle) {
             double center = settings.sizePixels / 2.0D;
             double uiScale = settings.sizePixels / 220.0D;
-            double dx = x-center, dz = z-center, distance = Math.hypot(dx,dz);
-            if(distance < .0001)return new double[]{x,z};
-            dx/=distance;dz/=distance;
-            double perimeter = Math.max(1, center - 11*uiScale - markerSize/2.0D - 1);
+            double directionX = x - center, directionZ = z - center;
+            double distance = Math.hypot(directionX, directionZ);
+            if (distance < .0001) return new double[]{x, z};
+            directionX /= distance;
+            directionZ /= distance;
+            // Inner edge of the frame; for a square map the edge distance depends on the bearing.
+            double perimeter = Math.max(1, center - 11 * uiScale - markerSize / 2.0D - 1);
             double radius = Math.min(distance, settings.isCircle() ? perimeter
-                    : perimeter / Math.max(Math.abs(dx),Math.abs(dz)));
+                    : perimeter / Math.max(Math.abs(directionX), Math.abs(directionZ)));
             // Intersect the bearing ray with expanded upright cardinal badge boxes.
             // Move radially inward so the marker still indicates its true direction.
-            double clearance = 11*uiScale + markerSize/2.0D + 1;
-            for(int i=0;i<4;i++){
-                double bearing = -Math.PI/2 + i*Math.PI/2 + angle;
-                double bx=Math.cos(bearing),bz=Math.sin(bearing);
-                double badgeRadius=(center-27*uiScale)/(settings.isCircle()?1:Math.max(Math.abs(bx),Math.abs(bz)));
-                double lx=bx*badgeRadius,lz=bz*badgeRadius;
-                double enter=Double.NEGATIVE_INFINITY,exit=Double.POSITIVE_INFINITY;
-                if(Math.abs(dx)<1e-9){if(Math.abs(lx)>clearance)continue;}
-                else {double t1=(lx-clearance)/dx,t2=(lx+clearance)/dx;enter=Math.max(enter,Math.min(t1,t2));exit=Math.min(exit,Math.max(t1,t2));}
-                if(Math.abs(dz)<1e-9){if(Math.abs(lz)>clearance)continue;}
-                else {double t1=(lz-clearance)/dz,t2=(lz+clearance)/dz;enter=Math.max(enter,Math.min(t1,t2));exit=Math.min(exit,Math.max(t1,t2));}
-                if(enter<=exit && radius>=enter && radius<=exit)radius=Math.max(0,enter-.5);
+            double clearance = 11 * uiScale + markerSize / 2.0D + 1;
+            for (int cardinal = 0; cardinal < 4; cardinal++) {
+                double bearing = -Math.PI / 2 + cardinal * Math.PI / 2 + angle;
+                double badgeDirectionX = Math.cos(bearing), badgeDirectionZ = Math.sin(bearing);
+                double badgeRadius = (center - 27 * uiScale)
+                        / (settings.isCircle() ? 1 : Math.max(Math.abs(badgeDirectionX), Math.abs(badgeDirectionZ)));
+                double badgeX = badgeDirectionX * badgeRadius, badgeZ = badgeDirectionZ * badgeRadius;
+                // Ray distances where the bearing enters and leaves this badge's box (slab method).
+                double enter = Double.NEGATIVE_INFINITY, exit = Double.POSITIVE_INFINITY;
+                if (Math.abs(directionX) < 1e-9) {
+                    if (Math.abs(badgeX) > clearance) continue;
+                } else {
+                    double nearSide = (badgeX - clearance) / directionX, farSide = (badgeX + clearance) / directionX;
+                    enter = Math.max(enter, Math.min(nearSide, farSide));
+                    exit = Math.min(exit, Math.max(nearSide, farSide));
+                }
+                if (Math.abs(directionZ) < 1e-9) {
+                    if (Math.abs(badgeZ) > clearance) continue;
+                } else {
+                    double nearSide = (badgeZ - clearance) / directionZ, farSide = (badgeZ + clearance) / directionZ;
+                    enter = Math.max(enter, Math.min(nearSide, farSide));
+                    exit = Math.min(exit, Math.max(nearSide, farSide));
+                }
+                if (enter <= exit && radius >= enter && radius <= exit) radius = Math.max(0, enter - .5);
             }
-            return new double[]{center+dx*radius,center+dz*radius};
+            return new double[]{center + directionX * radius, center + directionZ * radius};
         }
 
         void clear() { positions.clear(); }
@@ -1691,7 +1697,8 @@ public final class DynamicMinimapSession {
     /** Static integration ordering is independent of frequently moving entity snapshots. */
     static final class MarkerOrder {
         private List<DynamicMinimapMarker> source;
-        private List<DynamicMinimapMarker> nativeSource, betterSource;
+        /** World-map markers (Hytale, BetterMap waypoints, deaths) from one provider pass. */
+        private List<DynamicMinimapMarker> nativeSource;
         private List<DynamicMinimapMarker> integrations = List.of();
         private List<DynamicMinimapMarker> ordered = List.of();
         private double centerX = Double.NaN, centerZ = Double.NaN;
@@ -1707,19 +1714,16 @@ public final class DynamicMinimapSession {
         }
 
         List<DynamicMinimapMarker> get(List<DynamicMinimapMarker> snapshot,
-                                       List<DynamicMinimapMarker> nativeMarkers, List<DynamicMinimapMarker> betterMarkers,
+                                       List<DynamicMinimapMarker> nativeMarkers,
                                        double x, double z) {
             boolean recentered = Double.compare(centerX, x) != 0 || Double.compare(centerZ, z) != 0;
             boolean integrationChanged = recentered
-                    || (nativeMarkers != nativeSource && !nativeMarkers.equals(nativeSource))
-                    || (betterMarkers != betterSource && !betterMarkers.equals(betterSource));
+                    || (nativeMarkers != nativeSource && !nativeMarkers.equals(nativeSource));
             boolean movingChanged = snapshot != source && !snapshot.equals(source);
             if (integrationChanged || movingChanged) {
                 Comparator<DynamicMinimapMarker> compare = comparator(x, z);
                 if (integrationChanged) {
-                    var sorted = new ArrayList<DynamicMinimapMarker>(nativeMarkers.size() + betterMarkers.size());
-                    sorted.addAll(nativeMarkers);
-                    sorted.addAll(betterMarkers);
+                    var sorted = new ArrayList<>(nativeMarkers);
                     sorted.sort(compare);
                     integrations = sorted;
                 }
@@ -1747,7 +1751,6 @@ public final class DynamicMinimapSession {
             }
             source = snapshot;
             nativeSource = nativeMarkers;
-            betterSource = betterMarkers;
             centerX = x;
             centerZ = z;
             return ordered;
@@ -1768,7 +1771,7 @@ public final class DynamicMinimapSession {
         }
 
         void clear() {
-            source = nativeSource = betterSource = null;
+            source = nativeSource = null;
             ordered = integrations = List.of();
             centerX = centerZ = Double.NaN;
         }

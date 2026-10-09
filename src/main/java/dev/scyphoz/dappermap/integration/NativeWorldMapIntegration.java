@@ -3,7 +3,6 @@ package dev.scyphoz.dappermap.integration;
 import com.hypixel.hytale.protocol.packets.worldmap.MapMarker;
 import com.hypixel.hytale.protocol.packets.worldmap.MapMarkerComponent;
 import com.hypixel.hytale.protocol.packets.worldmap.TintComponent;
-import com.hypixel.hytale.server.core.asset.common.CommonAsset;
 import com.hypixel.hytale.server.core.asset.common.CommonAssetRegistry;
 import com.hypixel.hytale.server.core.entity.entities.Player;
 import com.hypixel.hytale.server.core.universe.PlayerRef;
@@ -12,6 +11,7 @@ import com.hypixel.hytale.server.core.universe.world.worldmap.markers.MarkersCol
 import dev.scyphoz.dappermap.dynamic.DynamicMinimapMarker;
 import dev.scyphoz.dappermap.dynamic.MinimapColours;
 import dev.scyphoz.dappermap.dynamic.DynamicAssetPublisher;
+import dev.scyphoz.dappermap.util.DapperMapUtil;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
@@ -157,20 +157,11 @@ public final class NativeWorldMapIntegration {
     private static byte[] registryBytes(String path) {
         byte[] cached = ICON_BYTES.get(path);
         if (cached != null) return cached;
-        try {
-            CommonAsset asset = CommonAssetRegistry.getByName(path);
-            if (asset == null) return null;
-            byte[] bytes = asset.getBlob().get(ICON_LOAD_TIMEOUT_MS, java.util.concurrent.TimeUnit.MILLISECONDS);
-            if (bytes == null || bytes.length == 0) return null;
-            if (ICON_BYTES.size() >= 256) ICON_BYTES.clear();
-            ICON_BYTES.put(path, bytes);
-            return bytes;
-        } catch (InterruptedException interrupted) {
-            Thread.currentThread().interrupt();
-            return null;
-        } catch (Exception ignored) {
-            return null;
-        }
+        byte[] bytes = DapperMapUtil.commonAssetBytes(path, ICON_LOAD_TIMEOUT_MS);
+        if (bytes == null) return null;
+        if (ICON_BYTES.size() >= 256) ICON_BYTES.clear();
+        ICON_BYTES.put(path, bytes);
+        return bytes;
     }
 
     /**
@@ -216,7 +207,7 @@ public final class NativeWorldMapIntegration {
     static DynamicAssetPublisher.PreparedAsset publishTinted(String kind, String image, byte[] source,
                                                              java.awt.Color tint, String playerSlug) {
         int rgb = tint != null ? tint.getRGB() & 0xFFFFFF : 0xFFFFFF;
-        String hex = String.format("%06X", rgb);
+        String hex = DapperMapUtil.hex6(rgb);
         byte[] published = source;
         if (rgb != 0xFFFFFF) {
             String cacheKey = kind + image + "#" + hex;
@@ -240,12 +231,31 @@ public final class NativeWorldMapIntegration {
         }
     }
 
+    /**
+     * Normalised image name per raw marker image name ("" = rejected). Marker scans run on the
+     * world thread for every marker every 2 s, and only a handful of distinct names exist, so
+     * the string clean-up and pattern match run once per name instead of once per marker.
+     */
+    private static final Map<String, String> MARKER_IMAGES = new ConcurrentHashMap<>();
+
     /** Normalised, safe marker image path (relative, forward slashes), or null. */
     static String markerImage(String image) {
-        if (image == null || image.isBlank()) return null;
+        if (image == null) return null;
+        String known = MARKER_IMAGES.get(image);
+        if (known == null) {
+            known = normaliseMarkerImage(image);
+            if (MARKER_IMAGES.size() >= 512) MARKER_IMAGES.clear(); // Bounded (mod packs may add many).
+            MARKER_IMAGES.put(image, known);
+        }
+        return known.isEmpty() ? null : known;
+    }
+
+    /** The image name cleaned and validated, or "" when it is unusable. */
+    private static String normaliseMarkerImage(String image) {
+        if (image.isBlank()) return "";
         String normalized = image.replace('\\', '/');
         while (normalized.startsWith("/")) normalized = normalized.substring(1);
-        return !normalized.contains("..") && ICON_PATH.matcher(normalized).matches() ? normalized : null;
+        return !normalized.contains("..") && ICON_PATH.matcher(normalized).matches() ? normalized : "";
     }
 
     static String fileName(String image) {

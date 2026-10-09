@@ -4,6 +4,7 @@ import com.hypixel.hytale.codec.Codec;
 import com.hypixel.hytale.codec.KeyedCodec;
 import com.hypixel.hytale.codec.builder.BuilderCodec;
 import dev.scyphoz.dappermap.dynamic.DynamicMinimapSetting;
+import static dev.scyphoz.dappermap.util.DapperMapUtil.clamp;
 
 /**
  * Server-wide values persisted by Hytale's codec-backed plugin configuration
@@ -140,10 +141,6 @@ public class MinimapConfig {
     /** Creature limits are 16, 32 or 64; anything else rounds down to the nearest of those. */
     private static int creatureLimit(int value) {
         return value >= 64 ? 64 : value >= 32 ? 32 : 16;
-    }
-
-    private static int clamp(int value, int min, int max) {
-        return value < min ? min : Math.min(value, max);
     }
 
     // Map external configuration keys to the private Java fields above.

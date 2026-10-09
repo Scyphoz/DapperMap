@@ -43,6 +43,9 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
 import org.joml.Vector3d;
 import static dev.scyphoz.dappermap.dynamic.MinimapColours.Key.*;
+import static dev.scyphoz.dappermap.util.DapperMapUtil.jsonDisabled;
+import static dev.scyphoz.dappermap.util.DapperMapUtil.jsonObject;
+import static dev.scyphoz.dappermap.util.DapperMapUtil.jsonString;
 
 
 /** Converts nearby NPC and player entities into coloured minimap markers (or creature icons). */
@@ -105,12 +108,14 @@ public final class DynamicEntityScanner {
                                         }
                                     }
                                 }
-                            } catch (Exception var24) {
+                            } catch (Exception ignored) {
+                                // One unreadable entity must not end the chunk scan.
                             }
                         }
 
                     });
-                } catch (Exception var19) {
+                } catch (Exception ignored) {
+                    // Store not readable this tick: no creature markers this scan.
                 }
             }
         }
@@ -186,12 +191,14 @@ public final class DynamicEntityScanner {
                                         markers.add(DynamicMinimapMarker.dot(position.x(), position.z(), playerColor, 11));
                                     }
                                 }
-                            } catch (Exception var18) {
+                            } catch (Exception ignored) {
+                                // One unreadable entity must not end the chunk scan.
                             }
                         }
 
                     });
-                } catch (Exception var18) {
+                } catch (Exception ignored) {
+                    // Store not readable this tick: no player markers this scan.
                 }
             }
         }
@@ -270,6 +277,9 @@ public final class DynamicEntityScanner {
         return result;
     }
 
+    /** A role parameter name usable in {"Compute": name}; compiled once (role JSON is read on the render pool). */
+    private static final java.util.regex.Pattern PARAMETER_NAME = java.util.regex.Pattern.compile("[A-Za-z_][A-Za-z0-9_]*");
+
     /** Retains positions/references only; expensive AI inspection follows selection. */
     static final class NearestNpcs {
         record Candidate(Ref<EntityStore> ref, double x, double z, double distanceSquared) { }
@@ -338,10 +348,13 @@ public final class DynamicEntityScanner {
 
         MinimapColours.Key classify(Ref<EntityStore> npcRef, NPCEntity npc, Ref<EntityStore> playerRef,
                                     ComponentAccessor<EntityStore> accessor, long now, long passiveTtl) {
-            int engagement = engagement(npcRef, npc, playerRef, accessor);
+            // Read once and shared with a full reclassification (previously read twice each).
+            Ref<EntityStore> lockedTarget = getLockedTarget(npcRef, accessor);
+            boolean executingAttack = isExecutingAttack(npcRef, accessor);
+            int engagement = engagement(npc, playerRef, lockedTarget, executingAttack);
             Entry cached = this.current.get(npcRef);
             if (cached == null || cached.engagement() != engagement || now >= cached.expiresAt()) {
-                MinimapColours.Key key = colourFor(npcRef, npc, playerRef, accessor);
+                MinimapColours.Key key = colourFor(npcRef, npc, playerRef, accessor, lockedTarget, executingAttack);
                 long ttl = key == HOSTILE || key == HOSTILE_ACTIVE ? TTL_MS : passiveTtl;
                 cached = new Entry(key, engagement, now + ttl);
             }
@@ -358,13 +371,10 @@ public final class DynamicEntityScanner {
         }
 
         /** Bit 0: locked onto player; bit 1: executing an attack; bit 2: moving at player. */
-        private static int engagement(Ref<EntityStore> npcRef, NPCEntity npc, Ref<EntityStore> playerRef,
-                                      ComponentAccessor<EntityStore> accessor) {
-            int bits = sameEntity(getLockedTarget(npcRef, accessor), playerRef) ? 1 : 0;
-            try {
-                CombatSupport combat = CombatSupport.get(npcRef, accessor);
-                if (combat != null && combat.isExecutingAttack()) bits |= 2;
-            } catch (RuntimeException ignored) { }
+        private static int engagement(NPCEntity npc, Ref<EntityStore> playerRef,
+                                      Ref<EntityStore> lockedTarget, boolean executingAttack) {
+            int bits = sameEntity(lockedTarget, playerRef) ? 1 : 0;
+            if (executingAttack) bits |= 2;
             try {
                 Role role = npc.getRole();
                 BodyMotion motion = role == null ? null : role.getLastBodySteeringMotion();
@@ -374,8 +384,27 @@ public final class DynamicEntityScanner {
         }
     }
 
+    /** Full threat classification, reading the creature's locked target and attack state itself. */
     private static MinimapColours.Key colourFor(Ref<EntityStore> npcRef, NPCEntity npc,
                                                 Ref<EntityStore> playerRef, ComponentAccessor<EntityStore> commandBuffer) {
+        return colourFor(npcRef, npc, playerRef, commandBuffer,
+                getLockedTarget(npcRef, commandBuffer), isExecutingAttack(npcRef, commandBuffer));
+    }
+
+    /** True while the creature is executing an attack (false when unknown). */
+    private static boolean isExecutingAttack(Ref<EntityStore> npcRef, ComponentAccessor<EntityStore> accessor) {
+        try {
+            CombatSupport support = CombatSupport.get(npcRef, accessor);
+            return support != null && support.isExecutingAttack();
+        } catch (RuntimeException ignored) {
+            return false;
+        }
+    }
+
+    /** Full threat classification with the locked target and attack state already read. */
+    private static MinimapColours.Key colourFor(Ref<EntityStore> npcRef, NPCEntity npc,
+                                                Ref<EntityStore> playerRef, ComponentAccessor<EntityStore> commandBuffer,
+                                                Ref<EntityStore> lockedTarget, boolean executingAttack) {
         try {
             if (playerRef == null || !playerRef.isValid()) return NEUTRAL;
             WorldSupport worldSupport = WorldSupport.get(npcRef, commandBuffer);
@@ -390,17 +419,11 @@ public final class DynamicEntityScanner {
             }
             Attitude defaultAttitude = worldSupport == null ? null : worldSupport.getDefaultPlayerAttitude();
             Attitude override = worldSupport == null ? null : worldSupport.getOverriddenAttitude(playerRef);
-            Ref<EntityStore> lockedTarget = getLockedTarget(npcRef, commandBuffer);
             boolean targetingPlayer = sameEntity(lockedTarget, playerRef);
             String state = null;
-            boolean executingAttack = false;
             try {
                 StateSupport support = StateSupport.get(npcRef, commandBuffer);
                 if (support != null) state = support.getStateName();
-            } catch (RuntimeException ignored) { }
-            try {
-                CombatSupport support = CombatSupport.get(npcRef, commandBuffer);
-                executingAttack = support != null && support.isExecutingAttack();
             } catch (RuntimeException ignored) { }
             var profile = NpcThreatClassifier.profileFor(npc.getRoleIndex());
             var signals = NpcBehaviourSignals.capture(npc.getRole(), playerRef, lockedTarget, npcRef, commandBuffer);
@@ -420,13 +443,14 @@ public final class DynamicEntityScanner {
                 Ref<EntityStore> target = markedEntitySupport.getMarkedEntityRef("LockedTarget");
                 return target != null && target.isValid() ? target : null;
             }
-        } catch (Exception var4) {
+        } catch (Exception ignored) {
             return null;
         }
     }
 
-    private static boolean sameEntity(Ref<EntityStore> a, Ref<EntityStore> b) {
-        return a != null && b != null && a.isValid() && b.isValid() && a.equals(b);
+    /** True when both references are live and point at the same entity. */
+    private static boolean sameEntity(Ref<EntityStore> first, Ref<EntityStore> second) {
+        return first != null && second != null && first.isValid() && second.isValid() && first.equals(second);
     }
 
 
@@ -461,7 +485,7 @@ public final class DynamicEntityScanner {
                     // This is only positive evidence while an action remains activated.
                     // Blocking lists deactivate completed actions in the same cycle; false
                     // does not mean no attack. isTriggered() is remembered, not live intent.
-                    if (action != null && action.isActivated() && same(targetFromParents(action), player)) {
+                    if (action != null && action.isActivated() && sameEntity(targetFromParents(action), player)) {
                         activeAttackPlayer = true;
                         break;
                     }
@@ -471,9 +495,9 @@ public final class DynamicEntityScanner {
                 Ref<EntityStore> target = motion.getDesiredTargetEntity();
                 if (target == null) target = targetFromParents(motion);
                 Intent intent = Intent.OTHER;
-                if (motion instanceof BodyMotionFind && same(target, player)) intent = Intent.TOWARDS_PLAYER;
-                if (motion instanceof BodyMotionCharge && same(target, player)) intent = Intent.CHARGE_PLAYER;
-                if (motion instanceof BodyMotionMaintainDistance && same(target, player)) {
+                if (motion instanceof BodyMotionFind && sameEntity(target, player)) intent = Intent.TOWARDS_PLAYER;
+                if (motion instanceof BodyMotionCharge && sameEntity(target, player)) intent = Intent.CHARGE_PLAYER;
+                if (motion instanceof BodyMotionMaintainDistance && sameEntity(target, player)) {
                     TransformComponent npcTransform = accessor.getComponent(npcRef, TransformComponent.getComponentType());
                     TransformComponent playerTransform = accessor.getComponent(player, TransformComponent.getComponentType());
                     if (npcTransform != null && playerTransform != null
@@ -481,7 +505,7 @@ public final class DynamicEntityScanner {
                         intent = Intent.TOWARDS_PLAYER;
                 }
                 if (motion instanceof BodyMotionMoveAway
-                        && same(target == null ? lockedTarget : target, player)) intent = Intent.AWAY_FROM_PLAYER;
+                        && sameEntity(target == null ? lockedTarget : target, player)) intent = Intent.AWAY_FROM_PLAYER;
                 Capability capability = motion instanceof BodyMotionCharge ? Capability.ATTACK_CAPABLE : tree.capability;
                 return new Signals(capability, intent, activeAttackPlayer, motion.getClass().getSimpleName());
             } catch (RuntimeException | LinkageError ignored) {
@@ -587,9 +611,6 @@ public final class DynamicEntityScanner {
         private static void enqueue(ArrayDeque<IAnnotatedComponent> queue, IAnnotatedComponent node) {
             if (queue.size() >= 8192) throw new IllegalStateException("NPC inspection budget exceeded");
             if (node != null) queue.addLast(node);
-        }
-        private static boolean same(Ref<EntityStore> a, Ref<EntityStore> b) {
-            return a != null && b != null && a.isValid() && b.isValid() && a.equals(b);
         }
     }
 
@@ -729,17 +750,17 @@ public final class DynamicEntityScanner {
             while (name != null && visited.add(name) && visited.size() <= 64) {
                 JsonObject json = assets.apply(name);
                 if (json == null) return UNKNOWN;
-                if (!"Variant".equals(string(json.get("Type")))) {
+                if (!"Variant".equals(jsonString(json.get("Type")))) {
                     root = json;
                     break;
                 }
                 variants.add(json);
-                name = string(json.get("Reference"));
+                name = jsonString(json.get("Reference"));
             }
             if (root == null) return UNKNOWN;
             // Replacing instructions invalidates our knowledge of the template's behaviour.
             for (JsonObject variant : variants) {
-                JsonObject modify = object(variant.get("Modify"));
+                JsonObject modify = jsonObject(variant.get("Modify"));
                 if (modify != null && (modify.has("Instructions") || modify.has("StateTransitions")
                         || modify.has("StartState"))) return UNKNOWN;
             }
@@ -749,7 +770,7 @@ public final class DynamicEntityScanner {
             Map<String, JsonElement> values = new HashMap<>();
             root.entrySet().forEach(e -> values.put(e.getKey(), e.getValue()));
             for (int i = variants.size() - 1; i >= 0; i--) {
-                JsonObject modify = object(variants.get(i).get("Modify"));
+                JsonObject modify = jsonObject(variants.get(i).get("Modify"));
                 if (modify != null) modify.entrySet().forEach(e -> values.put(e.getKey(), e.getValue()));
             }
             return switch (name) {
@@ -768,6 +789,10 @@ public final class DynamicEntityScanner {
                 default -> inferStructure(values, parameters, assets);
             };
         }
+
+        /** States that never count as offensive, even when an attack is nested inside them. */
+        private static final Set<String> PASSIVE_STATES =
+                Set.of("Idle", "Alerted", "Flee", "Panic", "Sleep", "ReturnHome", "Search");
 
         boolean offensiveState(String state) {
             if (!combatStates || state == null) return false;
@@ -793,7 +818,7 @@ public final class DynamicEntityScanner {
             // This explicit decision governs whether a detected player is fled from or
             // passed to combat. It excludes owner-follow/taming trees with different rules.
             JsonElement disposition = evaluate(values.get("DefaultPlayerAttitude"), parameters, new HashSet<>());
-            String dispositionName = string(disposition);
+            String dispositionName = jsonString(disposition);
             if (!"Friendly".equals(dispositionName) && !"Revered".equals(dispositionName)
                     && offensive.contains("Combat") && playerFleeDecision(instructions, 0)
                     && hasChaseDecision(instructions, 0)) {
@@ -812,13 +837,12 @@ public final class DynamicEntityScanner {
                 for (JsonElement child : element.getAsJsonArray()) collectOffensiveStates(child, enclosing, result, depth + 1);
             } else if (element.isJsonObject()) {
                 JsonObject node = element.getAsJsonObject();
-                if (node.has("Enabled") && node.get("Enabled").isJsonPrimitive()
-                        && node.get("Enabled").getAsJsonPrimitive().isBoolean() && !node.get("Enabled").getAsBoolean()) return;
-                JsonObject sensor = object(node.get("Sensor"));
-                String state = sensor != null && "State".equals(string(sensor.get("Type"))) ? string(sensor.get("State")) : null;
+                if (jsonDisabled(node)) return;
+                JsonObject sensor = jsonObject(node.get("Sensor"));
+                String state = sensor != null && "State".equals(jsonString(sensor.get("Type"))) ? jsonString(sensor.get("State")) : null;
                 String current = state == null ? enclosing : state.startsWith(".") ? enclosing + state : state;
                 if (state != null && !current.isEmpty()
-                        && ((!Set.of("Idle", "Alerted", "Flee", "Panic", "Sleep", "ReturnHome", "Search").contains(current)
+                        && ((!PASSIVE_STATES.contains(current)
                         && hasType(node.get("Instructions"), "Attack", depth + 1))
                         || hasType(node.get("Actions"), "Attack", depth + 1)))
                     result.add(current);
@@ -832,9 +856,9 @@ public final class DynamicEntityScanner {
                 for (JsonElement child : element.getAsJsonArray()) if (playerFleeDecision(child, depth + 1)) return true;
             } else if (element.isJsonObject()) {
                 JsonObject node = element.getAsJsonObject();
-                if (disabled(node)) return false;
-                JsonObject enabled = object(node.get("Enabled"));
-                if (enabled != null && "FleeIfNotThreatened".equals(string(enabled.get("Compute")))
+                if (jsonDisabled(node)) return false;
+                JsonObject enabled = jsonObject(node.get("Enabled"));
+                if (enabled != null && "FleeIfNotThreatened".equals(jsonString(enabled.get("Compute")))
                         && hasPlayerGroup(node.get("Sensor"), depth + 1) && hasStateAction(node.get("Actions"), "Flee", depth + 1)) return true;
                 for (var entry : node.entrySet()) if (playerFleeDecision(entry.getValue(), depth + 1)) return true;
             }
@@ -847,9 +871,9 @@ public final class DynamicEntityScanner {
                 for (JsonElement child : element.getAsJsonArray()) if (hasChaseDecision(child, depth + 1)) return true;
             } else if (element.isJsonObject()) {
                 JsonObject node = element.getAsJsonObject();
-                if (disabled(node)) return false;
-                JsonObject enabled = object(node.get("Enabled"));
-                if (enabled != null && "!FleeIfNotThreatened".equals(string(enabled.get("Compute")))
+                if (jsonDisabled(node)) return false;
+                JsonObject enabled = jsonObject(node.get("Enabled"));
+                if (enabled != null && "!FleeIfNotThreatened".equals(jsonString(enabled.get("Compute")))
                         && hasType(node.get("Sensor"), "Target", depth + 1)
                         && hasStateAction(node.get("Actions"), "Combat.Message", depth + 1)) return true;
                 for (var entry : node.entrySet()) if (hasChaseDecision(entry.getValue(), depth + 1)) return true;
@@ -863,8 +887,8 @@ public final class DynamicEntityScanner {
                 for (JsonElement child : element.getAsJsonArray()) if (hasPlayerGroup(child, depth + 1)) return true;
             } else if (element.isJsonObject()) {
                 JsonObject node = element.getAsJsonObject();
-                if ("NPCGroup".equals(string(node.get("Type"))) && node.has("IncludeGroups") && node.get("IncludeGroups").isJsonArray())
-                    for (JsonElement group : node.getAsJsonArray("IncludeGroups")) if ("Player".equals(string(group))) return true;
+                if ("NPCGroup".equals(jsonString(node.get("Type"))) && node.has("IncludeGroups") && node.get("IncludeGroups").isJsonArray())
+                    for (JsonElement group : node.getAsJsonArray("IncludeGroups")) if ("Player".equals(jsonString(group))) return true;
                 for (var entry : node.entrySet()) if (hasPlayerGroup(entry.getValue(), depth + 1)) return true;
             }
             return false;
@@ -876,7 +900,7 @@ public final class DynamicEntityScanner {
                 for (JsonElement child : element.getAsJsonArray()) if (hasStateAction(child, state, depth + 1)) return true;
             } else if (element.isJsonObject()) {
                 JsonObject node = element.getAsJsonObject();
-                if ("State".equals(string(node.get("Type"))) && state.equals(string(node.get("State")))) return true;
+                if ("State".equals(jsonString(node.get("Type"))) && state.equals(jsonString(node.get("State")))) return true;
                 for (var entry : node.entrySet()) if (hasStateAction(entry.getValue(), state, depth + 1)) return true;
             }
             return false;
@@ -888,17 +912,11 @@ public final class DynamicEntityScanner {
                 for (JsonElement child : element.getAsJsonArray()) if (hasType(child, type, depth + 1)) return true;
             } else if (element.isJsonObject()) {
                 JsonObject node = element.getAsJsonObject();
-                if (node.has("Enabled") && node.get("Enabled").isJsonPrimitive()
-                        && node.get("Enabled").getAsJsonPrimitive().isBoolean() && !node.get("Enabled").getAsBoolean()) return false;
-                if (type.equals(string(node.get("Type")))) return true;
+                if (jsonDisabled(node)) return false;
+                if (type.equals(jsonString(node.get("Type")))) return true;
                 for (var entry : node.entrySet()) if (hasType(entry.getValue(), type, depth + 1)) return true;
             }
             return false;
-        }
-
-        private static boolean disabled(JsonObject node) {
-            return node.has("Enabled") && node.get("Enabled").isJsonPrimitive()
-                    && node.get("Enabled").getAsJsonPrimitive().isBoolean() && !node.get("Enabled").getAsBoolean();
         }
 
         boolean disengagingState(String state) {
@@ -910,10 +928,10 @@ public final class DynamicEntityScanner {
         }
 
         private static void collectParameters(JsonObject json, Map<String, JsonElement> result) {
-            JsonObject parameters = object(json.get("Parameters"));
+            JsonObject parameters = jsonObject(json.get("Parameters"));
             if (parameters == null) return;
             parameters.entrySet().forEach(e -> {
-                JsonObject definition = object(e.getValue());
+                JsonObject definition = jsonObject(e.getValue());
                 if (definition != null && definition.has("Value")) result.put(e.getKey(), definition.get("Value"));
             });
         }
@@ -921,25 +939,23 @@ public final class DynamicEntityScanner {
         private static JsonElement evaluate(JsonElement value, Map<String, JsonElement> parameters, Set<String> seen) {
             if (value == null || value.isJsonNull()) return null;
             if (value.isJsonPrimitive()) return value;
-            JsonObject expression = object(value);
-            String parameter = expression == null ? null : string(expression.get("Compute"));
-            if (parameter == null || !parameter.matches("[A-Za-z_][A-Za-z0-9_]*") || !seen.add(parameter)) return null;
+            JsonObject expression = jsonObject(value);
+            String parameter = expression == null ? null : jsonString(expression.get("Compute"));
+            if (parameter == null || !PARAMETER_NAME.matcher(parameter).matches() || !seen.add(parameter)) return null;
             return evaluate(parameters.get(parameter), parameters, seen);
         }
 
-        private static JsonObject object(JsonElement value) {
-            return value != null && value.isJsonObject() ? value.getAsJsonObject() : null;
-        }
-
-        private static String string(JsonElement value) {
-            return value != null && value.isJsonPrimitive() && value.getAsJsonPrimitive().isString()
-                    ? value.getAsString() : null;
-        }
     }
 
     /** Positive avoidance policy from resolved instruction components, not a proof that
      * arbitrary external mod code cannot damage. Unknown references fail conservatively. */
     static final class NpcAssetEvasion {
+        /** Keys whose replacement would change what a referenced component does. */
+        private static final List<String> EXECUTABLE_KEYS =
+                List.of("Instructions", "Actions", "Action", "Sensor", "Sensors", "BodyMotion", "HeadMotion", "Content");
+        /** Native offensive component types; any of them rules out an "avoids player" profile. */
+        private static final List<String> OFFENSIVE_TYPES =
+                List.of("Attack", "Charge", "EntityHitInteraction", "BlockHitInteraction", "SpawnInteraction", "ApplyEntityEffect");
         static boolean avoidsPlayer(JsonElement instructions, Map<String, JsonElement> parameters,
                                     Map<String, JsonElement> values, Function<String, JsonObject> assets) {
             Map<String, JsonElement> environment = new HashMap<>(parameters);
@@ -949,7 +965,7 @@ public final class DynamicEntityScanner {
                 JsonElement tree = expand(instructions, environment, Map.of(), assets, 0, budget);
                 // Never suppress a native attack/hit/charge route, including one hidden
                 // behind a component reference. It needs an offensive profile instead.
-                for (String offense : List.of("Attack", "Charge", "EntityHitInteraction", "BlockHitInteraction", "SpawnInteraction", "ApplyEntityEffect"))
+                for (String offense : OFFENSIVE_TYPES)
                     if (containsType(tree, offense)) return false;
                 return playerAlert(tree) && stateBranch(tree, "Alerted", "Flee", false)
                         && stateBranch(tree, "Flee", "Flee", true);
@@ -969,7 +985,7 @@ public final class DynamicEntityScanner {
             JsonObject node = element.getAsJsonObject();
             if (node.has("Enabled") && new JsonPrimitive(false).equals(resolve(node.get("Enabled"), env))) return JsonNull.INSTANCE;
             if (node.has("Reference")) {
-                for (String key : List.of("Instructions", "Actions", "Action", "Sensor", "Sensors", "BodyMotion", "HeadMotion", "Content"))
+                for (String key : EXECUTABLE_KEYS)
                     if (node.has(key)) throw new IllegalArgumentException("executable reference override");
                 JsonElement reference = resolve(node.get("Reference"), env);
                 if (!reference.isJsonPrimitive() || !reference.getAsJsonPrimitive().isString())
@@ -979,13 +995,13 @@ public final class DynamicEntityScanner {
                 JsonObject definition = assets.apply(name);
                 if (definition == null || !definition.has("Content")) throw new IllegalArgumentException("missing component");
                 Map<String, JsonElement> childEnv = new HashMap<>(env);
-                JsonObject params = object(definition.get("Parameters"));
+                JsonObject params = jsonObject(definition.get("Parameters"));
                 if (params != null) params.entrySet().forEach(entry -> {
-                    JsonObject parameter = object(entry.getValue());
+                    JsonObject parameter = jsonObject(entry.getValue());
                     if (parameter != null && parameter.has("Value")) childEnv.put(entry.getKey(), resolve(parameter.get("Value"), env));
                 });
-                JsonObject modify = object(node.get("Modify"));
-                if (modify != null) for (String key : List.of("Instructions", "Actions", "Action", "Sensor", "Sensors", "BodyMotion", "HeadMotion", "Content"))
+                JsonObject modify = jsonObject(node.get("Modify"));
+                if (modify != null) for (String key : EXECUTABLE_KEYS)
                     if (modify.has(key)) throw new IllegalArgumentException("executable component replacement");
                 if (modify != null) modify.entrySet().forEach(entry -> childEnv.put(entry.getKey(), resolve(entry.getValue(), env)));
                 Map<String, String> childStates = new HashMap<>();
@@ -1007,8 +1023,8 @@ public final class DynamicEntityScanner {
                 if (entry.getKey().equals("$Comment") || entry.getKey().equals("Parameters")) continue;
                 out.add(entry.getKey(), expand(resolve(entry.getValue(), env), env, states, assets, depth + 1, budget));
             }
-            if ("ParentState".equals(string(out.get("Type")))) {
-                String state = string(out.get("State"));
+            if ("ParentState".equals(jsonString(out.get("Type")))) {
+                String state = jsonString(out.get("State"));
                 if (state == null || !states.containsKey(state)) throw new IllegalArgumentException("unresolved parent state");
                 out.addProperty("Type", "State");
                 out.addProperty("State", states.get(state));
@@ -1019,8 +1035,8 @@ public final class DynamicEntityScanner {
         private static JsonElement resolve(JsonElement value, Map<String, JsonElement> env) {
             Set<String> seen = new HashSet<>();
             while (value != null && value.isJsonObject()) {
-                String key = string(value.getAsJsonObject().get("Compute"));
-                if (key == null || !key.matches("[A-Za-z_][A-Za-z0-9_]*") || !seen.add(key) || !env.containsKey(key)) break;
+                String key = jsonString(value.getAsJsonObject().get("Compute"));
+                if (key == null || !PARAMETER_NAME.matcher(key).matches() || !seen.add(key) || !env.containsKey(key)) break;
                 value = env.get(key);
             }
             return value == null ? JsonNull.INSTANCE : value;
@@ -1030,8 +1046,8 @@ public final class DynamicEntityScanner {
         }
         private static boolean stateBranch(JsonElement tree, String state, String goal, boolean motion) {
             return any(tree, node -> {
-                JsonObject sensor = object(node.get("Sensor"));
-                if (sensor == null || !"State".equals(string(sensor.get("Type"))) || !state.equals(string(sensor.get("State")))) return false;
+                JsonObject sensor = jsonObject(node.get("Sensor"));
+                if (sensor == null || !"State".equals(jsonString(sensor.get("Type"))) || !state.equals(jsonString(sensor.get("State")))) return false;
                 return motion ? containsType(node.get("Instructions"), goal)
                         : containsStateAction(node.get("Actions"), goal)
                         || any(node.get("Instructions"), child -> containsStateAction(child.get("Actions"), goal));
@@ -1043,17 +1059,17 @@ public final class DynamicEntityScanner {
                 for (JsonElement child : element.getAsJsonArray()) if (positivePlayer(child)) return true;
             } else if (element.isJsonObject()) {
                 JsonObject node = element.getAsJsonObject();
-                if ("Not".equals(string(node.get("Type")))) return false;
-                if ("Player".equals(string(node.get("Type")))) return true;
+                if ("Not".equals(jsonString(node.get("Type")))) return false;
+                if ("Player".equals(jsonString(node.get("Type")))) return true;
                 for (var entry : node.entrySet()) if (positivePlayer(entry.getValue())) return true;
             }
             return false;
         }
         private static boolean containsStateAction(JsonElement tree, String state) {
-            return any(tree, node -> "State".equals(string(node.get("Type"))) && state.equals(string(node.get("State"))));
+            return any(tree, node -> "State".equals(jsonString(node.get("Type"))) && state.equals(jsonString(node.get("State"))));
         }
         private static boolean containsType(JsonElement tree, String type) {
-            return any(tree, node -> type.equals(string(node.get("Type"))));
+            return any(tree, node -> type.equals(jsonString(node.get("Type"))));
         }
         private static boolean any(JsonElement element, java.util.function.Predicate<JsonObject> predicate) {
             if (element == null || element.isJsonNull()) return false;
@@ -1065,7 +1081,5 @@ public final class DynamicEntityScanner {
             }
             return false;
         }
-        private static JsonObject object(JsonElement value) { return value != null && value.isJsonObject() ? value.getAsJsonObject() : null; }
-        private static String string(JsonElement value) { return value != null && value.isJsonPrimitive() && value.getAsJsonPrimitive().isString() ? value.getAsString() : null; }
     }
 }

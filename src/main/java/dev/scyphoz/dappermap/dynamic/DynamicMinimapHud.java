@@ -7,6 +7,7 @@ import com.hypixel.hytale.server.core.ui.Anchor;
 import com.hypixel.hytale.server.core.ui.Value;
 import com.hypixel.hytale.server.core.ui.builder.UICommandBuilder;
 import com.hypixel.hytale.server.core.universe.PlayerRef;
+import dev.scyphoz.dappermap.util.DapperMapUtil;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.function.Consumer;
@@ -238,7 +239,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
         this.bufferPixels = DynamicMinimapRenderer.bufferPixels(this.settings);
         this.selfSize = Math.max(18, this.logicalUiSize / 10);
         this.interfaceScalePercent = this.settings.interfaceScalePercent;
-        this.slug = this.uuid != null ? this.uuid.toString().replace("-", "") : "anon";
+        this.slug = DapperMapUtil.playerSlug(this.uuid);
         this.blankPath = "UI/DapperMap/blank-" + this.slug + ".png";
         this.selfPath = "UI/DapperMap/self-" + this.slug + "-" + this.settings.colours.arrowKey() + "-0.png";
         this.terrainPath = this.blankPath;
@@ -1287,19 +1288,14 @@ public final class DynamicMinimapHud extends CustomUIHud {
                 this.displaySize(this.bufferPixels));
     }
 
+    /** Logical HUD value in display units (same rounding as DynamicMinimapSetting, used for marker updates). */
     private int displayCoordinate(int logicalValue) {
-        return Math.round(logicalValue * this.interfaceScalePercent / 100.0F);
+        return DapperMapUtil.scaled(logicalValue, this.interfaceScalePercent);
     }
 
+    /** Positive logical size in display units (0 stays 0, anything else at least 1). */
     private int displaySize(int logicalValue) {
-        if (logicalValue <= 0) {
-            return 0;
-        }
-
-        return Math.max(
-                1,
-                Math.round(logicalValue * this.interfaceScalePercent / 100.0F)
-        );
+        return logicalValue <= 0 ? 0 : Math.max(1, this.displayCoordinate(logicalValue));
     }
 
     private static Anchor anchor(int left, int top, int width, int height) {

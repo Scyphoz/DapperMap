@@ -8,10 +8,10 @@ import com.hypixel.hytale.server.core.entity.entities.Player;
 import com.hypixel.hytale.server.core.plugin.PluginBase;
 import com.hypixel.hytale.server.core.plugin.PluginManager;
 import dev.scyphoz.dappermap.dynamic.DynamicAssetPublisher;
+import dev.scyphoz.dappermap.util.DapperMapUtil;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
 import java.awt.image.BufferedImage;
 import javax.imageio.ImageIO;
 import java.lang.reflect.Method;
@@ -44,9 +44,23 @@ public final class BetterMapIntegration {
     private BetterMapIntegration() {
     }
 
-    /** Returns true only when an enabled BetterMap instance and its waypoint API are available. */
+    /** How long a BetterMap availability answer is reused before the plugin is looked up again. */
+    private static final long AVAILABILITY_RECHECK_MS = 1000L;
+    private static volatile boolean available;
+    private static volatile long availabilityCheckedMs; // 0: the first call always looks BetterMap up.
+
+    /**
+     * Returns true only when an enabled BetterMap instance and its waypoint API are available.
+     * Called on every marker scan and cave check for every player, so the answer is reused for
+     * up to a second: {@code PluginManager.getPlugin} takes a server-wide read lock on each call.
+     */
     public static boolean isAvailable() {
-        return resolve() != null;
+        long now = System.currentTimeMillis();
+        if (now - availabilityCheckedMs < AVAILABILITY_RECHECK_MS) return available;
+        boolean result = resolve() != null;
+        available = result;
+        availabilityCheckedMs = now;
+        return result;
     }
 
     /**
@@ -69,7 +83,7 @@ public final class BetterMapIntegration {
 
     /** Raw bytes of one of BetterMap's bundled icons, or null when unavailable. */
     static byte[] loaderIcon(String filename) {
-        if (filename == null || resolve() == null) return null;
+        if (filename == null || !isAvailable()) return null;
         ClassLoader loader = resolvedLoader;
         if (loader == null) return null;
         byte[] bytes = ICON_BYTES.get(filename);
@@ -132,6 +146,10 @@ public final class BetterMapIntegration {
         getUserMarkers = null;
     }
 
+    /**
+     * Multiplies every pixel of a PNG icon by {@code rgb} (alpha kept). Reads and writes whole
+     * pixel rows at once and encodes in memory. Render pool only; results are cached by callers.
+     */
     static byte[] tintPng(byte[] source, int rgb) {
         try {
             BufferedImage image = ImageIO.read(new ByteArrayInputStream(source));
@@ -142,36 +160,20 @@ public final class BetterMapIntegration {
             int tintR = (rgb >>> 16) & 0xFF;
             int tintG = (rgb >>> 8) & 0xFF;
             int tintB = rgb & 0xFF;
-
-            BufferedImage tinted = new BufferedImage(
-                    image.getWidth(),
-                    image.getHeight(),
-                    BufferedImage.TYPE_INT_ARGB
-            );
-
-            for (int y = 0; y < image.getHeight(); y++) {
-                for (int x = 0; x < image.getWidth(); x++) {
-                    int argb = image.getRGB(x, y);
-                    int a = (argb >>> 24) & 0xFF;
-                    int r = (argb >>> 16) & 0xFF;
-                    int g = (argb >>> 8) & 0xFF;
-                    int b = argb & 0xFF;
-
-                    r = r * tintR / 255;
-                    g = g * tintG / 255;
-                    b = b * tintB / 255;
-
-                    tinted.setRGB(x, y,
-                            (a << 24) | (r << 16) | (g << 8) | b);
-                }
+            int width = image.getWidth();
+            int height = image.getHeight();
+            int[] pixels = image.getRGB(0, 0, width, height, null, 0, width);
+            for (int i = 0; i < pixels.length; i++) {
+                int argb = pixels[i];
+                int r = ((argb >>> 16) & 0xFF) * tintR / 255;
+                int g = ((argb >>> 8) & 0xFF) * tintG / 255;
+                int b = (argb & 0xFF) * tintB / 255;
+                pixels[i] = (argb & 0xFF000000) | (r << 16) | (g << 8) | b;
             }
 
-            try (ByteArrayOutputStream output = new ByteArrayOutputStream()) {
-                if (!ImageIO.write(tinted, "png", output)) {
-                    return null;
-                }
-                return output.toByteArray();
-            }
+            BufferedImage tinted = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
+            tinted.setRGB(0, 0, width, height, pixels, 0, width);
+            return DapperMapUtil.encodePng(tinted, 2048);
         } catch (IOException | RuntimeException ignored) {
             return null;
         }
@@ -218,7 +220,14 @@ public final class BetterMapIntegration {
         }
     }
 
-    private static synchronized void resolve(ClassLoader current) throws ReflectiveOperationException {
+    private static void resolve(ClassLoader current) throws ReflectiveOperationException {
+        // Lock-free fast path for the usual case (already resolved for this loader); caveLoader is
+        // written last below, so seeing it means every method handle is already published.
+        if (current == caveLoader && build != null) return;
+        resolveLocked(current);
+    }
+
+    private static synchronized void resolveLocked(ClassLoader current) throws ReflectiveOperationException {
         if (current == caveLoader && build != null) return;
         Class<?> caveManager = Class.forName("dev.ninesliced.managers.CaveModeManager", false, current);
         Class<?> caveState = Class.forName("dev.ninesliced.managers.CaveModeManager$DynamicCaveModeState", false, current);

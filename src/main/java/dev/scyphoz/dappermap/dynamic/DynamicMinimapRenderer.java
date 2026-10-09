@@ -20,13 +20,13 @@ import java.awt.image.BufferedImage;
 import java.awt.image.ImageObserver;
 import java.awt.Shape;
 import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.util.Arrays;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.BiFunction;
 import javax.imageio.ImageIO;
+import dev.scyphoz.dappermap.util.DapperMapUtil;
 
 /** Pure rendering utilities for terrain, HUD chrome, previews and marker PNG assets. */
 public final class DynamicMinimapRenderer {
@@ -34,6 +34,8 @@ public final class DynamicMinimapRenderer {
     private static final Color FIXED_MAP_BACKGROUND = new Color(0x0A1218);
     private static final Color FIXED_FRAME_SHADOW = new Color(0x03080C);
     private static final Color FIXED_MARKER_OUTLINE = new Color(0x000000);
+    /** Map background behind terrain chunks (also fills rotated corners). */
+    private static final Color MAP_BACKGROUND_FILL = withAlpha(FIXED_MAP_BACKGROUND, 235);
 
     private static final int CHUNK_SIZE = 32;
     /**
@@ -103,7 +105,15 @@ public final class DynamicMinimapRenderer {
         return center - (double)bufferPixels(settings) / (double)2.0F / pixelsPerBlock(settings);
     }
 
-    public static Terrain renderTerrain(WorldMapManager worldMapManager, double centerX, double centerZ, DynamicMinimapSetting settings, BiFunction<Integer, Integer, MapImage> caveImages) {
+    /**
+     * Stitches the world-map chunk images around (centerX, centerZ) into one terrain buffer.
+     * The change signature of exactly the images drawn is hashed in the same pass (it used to be
+     * a second pass over every chunk after rendering). {@code encodePng} false skips the PNG for
+     * player-up maps, whose rotation source works from the image and encodes north-up lazily.
+     */
+    public static Terrain renderTerrain(WorldMapManager worldMapManager, double centerX, double centerZ,
+                                        DynamicMinimapSetting settings, BiFunction<Integer, Integer, MapImage> caveImages,
+                                        boolean encodePng) {
         int logicalBuffer = bufferPixels(settings);
         int textureBuffer = textureBufferPixels(settings);
         double logicalPixelsPerBlock = pixelsPerBlock(settings);
@@ -111,23 +121,24 @@ public final class DynamicMinimapRenderer {
         double texturePixelsPerBlock = logicalPixelsPerBlock * rasterScale;
         double originX = bufferOriginWorld(centerX, settings);
         double originZ = bufferOriginWorld(centerZ, settings);
-        BufferedImage terrain = new BufferedImage(textureBuffer, textureBuffer, 2);
+        BufferedImage terrain = new BufferedImage(textureBuffer, textureBuffer, BufferedImage.TYPE_INT_ARGB);
         Graphics2D graphics = terrain.createGraphics();
-        graphics.setColor(withAlpha(FIXED_MAP_BACKGROUND, 235));
+        graphics.setColor(MAP_BACKGROUND_FILL);
         graphics.fillRect(0, 0, textureBuffer, textureBuffer);
         int present = 0;
         int total = 0;
+        long signature = 0L;
         if (worldMapManager != null || caveImages != null) {
-            double worldSize = (double)logicalBuffer / logicalPixelsPerBlock;
-            int minChunkX = ChunkUtil.chunkCoordinate((int)Math.floor(originX));
-            int minChunkZ = ChunkUtil.chunkCoordinate((int)Math.floor(originZ));
-            int maxChunkX = ChunkUtil.chunkCoordinate((int)Math.ceil(originX + worldSize) - 1);
-            int maxChunkZ = ChunkUtil.chunkCoordinate((int)Math.ceil(originZ + worldSize) - 1);
+            ChunkRange range = ChunkRange.of(centerX, centerZ, settings);
             int chunkPixels = (int)Math.ceil((double)CHUNK_SIZE * texturePixelsPerBlock);
+            // Per-chunk hashes in grid order, folded after the loop exactly as terrainSignature does.
+            long[] chunkHashes = new long[range.width() * range.height()];
+            java.util.Arrays.fill(chunkHashes, 1L);
 
-            java.util.List<int[]> chunks = new java.util.ArrayList<>();
-            for (int z = minChunkZ; z <= maxChunkZ; ++z)
-                for (int x = minChunkX; x <= maxChunkX; ++x) chunks.add(new int[]{x, z});
+            java.util.List<int[]> chunks = new java.util.ArrayList<>(chunkHashes.length);
+            for (int z = range.minZ(); z <= range.maxZ(); ++z)
+                for (int x = range.minX(); x <= range.maxX(); ++x) chunks.add(new int[]{x, z});
+            // Nearest chunks first, so the async request budget goes to what the player sees.
             chunks.sort(java.util.Comparator.comparingDouble(chunk -> {
                 double dx = (chunk[0] + 0.5) * CHUNK_SIZE - centerX;
                 double dz = (chunk[1] + 0.5) * CHUNK_SIZE - centerZ;
@@ -155,10 +166,12 @@ public final class DynamicMinimapRenderer {
                             image = worldMapManager.getImageAsync(chunkX, chunkZ).getNow(null);
                         }
                     }
+                    // Hash before drawing, so an image that fails to decode still counts as seen.
+                    if (image != null) chunkHashes[range.indexOf(chunkX, chunkZ)] = chunkHash(image);
                     if (image != null && image.width > 0 && image.height > 0) {
                         int[] pixels = decodePixels(image);
                         if (pixels != null) {
-                            BufferedImage chunk = new BufferedImage(image.width, image.height, 2);
+                            BufferedImage chunk = new BufferedImage(image.width, image.height, BufferedImage.TYPE_INT_ARGB);
                             chunk.setRGB(0, 0, image.width, image.height, pixels, 0, image.width);
                             int drawX = (int)Math.round(((double)chunkX * (double)CHUNK_SIZE - originX) * texturePixelsPerBlock);
                             int drawZ = (int)Math.round(((double)chunkZ * (double)CHUNK_SIZE - originZ) * texturePixelsPerBlock);
@@ -172,54 +185,78 @@ public final class DynamicMinimapRenderer {
                         }
                     }
                 } catch (Throwable ignored) {
+                    // A chunk that cannot be read is left as background (and hashed as missing).
                 }
             }
+            signature = foldSignature(chunkHashes);
         }
 
         graphics.dispose();
-        return present == 0 ? new Terrain((byte[])null, 0, total) : new Terrain(toPng(terrain), present, total);
+        if (present == 0) return new Terrain(null, null, 0, total, signature);
+        return new Terrain(encodePng ? toPng(terrain) : null, terrain, present, total, signature);
     }
 
+    /**
+     * Cheap change signature of the chunk images currently in memory for a buffer (no chunk
+     * loads are started). Used by the periodic probe; renderTerrain computes the same value for
+     * the images it drew.
+     */
     public static long terrainSignature(WorldMapManager worldMapManager, double centerX, double centerZ, DynamicMinimapSetting settings, BiFunction<Integer, Integer, MapImage> caveImages) {
-        if (worldMapManager == null && caveImages == null) {
-            return 0L;
-        } else {
-            double pixelsPerBlock = pixelsPerBlock(settings);
-            int buffer = bufferPixels(settings);
+        if (worldMapManager == null && caveImages == null) return 0L;
+        ChunkRange range = ChunkRange.of(centerX, centerZ, settings);
+        long[] chunkHashes = new long[range.width() * range.height()];
+        for (int chunkZ = range.minZ(); chunkZ <= range.maxZ(); ++chunkZ) {
+            for (int chunkX = range.minX(); chunkX <= range.maxX(); ++chunkX) {
+                long hash = 1L;
+                try {
+                    MapImage image = caveImages instanceof dev.scyphoz.dappermap.integration.BetterMapIntegration.CaveView view
+                            ? view.peek(chunkX, chunkZ)
+                            : caveImages != null ? caveImages.apply(chunkX, chunkZ)
+                            : worldMapManager.getImageIfInMemory(chunkX, chunkZ);
+                    if (image != null) hash = chunkHash(image);
+                } catch (Throwable ignored) {
+                    // Unreadable chunk: hashed as missing.
+                }
+                chunkHashes[range.indexOf(chunkX, chunkZ)] = hash;
+            }
+        }
+        return foldSignature(chunkHashes);
+    }
+
+    /** World-map chunks covered by a terrain buffer centred on (centerX, centerZ). */
+    private record ChunkRange(int minX, int minZ, int maxX, int maxZ) {
+        static ChunkRange of(double centerX, double centerZ, DynamicMinimapSetting settings) {
             double originX = bufferOriginWorld(centerX, settings);
             double originZ = bufferOriginWorld(centerZ, settings);
-            double worldSize = (double)buffer / pixelsPerBlock;
-            int minChunkX = ChunkUtil.chunkCoordinate((int)Math.floor(originX));
-            int minChunkZ = ChunkUtil.chunkCoordinate((int)Math.floor(originZ));
-            int maxChunkX = ChunkUtil.chunkCoordinate((int)Math.ceil(originX + worldSize) - 1);
-            int maxChunkZ = ChunkUtil.chunkCoordinate((int)Math.ceil(originZ + worldSize) - 1);
-            long hash = 1469598103934665603L;
-
-            for(int chunkZ = minChunkZ; chunkZ <= maxChunkZ; ++chunkZ) {
-                for(int chunkX = minChunkX; chunkX <= maxChunkX; ++chunkX) {
-                    long chunkHash = 1L;
-
-                    try {
-                        MapImage image = caveImages instanceof dev.scyphoz.dappermap.integration.BetterMapIntegration.CaveView view
-                                ? view.peek(chunkX, chunkZ)
-                                : caveImages != null ? caveImages.apply(chunkX, chunkZ)
-                                : worldMapManager.getImageIfInMemory(chunkX, chunkZ);
-                        if (image != null) {
-                            chunkHash = 31L * chunkHash + (long)image.width;
-                            chunkHash = 31L * chunkHash + (long)image.height;
-                            chunkHash = 31L * chunkHash + (long)Byte.toUnsignedInt(image.bitsPerIndex);
-                            chunkHash = 31L * chunkHash + sampleHash(image.packedIndices);
-                            chunkHash = 31L * chunkHash + sampleHash(image.palette);
-                        }
-                    } catch (Throwable var26) {
-                    }
-
-                    hash = (hash ^ chunkHash) * 1099511628211L;
-                }
-            }
-
-            return hash;
+            double worldSize = (double)bufferPixels(settings) / pixelsPerBlock(settings);
+            return new ChunkRange(
+                    ChunkUtil.chunkCoordinate((int)Math.floor(originX)),
+                    ChunkUtil.chunkCoordinate((int)Math.floor(originZ)),
+                    ChunkUtil.chunkCoordinate((int)Math.ceil(originX + worldSize) - 1),
+                    ChunkUtil.chunkCoordinate((int)Math.ceil(originZ + worldSize) - 1));
         }
+        int width() { return this.maxX - this.minX + 1; }
+        int height() { return this.maxZ - this.minZ + 1; }
+        /** Row-major index (z rows, x columns), the order the signature is folded in. */
+        int indexOf(int chunkX, int chunkZ) { return (chunkZ - this.minZ) * width() + (chunkX - this.minX); }
+    }
+
+    /** Sampled hash of one chunk image (dimensions, bit depth, packed indices and palette). */
+    private static long chunkHash(MapImage image) {
+        long chunkHash = 1L;
+        chunkHash = 31L * chunkHash + (long)image.width;
+        chunkHash = 31L * chunkHash + (long)image.height;
+        chunkHash = 31L * chunkHash + (long)Byte.toUnsignedInt(image.bitsPerIndex);
+        chunkHash = 31L * chunkHash + sampleHash(image.packedIndices);
+        chunkHash = 31L * chunkHash + sampleHash(image.palette);
+        return chunkHash;
+    }
+
+    /** FNV-1a style fold of per-chunk hashes in row-major order. */
+    private static long foldSignature(long[] chunkHashes) {
+        long hash = 1469598103934665603L;
+        for (long chunkHash : chunkHashes) hash = (hash ^ chunkHash) * 1099511628211L;
+        return hash;
     }
 
     public static byte[] renderShapeMask(DynamicMinimapSetting settings) {
@@ -263,21 +300,34 @@ public final class DynamicMinimapRenderer {
      * while the directional markings rotate with the terrain.
      */
     public static byte[] renderFrame(DynamicMinimapSetting settings, double mapAngle) {
-        MinimapColours colours = settings.colours;
-        int bucket = rotationBucket(mapAngle);
-        String shape = settings.isCircle() ? "c" : "r";
-        String key = shape + "@" + settings.textureResolution
-                + "-rot" + bucket + "-" + colours.frameKey();
+        String key = frameCacheKey(settings, mapAngle);
         byte[] cached = FRAME_CACHE.get(key);
         if (cached != null) {
             return cached;
         }
 
+        byte[] png = toPng(renderFrameImage(settings, mapAngle));
+        if (png != null) {
+            FRAME_CACHE.put(key, png);
+        }
+
+        return png;
+    }
+
+    private static String frameCacheKey(DynamicMinimapSetting settings, double mapAngle) {
+        return (settings.isCircle() ? "c" : "r") + "@" + settings.textureResolution
+                + "-rot" + rotationBucket(mapAngle) + "-" + settings.colours.frameKey();
+    }
+
+    /** The frame artwork at texture resolution (bezel fixed, compass markings at mapAngle's bucket). */
+    private static BufferedImage renderFrameImage(DynamicMinimapSetting settings, double mapAngle) {
+        MinimapColours colours = settings.colours;
+        int bucket = rotationBucket(mapAngle);
         int logicalSize = STATIC_ASSET_LOGICAL_SIZE;
         int textureSize = Math.max(1, settings.textureResolution);
         double scale = (double)textureSize / (double)logicalSize;
 
-        BufferedImage image = new BufferedImage(textureSize, textureSize, 2);
+        BufferedImage image = new BufferedImage(textureSize, textureSize, BufferedImage.TYPE_INT_ARGB);
         Graphics2D graphics = image.createGraphics();
         graphics.setRenderingHint(
                 RenderingHints.KEY_ANTIALIASING,
@@ -293,13 +343,7 @@ public final class DynamicMinimapRenderer {
 
         drawTexturedCompass(graphics, logicalSize, settings.isCircle(), bucketAngle(bucket), colours);
         graphics.dispose();
-
-        byte[] png = toPng(image);
-        if (png != null) {
-            FRAME_CACHE.put(key, png);
-        }
-
-        return png;
+        return image;
     }
 
     private static BufferedImage renderHudChromeImage(DynamicMinimapSetting settings, int mapSize,
@@ -423,10 +467,12 @@ public final class DynamicMinimapRenderer {
                 settings.shape, settings.infoPanelEnabled, rotationBucket(angle), settings.colours.frameKey());
         byte[] cached = OVERLAY_LAYERS.get(key);
         if (cached != null) return cached;
-        byte[] source = renderFrame(settings, angle);
-        if (source == null) return null;
         try {
-            BufferedImage decoded = ImageIO.read(new ByteArrayInputStream(source));
+            // Draw from the frame image directly: encoding it as a PNG at texture resolution and
+            // decoding it again (identical pixels) was the most expensive part of a new heading.
+            byte[] framePng = FRAME_CACHE.get(frameCacheKey(settings, angle));
+            BufferedImage decoded = framePng != null ? ImageIO.read(new ByteArrayInputStream(framePng))
+                    : renderFrameImage(settings, angle);
             if (decoded == null) return null;
             BufferedImage image = new BufferedImage(size, size, BufferedImage.TYPE_INT_ARGB);
             Graphics2D graphics = image.createGraphics();
@@ -1141,14 +1187,20 @@ public final class DynamicMinimapRenderer {
         private static final int FRAME_LIMIT = 12;
         private static final int FRAME_BYTE_LIMIT = 3 * 1024 * 1024;
         private final BufferedImage image;
-        private final byte[] png;
+        /** North-up PNG, encoded on first use (only needed when facing exactly north). */
+        private byte[] png;
         private final java.util.LinkedHashMap<Integer, DynamicAssetPublisher.PreparedAsset> frames =
                 new java.util.LinkedHashMap<>(16, 0.75F, true);
         private int frameBytes;
 
-        private RotationSource(BufferedImage image, byte[] png) {
+        private RotationSource(BufferedImage image) {
             this.image = image;
-            this.png = png;
+        }
+
+        /** North-up PNG of this terrain. Render pool only. */
+        synchronized byte[] png() {
+            if (this.png == null) this.png = toPng(this.image);
+            return this.png;
         }
 
         /** Previously rotated frame for a heading bucket, or null. Thread-safe. */
@@ -1169,12 +1221,13 @@ public final class DynamicMinimapRenderer {
         }
     }
 
-    /** Cap rotating uploads at 512 square pixels without changing logical map coverage. */
-    public static RotationSource prepareRotationSource(byte[] png) {
-        if (png == null || png.length == 0) return null;
+    /**
+     * Rotation source straight from a stitched terrain image (no PNG encode/decode round trip).
+     * Rotating uploads are capped at 512 square pixels without changing logical map coverage.
+     */
+    public static RotationSource prepareRotationSource(BufferedImage image) {
+        if (image == null) return null;
         try {
-            BufferedImage image = ImageIO.read(new ByteArrayInputStream(png));
-            if (image == null) return null;
             int largest = Math.max(image.getWidth(), image.getHeight());
             if (largest > 512) {
                 double scale = 512.0 / largest;
@@ -1189,9 +1242,8 @@ public final class DynamicMinimapRenderer {
                     graphics.dispose();
                 }
                 image = reduced;
-                png = toPng(image);
             }
-            return new RotationSource(image, png);
+            return new RotationSource(image);
         } catch (Exception ignored) {
             return null;
         }
@@ -1200,14 +1252,14 @@ public final class DynamicMinimapRenderer {
     public static byte[] rotateTerrain(RotationSource base, double mapAngle) {
         if (base == null || base.image == null) return null;
         int bucket = rotationBucket(mapAngle);
-        if (bucket == 0) return base.png;
+        if (bucket == 0) return base.png();
         try {
             BufferedImage source = base.image;
             int width = source.getWidth();
             int height = source.getHeight();
-            BufferedImage rotated = new BufferedImage(width, height, 2);
+            BufferedImage rotated = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
             Graphics2D graphics = rotated.createGraphics();
-            graphics.setColor(withAlpha(FIXED_MAP_BACKGROUND, 235));
+            graphics.setColor(MAP_BACKGROUND_FILL);
             graphics.fillRect(0, 0, width, height);
             graphics.setRenderingHint(
                     RenderingHints.KEY_INTERPOLATION,
@@ -1352,18 +1404,10 @@ public final class DynamicMinimapRenderer {
         graphics.drawString(label, left, baseline);
     }
 
+    /** Palette-optimised PNG (exact palette when the image has at most 256 colours). */
     private static byte[] toPng(BufferedImage image) {
-        try {
-            // Most map PNGs are much smaller than the raster. Avoid allocating width*height
-            // bytes up front and avoid ImageIO's default temporary-file output cache.
-            ByteArrayOutputStream out = new ByteArrayOutputStream(Math.max(1024, Math.min(32768, image.getWidth() * image.getHeight())));
-            try (var output = new javax.imageio.stream.MemoryCacheImageOutputStream(out)) {
-                if (!ImageIO.write(paletteImage(image), "PNG", output)) return null;
-            }
-            return out.toByteArray();
-        } catch (Exception var2) {
-            return null;
-        }
+        // Most map PNGs are much smaller than the raster: don't allocate width*height bytes up front.
+        return DapperMapUtil.encodePng(paletteImage(image), Math.min(32768, image.getWidth() * image.getHeight()));
     }
 
     /** Exact palette encoding; images with more than 256 ARGB values stay true-colour. */
@@ -1473,14 +1517,21 @@ public final class DynamicMinimapRenderer {
     }
 
     public static final class Terrain {
+        /** North-up PNG (null for player-up renders, which use {@link #image}). */
         public final byte[] png;
+        /** The stitched raster, or null when no chunk was drawn. */
+        public final BufferedImage image;
         public final int present;
         public final int total;
+        /** Change signature of the chunk images drawn (same value terrainSignature gives). */
+        public final long signature;
 
-        Terrain(byte[] png, int present, int total) {
+        Terrain(byte[] png, BufferedImage image, int present, int total, long signature) {
             this.png = png;
+            this.image = image;
             this.present = present;
             this.total = total;
+            this.signature = signature;
         }
 
         public boolean complete() {

@@ -1,6 +1,7 @@
 package dev.scyphoz.dappermap.dynamic;
 
 import dev.scyphoz.dappermap.config.MinimapConfig;
+import static dev.scyphoz.dappermap.util.DapperMapUtil.clamp;
 
 /** Mutable per-player (or administrator-default) settings consumed by every minimap subsystem. */
 public final class DynamicMinimapSetting {
@@ -99,39 +100,48 @@ public final class DynamicMinimapSetting {
     /** Synchronized: live session settings are updated under this object's lock (MinimapSessionManager). */
     public synchronized DynamicMinimapSetting copy() {
         DynamicMinimapSetting copy = new DynamicMinimapSetting();
-        copy.colours = this.colours; // immutable, safe to share
-        copy.enabled = this.enabled;
-        copy.rotationMode = this.rotationMode;
-        copy.zoomBlocks = this.zoomBlocks;
-        copy.sizePixels = this.sizePixels;
-        copy.textureResolution = this.textureResolution;
-        copy.interfaceScalePercent = this.interfaceScalePercent;
-        copy.shape = this.shape;
-        copy.showOtherPlayers = this.showOtherPlayers;
-        copy.showEntities = this.showEntities;
-        copy.creatureMarkerLimit = this.creatureMarkerLimit;
-        copy.creatureIcons = this.creatureIcons;
-        copy.hostileCreaturesOnly = this.hostileCreaturesOnly;
-        copy.showDeathMarker = this.showDeathMarker;
-        copy.showWorldMapMarkers = this.showWorldMapMarkers;
-        copy.limitMobHeight = this.limitMobHeight;
-        copy.mobVerticalRange = this.mobVerticalRange;
-        copy.position = this.position;
-        copy.hudPositionX = this.hudPositionX;
-        copy.hudPositionY = this.hudPositionY;
-        copy.infoPanelEnabled = this.infoPanelEnabled;
-        copy.infoPanelPosition = this.infoPanelPosition;
-        copy.infoPanelTextAlignment = this.infoPanelTextAlignment;
-        copy.updateSpeed = this.updateSpeed;
-        copy.clock24Hour = this.clock24Hour;
-        copy.showCoordinates = this.showCoordinates;
-        copy.showClock = this.showClock;
-        copy.showCompass = this.showCompass;
-        copy.showBiome = this.showBiome;
-        copy.betterMapEnabled = this.betterMapEnabled;
-        copy.betterMapMarkersEnabled = this.betterMapMarkersEnabled;
-        copy.betterMapCaveModeEnabled = this.betterMapCaveModeEnabled;
+        copy.copyFrom(this);
         return copy;
+    }
+
+    /**
+     * Copies every setting from {@code source} into this object (identity kept). The one field
+     * list used by {@link #copy()} and by live-session refreshes, so a new setting only needs
+     * adding here (plus the settings store and SettingPermissions). Callers hold any lock needed.
+     */
+    public void copyFrom(DynamicMinimapSetting source) {
+        this.colours = source.colours; // immutable, safe to share
+        this.enabled = source.enabled;
+        this.rotationMode = source.rotationMode;
+        this.zoomBlocks = source.zoomBlocks;
+        this.sizePixels = source.sizePixels;
+        this.textureResolution = source.textureResolution;
+        this.interfaceScalePercent = source.interfaceScalePercent;
+        this.shape = source.shape;
+        this.showOtherPlayers = source.showOtherPlayers;
+        this.showEntities = source.showEntities;
+        this.creatureMarkerLimit = source.creatureMarkerLimit;
+        this.creatureIcons = source.creatureIcons;
+        this.hostileCreaturesOnly = source.hostileCreaturesOnly;
+        this.showDeathMarker = source.showDeathMarker;
+        this.showWorldMapMarkers = source.showWorldMapMarkers;
+        this.limitMobHeight = source.limitMobHeight;
+        this.mobVerticalRange = source.mobVerticalRange;
+        this.position = source.position;
+        this.hudPositionX = source.hudPositionX;
+        this.hudPositionY = source.hudPositionY;
+        this.infoPanelEnabled = source.infoPanelEnabled;
+        this.infoPanelPosition = source.infoPanelPosition;
+        this.infoPanelTextAlignment = source.infoPanelTextAlignment;
+        this.updateSpeed = source.updateSpeed;
+        this.clock24Hour = source.clock24Hour;
+        this.showCoordinates = source.showCoordinates;
+        this.showClock = source.showClock;
+        this.showCompass = source.showCompass;
+        this.showBiome = source.showBiome;
+        this.betterMapEnabled = source.betterMapEnabled;
+        this.betterMapMarkersEnabled = source.betterMapMarkersEnabled;
+        this.betterMapCaveModeEnabled = source.betterMapCaveModeEnabled;
     }
 
     public void normalize() {
@@ -202,7 +212,7 @@ public final class DynamicMinimapSetting {
 
     /** Convert a signed logical HUD coordinate into display-space units. */
     public int displayCoordinate(int logicalValue) {
-        return (int)Math.round((double)logicalValue * this.interfaceScale());
+        return dev.scyphoz.dappermap.util.DapperMapUtil.scaled(logicalValue, this.interfaceScalePercent);
     }
 
     /** Convert a logical HUD dimension into a positive display-space size. */
@@ -214,107 +224,49 @@ public final class DynamicMinimapSetting {
         return Math.max(1, this.displayCoordinate(logicalValue));
     }
 
+    /** How often the map pans (ms) at the current update speed. */
     public long panIntervalMs() {
-        long var10000;
-        switch (this.updateSpeed) {
-            case 0:
-                var10000 = 40L;   // 25 Hz
-                break;
-            case 1:
-                var10000 = 75L;   // ~13 Hz
-                break;
-            case 2:
-            default:
-                var10000 = 150L;  // ~7 Hz
-                break;
-            case 3:
-                var10000 = 300L;  // ~3 Hz
-        }
-
-        return var10000;
+        return switch (this.updateSpeed) {
+            case 0 -> 40L;    // 25 Hz
+            case 1 -> 75L;    // ~13 Hz
+            case 3 -> 300L;   // ~3 Hz
+            default -> 150L;  // normal: ~7 Hz
+        };
     }
 
+    /** How often creature and player markers are rescanned (ms). */
     public long markerIntervalMs() {
-        long var10000;
-        switch (this.updateSpeed) {
-            case 0:
-                var10000 = 50L;   // 20 Hz
-                break;
-            case 1:
-                var10000 = 100L;  // 10 Hz
-                break;
-            case 2:
-            default:
-                var10000 = 250L;  // 4 Hz
-                break;
-            case 3:
-                var10000 = 500L;  // 2 Hz
-        }
-
-        return var10000;
+        return switch (this.updateSpeed) {
+            case 0 -> 50L;    // 20 Hz
+            case 1 -> 100L;   // 10 Hz
+            case 3 -> 500L;   // 2 Hz
+            default -> 250L;  // normal: 4 Hz
+        };
     }
 
+    /** How often the terrain is probed for map changes (ms). */
     public long signatureIntervalMs() {
-        long var10000;
-        switch (this.updateSpeed) {
-            case 0:
-                var10000 = 150L;
-                break;
-            case 1:
-                var10000 = 300L;
-                break;
-            case 2:
-            default:
-                var10000 = 750L;
-                break;
-            case 3:
-                var10000 = 1500L;
-        }
-
-        return var10000;
+        return switch (this.updateSpeed) {
+            case 0 -> 150L;
+            case 1 -> 300L;
+            case 3 -> 1500L;
+            default -> 750L;
+        };
     }
 
+    /** Shortest gap between terrain renders (ms). */
     public long terrainIntervalMs() {
-        long var10000;
-        switch (this.updateSpeed) {
-            case 0:
-                var10000 = 300L;
-                break;
-            case 1:
-                var10000 = 600L;
-                break;
-            case 2:
-            default:
-                var10000 = 1200L;
-                break;
-            case 3:
-                var10000 = 2500L;
-        }
-
-        return var10000;
+        return switch (this.updateSpeed) {
+            case 0 -> 300L;
+            case 1 -> 600L;
+            case 3 -> 2500L;
+            default -> 1200L;
+        };
     }
 
+    /** "very-fast" | "fast" | "normal" | "slow" (the names used by commands and the config). */
     public String updateSpeedName() {
-        String var10000;
-        switch (this.updateSpeed) {
-            case 0:
-                var10000 = "very-fast";
-                break;
-            case 1:
-                var10000 = "fast";
-                break;
-            case 2:
-            default:
-                var10000 = "normal";
-                break;
-            case 3:
-                var10000 = "slow";
-        }
-
-        return var10000;
+        return MinimapConfig.SPEED_NAMES[clamp(this.updateSpeed, 0, MinimapConfig.SPEED_NAMES.length - 1)];
     }
 
-    private static int clamp(int value, int min, int max) {
-        return value < min ? min : Math.min(value, max);
-    }
 }

@@ -16,7 +16,6 @@ import java.util.concurrent.ConcurrentHashMap;
 /** Owns active player sessions and mediates inheritance/persistence of player and admin settings. */
 public class MinimapSessionManager {
 
-
     private final Map<UUID, DynamicMinimapSetting> settingsByPlayer = new ConcurrentHashMap<>();
     private final Map<UUID, DynamicMinimapSession> sessionsByPlayer = new ConcurrentHashMap<>();
     /**
@@ -30,9 +29,6 @@ public class MinimapSessionManager {
     private DynamicMinimapSettingsStore settingsStore;
     private DynamicMinimapSettingsStore adminSettingsStore;
     private static final UUID ADMIN_DEFAULTS_ID = new UUID(0L, 1L);
-
-    public MinimapSessionManager() {
-    }
 
     public void setDataDirectory(Path dataDirectory) {
         this.settingsStore = new DynamicMinimapSettingsStore(dataDirectory);
@@ -165,7 +161,7 @@ public class MinimapSessionManager {
         DynamicMinimapSetting target = session.settings();
         synchronized (target) {
             DynamicMinimapSetting own = this.settingsByPlayer.get(uuid);
-            if (own != null) copyLiveFields(target, liveSettings(own));
+            if (own != null) target.copyFrom(liveSettings(own)); // Same field list as copy().
         }
     }
 
@@ -192,42 +188,6 @@ public class MinimapSessionManager {
             if (own != null && !config.describeLimitsApplied(own).isEmpty()) count++;
         }
         return count;
-    }
-
-    /** Copies every setting into a live session's settings object (identity is kept). */
-    private static void copyLiveFields(DynamicMinimapSetting target, DynamicMinimapSetting source) {
-        target.colours = source.colours;
-        target.enabled = source.enabled;
-        target.rotationMode = source.rotationMode;
-        target.zoomBlocks = source.zoomBlocks;
-        target.sizePixels = source.sizePixels;
-        target.textureResolution = source.textureResolution;
-        target.interfaceScalePercent = source.interfaceScalePercent;
-        target.shape = source.shape;
-        target.showOtherPlayers = source.showOtherPlayers;
-        target.showEntities = source.showEntities;
-        target.creatureMarkerLimit = source.creatureMarkerLimit;
-        target.creatureIcons = source.creatureIcons;
-        target.hostileCreaturesOnly = source.hostileCreaturesOnly;
-        target.showDeathMarker = source.showDeathMarker;
-        target.showWorldMapMarkers = source.showWorldMapMarkers;
-        target.limitMobHeight = source.limitMobHeight;
-        target.mobVerticalRange = source.mobVerticalRange;
-        target.position = source.position;
-        target.hudPositionX = source.hudPositionX;
-        target.hudPositionY = source.hudPositionY;
-        target.infoPanelEnabled = source.infoPanelEnabled;
-        target.infoPanelPosition = source.infoPanelPosition;
-        target.infoPanelTextAlignment = source.infoPanelTextAlignment;
-        target.updateSpeed = source.updateSpeed;
-        target.clock24Hour = source.clock24Hour;
-        target.showCoordinates = source.showCoordinates;
-        target.showClock = source.showClock;
-        target.showCompass = source.showCompass;
-        target.showBiome = source.showBiome;
-        target.betterMapEnabled = source.betterMapEnabled;
-        target.betterMapMarkersEnabled = source.betterMapMarkersEnabled;
-        target.betterMapCaveModeEnabled = source.betterMapCaveModeEnabled;
     }
 
     public void applySettings(PlayerRef playerRef, DynamicMinimapSetting settings) {

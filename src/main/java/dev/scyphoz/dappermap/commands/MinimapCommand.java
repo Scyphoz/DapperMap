@@ -424,7 +424,7 @@ public class MinimapCommand extends AbstractPlayerCommand {
             case "speed", "update" -> { changed = setSpeed(settings, value); usage = "admin speed very-fast|fast|normal|slow"; }
             case "shape" -> { changed = setShape(settings, value); usage = "admin shape circle|square"; }
             case "rotation", "rotate" -> { changed = setRotation(settings, value); usage = "admin rotation north|player"; }
-            case "info", "info-panel", "infopanel" -> { Boolean b=parseOnOff(value); if (b != null) { settings.infoPanelEnabled=b; changed=true; } usage="admin info on|off"; }
+            case "info", "info-panel", "infopanel" -> { changed = setOnOff(value, enabled -> settings.infoPanelEnabled = enabled); usage = "admin info on|off"; }
             case "panel" -> { changed = setPanelPosition(settings, value); usage = "admin panel below|above|left|right"; }
             case "position", "pos" -> { changed = setPosition(settings, value, extra); usage = "admin position <x 0..100> <y 0..100>"; }
             case "size" -> { changed = setRangedInt(value,120,360,v->settings.sizePixels=v); usage = "admin size <120..360>"; }
@@ -432,10 +432,10 @@ public class MinimapCommand extends AbstractPlayerCommand {
             case "resolution", "texture-resolution" -> { changed = setRangedInt(value,256,1024,v->settings.textureResolution=v); usage = "admin resolution <256..1024>"; }
             case "height-range", "heightrange", "vrange" -> { changed = setRangedInt(value,4,256,v->settings.mobVerticalRange=v); usage = "admin height-range <4..256>"; }
             case "markers", "blips" -> { changed = setMarkerToggle(settings, value, extra); usage = "admin markers players|entities|death|worldmap on|off"; }
-            case "height", "height-detection" -> { if ("on".equals(value)||"off".equals(value)) { settings.limitMobHeight="on".equals(value); changed=true; } usage="admin height on|off"; }
-            case "coordinates", "coords" -> { if ("on".equals(value)||"off".equals(value)) { settings.showCoordinates="on".equals(value); changed=true; } usage="admin coordinates on|off"; }
-            case "compass" -> { if ("on".equals(value)||"off".equals(value)) { settings.showCompass="on".equals(value); changed=true; } usage="admin compass on|off"; }
-            case "biome" -> { if ("on".equals(value)||"off".equals(value)) { settings.showBiome="on".equals(value); changed=true; } usage="admin biome on|off"; }
+            case "height", "height-detection" -> { changed = setOnOff(value, enabled -> settings.limitMobHeight = enabled); usage = "admin height on|off"; }
+            case "coordinates", "coords" -> { changed = setOnOff(value, enabled -> settings.showCoordinates = enabled); usage = "admin coordinates on|off"; }
+            case "compass" -> { changed = setOnOff(value, enabled -> settings.showCompass = enabled); usage = "admin compass on|off"; }
+            case "biome" -> { changed = setOnOff(value, enabled -> settings.showBiome = enabled); usage = "admin biome on|off"; }
             case "clock" -> { changed=setClock(settings,value); usage="admin clock on|off|12|24"; }
             case "integration", "integrations" -> { changed=setIntegration(settings,value,extra,context,
                     store.getComponent(ref, Player.getComponentType())); usage="admin integration native on|off | bettermap enable|disable|markers on|off|caves on|off"; }
@@ -565,27 +565,27 @@ public class MinimapCommand extends AbstractPlayerCommand {
         }
     }
 
+    /**
+     * Zoom preset or radius in blocks. The value is checked before it is stored: an out-of-range
+     * number used to be written into the player's live settings and kept until the next save.
+     */
     private static boolean setZoom(DynamicMinimapSetting settings, String value) {
+        int zoom;
         switch (value) {
-            case "close":
-                settings.zoomBlocks = 48;
-                break;
-            case "medium":
-            case "normal":
-                settings.zoomBlocks = 96;
-                break;
-            case "far":
-                settings.zoomBlocks = 160;
-                break;
-            default:
+            case "close" -> zoom = 48;
+            case "medium", "normal" -> zoom = 96;
+            case "far" -> zoom = 160;
+            default -> {
                 try {
-                    settings.zoomBlocks = Integer.parseInt(value);
-                } catch (NumberFormatException var5) {
+                    zoom = Integer.parseInt(value);
+                } catch (NumberFormatException notANumber) {
                     return false;
                 }
+            }
         }
-
-        return settings.zoomBlocks >= 16 && settings.zoomBlocks <= 256;
+        if (zoom < 16 || zoom > 256) return false;
+        settings.zoomBlocks = zoom;
+        return true;
     }
 
     private static boolean setSpeed(DynamicMinimapSetting settings, String value) {
@@ -875,26 +875,21 @@ public class MinimapCommand extends AbstractPlayerCommand {
         return true;
     }
 
+    /** on/true/yes/1 or off/false/no/0; null for anything else. */
     private static Boolean parseOnOff(String value) {
-        Boolean var10000;
-        switch (value) {
-            case "on":
-            case "true":
-            case "yes":
-            case "1":
-                var10000 = true;
-                break;
-            case "off":
-            case "false":
-            case "no":
-            case "0":
-                var10000 = false;
-                break;
-            default:
-                var10000 = null;
-        }
+        return switch (value) {
+            case "on", "true", "yes", "1" -> Boolean.TRUE;
+            case "off", "false", "no", "0" -> Boolean.FALSE;
+            default -> null;
+        };
+    }
 
-        return var10000;
+    /** Applies an on/off value through {@code setter}; false (nothing changed) when it is neither. */
+    private static boolean setOnOff(String value, java.util.function.Consumer<Boolean> setter) {
+        Boolean enabled = parseOnOff(value);
+        if (enabled == null) return false;
+        setter.accept(enabled);
+        return true;
     }
 
     private static String status(DynamicMinimapSetting settings) {

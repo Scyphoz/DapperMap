@@ -326,7 +326,7 @@ public final class DapperMapSettingsPage
         this.config.applyLimits(draft);
         DynamicMinimapRenderer.LiveSnapshot snapshot = this.previewSnapshot;
         boolean position = this.activeTab == Tab.POSITION;
-        String slug = this.playerRef.getUuid() == null ? "anon" : this.playerRef.getUuid().toString().replace("-", "");
+        String slug = dev.scyphoz.dappermap.util.DapperMapUtil.playerSlug(this.playerRef.getUuid());
         String path = "UI/DapperMap/settings-preview-" + slug + "-" + ((++this.previewRevision) & 15) + ".png";
         if (!DynamicMinimapSession.renderAsync(() -> {
             if (this.closed) { this.previewQueued.set(false); return; }

@@ -2,12 +2,12 @@ package dev.scyphoz.dappermap.dynamic;
 
 import java.io.IOException;
 import java.nio.file.Files;
-import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import dev.scyphoz.dappermap.util.DapperMapUtil;
 
 /** Persists normalized player settings as small JSON files and caches active values in memory. */
 public final class DynamicMinimapSettingsStore {
@@ -22,11 +22,8 @@ public final class DynamicMinimapSettingsStore {
     private final ConcurrentHashMap<UUID, DynamicMinimapSetting> pendingWrites = new ConcurrentHashMap<>();
     private static final DynamicMinimapSetting DELETE = new DynamicMinimapSetting();
     /** One background thread per store: settings files are never written on a world thread. */
-    private final java.util.concurrent.ExecutorService writer = java.util.concurrent.Executors.newSingleThreadExecutor(runnable -> {
-        Thread thread = new Thread(runnable, "DapperMap-Settings-IO");
-        thread.setDaemon(true);
-        return thread;
-    });
+    private final java.util.concurrent.ExecutorService writer = java.util.concurrent.Executors.newSingleThreadExecutor(
+            DapperMapUtil.daemonThreads("DapperMap-Settings-IO"));
     /** Matches every "key": value pair (booleans and integers) in one pass over the file. */
     private static final Pattern FIELD = Pattern.compile("\"([A-Za-z_][\\w-]*)\"\\s*:\\s*(true|false|-?\\d+)");
 
@@ -41,11 +38,11 @@ public final class DynamicMinimapSettingsStore {
     /** True when this player has a settings file on disk, i.e. they are not a new player. */
     public boolean hasStoredSettings(UUID uuid) {
         return uuid != null && this.hasFile.computeIfAbsent(uuid,
-                ignored -> Files.exists(this.file(uuid), new LinkOption[0]));
+                ignored -> Files.exists(this.file(uuid)));
     }
 
     private Path file(UUID uuid) {
-        return this.dataDir.resolve(String.valueOf(uuid) + ".json");
+        return this.dataDir.resolve(uuid + ".json");
     }
 
     /**
@@ -112,91 +109,76 @@ public final class DynamicMinimapSettingsStore {
         for (UUID uuid : this.pendingWrites.keySet()) this.flushOne(uuid); // Anything left over.
     }
 
+    /** Writes one player's settings file (temp file + atomic move, so a crash never leaves half a file). */
     private void write(UUID uuid, DynamicMinimapSetting settings) throws IOException {
-        {
-            { // (Indentation kept from the original block so the field list diff stays readable.)
-                Files.createDirectories(this.dataDir);
-                Path file = this.file(uuid);
-                // Write a temp file, then swap it in, so a crash mid-write never leaves half a file.
-                Path temp = file.resolveSibling(file.getFileName() + ".tmp");
-
-                Files.writeString(
-                        temp,
-                        ("{\n"
-                                + "  \"enabled\": %s,\n"
-                                + "  \"rotationMode\": %d,\n"
-                                + "  \"zoomBlocks\": %d,\n"
-                                + "  \"sizePixels\": %d,\n"
-                                + "  \"textureResolution\": %d,\n"
-                                + "  \"interfaceScalePercent\": %d,\n"
-                                + "  \"shape\": %d,\n"
-                                + "  \"showOtherPlayers\": %s,\n"
-                                + "  \"showEntities\": %s,\n"
-                                + "  \"creatureMarkerLimit\": %d,\n"
-                                + "  \"creatureIcons\": %s,\n"
-                                + "  \"hostileCreaturesOnly\": %s,\n"
-                                + "  \"showDeathMarker\": %s,\n"
-                                + "  \"showWorldMapMarkers\": %s,\n"
-                                + "  \"limitMobHeight\": %s,\n"
-                                + "  \"mobVerticalRange\": %d,\n"
-                                + "  \"position\": %d,\n"
-                                + "  \"hudPositionX\": %d,\n"
-                                + "  \"hudPositionY\": %d,\n"
-                                + "  \"infoPanelEnabled\": %s,\n"
-                                + "  \"infoPanelPosition\": %d,\n"
-                                + "  \"infoPanelTextAlignment\": %d,\n"
-                                + "  \"updateSpeed\": %d,\n"
-                                + "  \"clock24Hour\": %s,\n"
-                                + "  \"showCoordinates\": %s,\n"
-                                + "  \"showClock\": %s,\n"
-                                + "  \"showCompass\": %s,\n"
-                                + "  \"showBiome\": %s,\n"
-                                + "  \"betterMapEnabled\": %s,\n"
-                                + "  \"betterMapMarkersEnabled\": %s,\n"
-                                + "  \"betterMapCaveModeEnabled\": %s%s\n"
-                                + "}\n").formatted(
-                                settings.enabled,
-                                settings.rotationMode,
-                                settings.zoomBlocks,
-                                settings.sizePixels,
-                                settings.textureResolution,
-                                settings.interfaceScalePercent,
-                                settings.shape,
-                                settings.showOtherPlayers,
-                                settings.showEntities,
-                                settings.creatureMarkerLimit,
-                                settings.creatureIcons,
-                                settings.hostileCreaturesOnly,
-                                settings.showDeathMarker,
-                                settings.showWorldMapMarkers,
-                                settings.limitMobHeight,
-                                settings.mobVerticalRange,
-                                settings.position,
-                                settings.hudPositionX,
-                                settings.hudPositionY,
-                                settings.infoPanelEnabled,
-                                settings.infoPanelPosition,
-                                settings.infoPanelTextAlignment,
-                                settings.updateSpeed,
-                                settings.clock24Hour,
-                                settings.showCoordinates,
-                                settings.showClock,
-                                settings.showCompass,
-                                settings.showBiome,
-                                settings.betterMapEnabled,
-                                settings.betterMapMarkersEnabled,
-                                settings.betterMapCaveModeEnabled,
-                                colourFields(settings.colours)
-                        )
-                );
-                try {
-                    Files.move(temp, file, java.nio.file.StandardCopyOption.REPLACE_EXISTING,
-                            java.nio.file.StandardCopyOption.ATOMIC_MOVE);
-                } catch (java.nio.file.AtomicMoveNotSupportedException notAtomic) {
-                    Files.move(temp, file, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-                }
-            }
-        }
+        // Locale.ROOT: numbers are always written with ASCII digits, which load() expects.
+        DapperMapUtil.writeAtomically(this.file(uuid), String.format(java.util.Locale.ROOT,
+                "{\n"
+                        + "  \"enabled\": %s,\n"
+                        + "  \"rotationMode\": %d,\n"
+                        + "  \"zoomBlocks\": %d,\n"
+                        + "  \"sizePixels\": %d,\n"
+                        + "  \"textureResolution\": %d,\n"
+                        + "  \"interfaceScalePercent\": %d,\n"
+                        + "  \"shape\": %d,\n"
+                        + "  \"showOtherPlayers\": %s,\n"
+                        + "  \"showEntities\": %s,\n"
+                        + "  \"creatureMarkerLimit\": %d,\n"
+                        + "  \"creatureIcons\": %s,\n"
+                        + "  \"hostileCreaturesOnly\": %s,\n"
+                        + "  \"showDeathMarker\": %s,\n"
+                        + "  \"showWorldMapMarkers\": %s,\n"
+                        + "  \"limitMobHeight\": %s,\n"
+                        + "  \"mobVerticalRange\": %d,\n"
+                        + "  \"position\": %d,\n"
+                        + "  \"hudPositionX\": %d,\n"
+                        + "  \"hudPositionY\": %d,\n"
+                        + "  \"infoPanelEnabled\": %s,\n"
+                        + "  \"infoPanelPosition\": %d,\n"
+                        + "  \"infoPanelTextAlignment\": %d,\n"
+                        + "  \"updateSpeed\": %d,\n"
+                        + "  \"clock24Hour\": %s,\n"
+                        + "  \"showCoordinates\": %s,\n"
+                        + "  \"showClock\": %s,\n"
+                        + "  \"showCompass\": %s,\n"
+                        + "  \"showBiome\": %s,\n"
+                        + "  \"betterMapEnabled\": %s,\n"
+                        + "  \"betterMapMarkersEnabled\": %s,\n"
+                        + "  \"betterMapCaveModeEnabled\": %s%s\n"
+                        + "}\n",
+                settings.enabled,
+                settings.rotationMode,
+                settings.zoomBlocks,
+                settings.sizePixels,
+                settings.textureResolution,
+                settings.interfaceScalePercent,
+                settings.shape,
+                settings.showOtherPlayers,
+                settings.showEntities,
+                settings.creatureMarkerLimit,
+                settings.creatureIcons,
+                settings.hostileCreaturesOnly,
+                settings.showDeathMarker,
+                settings.showWorldMapMarkers,
+                settings.limitMobHeight,
+                settings.mobVerticalRange,
+                settings.position,
+                settings.hudPositionX,
+                settings.hudPositionY,
+                settings.infoPanelEnabled,
+                settings.infoPanelPosition,
+                settings.infoPanelTextAlignment,
+                settings.updateSpeed,
+                settings.clock24Hour,
+                settings.showCoordinates,
+                settings.showClock,
+                settings.showCompass,
+                settings.showBiome,
+                settings.betterMapEnabled,
+                settings.betterMapMarkersEnabled,
+                settings.betterMapCaveModeEnabled,
+                colourFields(settings.colours)
+        ).getBytes(java.nio.charset.StandardCharsets.UTF_8));
     }
 
     private DynamicMinimapSetting load(UUID uuid, DynamicMinimapSetting defaults) {
@@ -206,7 +188,7 @@ public final class DynamicMinimapSettingsStore {
             return settings;
         } else {
             Path file = this.file(uuid);
-            boolean exists = Files.exists(file, new LinkOption[0]);
+            boolean exists = Files.exists(file);
             this.hasFile.put(uuid, exists);
             if (exists) {
                 try {
@@ -365,7 +347,8 @@ public final class DynamicMinimapSettingsStore {
                     }
                     if (betterMapMarkersEnabled != null) settings.betterMapMarkersEnabled = betterMapMarkersEnabled;
                     if (betterMapCaveModeEnabled != null) settings.betterMapCaveModeEnabled = betterMapCaveModeEnabled;
-                } catch (IOException var23) {
+                } catch (IOException unreadable) {
+                    // An unreadable file keeps the inherited defaults.
                 }
             }
 

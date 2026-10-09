@@ -142,8 +142,8 @@ public final class DynamicAssetPublisher {
                     }
 
                     return true;
-                } catch (Exception var15) {
-                    return false;
+                } catch (Exception sendFailed) {
+                    return false; // Not recorded as delivered, so it is sent again next time.
                 }
             }
         } else {
