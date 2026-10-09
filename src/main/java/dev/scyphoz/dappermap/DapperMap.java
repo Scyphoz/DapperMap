@@ -32,6 +32,10 @@ public class DapperMap extends JavaPlugin {
     protected void setup() {
         config.save();
         DapperMapPermissions.register(config.get().isGrantPlayerSettingsByDefault());
+        // PNG deflate level for every generated image (terrain, frames, icons).
+        dev.scyphoz.dappermap.util.DapperMapUtil.setPngCompression(config.get().getPngCompressionLevel());
+        // Colour limit for full-colour terrain images (0 = full colour).
+        dev.scyphoz.dappermap.dynamic.DynamicMinimapRenderer.setTerrainColours(config.get().getTerrainColours());
         // Runs on DapperMap's own heartbeat thread, not the server's shared scheduler.
         this.imageCleanup = dev.scyphoz.dappermap.dynamic.DynamicMinimapSession.heartbeat().scheduleAtFixedRate(
                 dev.scyphoz.dappermap.integration.BetterMapIntegration::pruneImages,

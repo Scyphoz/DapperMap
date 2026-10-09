@@ -359,6 +359,10 @@ public final class DynamicMinimapSession {
     private float lastDispatchedYaw = Float.NaN;
     /** When the last map-rotation render was requested; paces rotation by request, not delivery. */
     private long lastRotationRequestMs = 0L;
+    /** Once the heading has been steady this long, a reduced frame is replaced by a sharp one. */
+    private static final long ROTATION_SETTLE_MS = 350L;
+    /** True while the shown player-up frame is a reduced mid-turn frame (world thread only). */
+    private boolean displayedRotationReduced;
     private final ReadoutCache readouts = new ReadoutCache();
     private boolean wasAlive = true;
     // Detect discontinuous movement even when the player stays in the same world.
@@ -735,12 +739,20 @@ public final class DynamicMinimapSession {
             if (mapRotationBucket != this.lastMapRotationBucket
                     && now - this.lastRotationRequestMs >= this.rotationIntervalMs()) {
                 // Pace from the previous request so render time is not added on top of the
-                // interval; only one rotation render is ever in flight (coalesced).
-                if (this.scheduleRotationOnly(world, yaw, mapRotationBucket)) {
+                // interval; only one rotation render is ever in flight (coalesced). While turning
+                // a reduced frame is sent (about 40% of the bytes); a sharp one follows once the
+                // heading has been steady for ROTATION_SETTLE_MS.
+                if (this.scheduleRotationOnly(world, yaw, mapRotationBucket, true)) {
                     this.lastRotationRequestMs = now;
                 }
 
                 // The cached markers are projected again when the rotated terrain arrives.
+            } else if (this.displayedRotationReduced && mapRotationBucket == this.lastMapRotationBucket
+                    && now - this.lastRotationRequestMs >= ROTATION_SETTLE_MS) {
+                // The turn has ended on a reduced frame: replace it with a sharp one.
+                if (this.scheduleRotationOnly(world, yaw, mapRotationBucket, false)) {
+                    this.lastRotationRequestMs = now;
+                }
             }
 
             this.updateSelfArrow(yaw);
@@ -1100,6 +1112,7 @@ public final class DynamicMinimapSession {
                 this.bufferCenterZ = centerZ;
                 this.lastSignature = renderSignature;
                 this.lastMapRotationBucket = rotationBucket;
+                this.displayedRotationReduced = false; // Terrain renders are always full sharpness.
 
                 double pixelsPerBlock =
                         DynamicMinimapRenderer.pixelsPerBlock(renderSettings);
@@ -1137,7 +1150,8 @@ public final class DynamicMinimapSession {
     private boolean scheduleRotationOnly(
             World world,
             double yaw,
-            int rotationBucket
+            int rotationBucket,
+            boolean reduced
     ) {
         long rotationRequest = this.rotationSequence.get();
         if (this.rotationSource == null
@@ -1161,19 +1175,25 @@ public final class DynamicMinimapSession {
             if (rotationRequest != this.rotationSequence.get()) return;
             String framePath = this.terrainAssetPath(renderSettings.textureResolution, this.frameIndex.incrementAndGet());
             // Reuse a recent rotation of this same terrain when turning back to a heading.
-            DynamicAssetPublisher.PreparedAsset recent = base.cachedFrame(rotationBucket);
+            // Reduced and sharp frames of one heading are cached separately.
+            // A sharp frame of this heading made moments ago is usually still on the client
+            // (terrain slots), so it is shown again for free instead of a new reduced one.
+            DynamicAssetPublisher.PreparedAsset sharpRecent = reduced ? base.cachedFrame(rotationBucket) : null;
+            boolean useReduced = reduced && sharpRecent == null;
+            int frameKey = useReduced ? rotationBucket + DynamicMinimapRenderer.ROTATION_BUCKETS : rotationBucket;
+            DynamicAssetPublisher.PreparedAsset recent = sharpRecent != null ? sharpRecent : base.cachedFrame(frameKey);
             byte[] displayPng;
             DynamicAssetPublisher.PreparedAsset prepared;
             if (recent != null) {
                 displayPng = recent.data();
                 prepared = recent.withPath(framePath);
             } else {
-                displayPng = DynamicMinimapRenderer.rotateTerrain(base, mapAngle);
+                displayPng = DynamicMinimapRenderer.rotateTerrain(base, mapAngle, useReduced);
                 if (displayPng == null || displayPng.length == 0) {
                     return;
                 }
                 prepared = DynamicAssetPublisher.prepare(framePath, displayPng);
-                base.rememberFrame(rotationBucket, prepared);
+                base.rememberFrame(frameKey, prepared);
             }
 
             if (!this.canRenderHud(renderHud)) return;
@@ -1207,6 +1227,7 @@ public final class DynamicMinimapSession {
                 if (!renderHud.acceptTerrainFrame(mapAngle, preparedFrame)) return;
                 this.displayedTerrainPng = displayPng;
                 this.lastMapRotationBucket = rotationBucket;
+                this.displayedRotationReduced = useReduced; // A reduced frame is sharpened once the turn ends.
 
                 double pixelsPerBlock =
                         DynamicMinimapRenderer.pixelsPerBlock(renderSettings);

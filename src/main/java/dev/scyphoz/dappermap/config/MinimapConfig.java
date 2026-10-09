@@ -45,6 +45,11 @@ public class MinimapConfig {
     private boolean creatureIconDiskCache = true;
     private int creatureIconDiskCacheMb = 16;
 
+    /** PNG deflate level for generated images: higher = less data sent, more render CPU. */
+    private int pngCompressionLevel = dev.scyphoz.dappermap.util.DapperMapUtil.DEFAULT_PNG_COMPRESSION;
+    /** Colours kept in full-colour terrain images (32..256); 0 sends full colour. */
+    private int terrainColours = 256;
+
     private MinimapConfig() {
     }
 
@@ -132,6 +137,8 @@ public class MinimapConfig {
     public int getLoadSheddingRejectionsPerMinute() { return Math.max(1, this.loadSheddingRejectionsPerMinute); }
     public boolean isCreatureIconDiskCache() { return this.creatureIconDiskCache; }
     public long getCreatureIconDiskCacheBytes() { return clamp(this.creatureIconDiskCacheMb, 1, 512) * 1024L * 1024L; }
+    public int getPngCompressionLevel() { return clamp(this.pngCompressionLevel, 1, 9); }
+    public int getTerrainColours() { return this.terrainColours <= 0 ? 0 : clamp(this.terrainColours, 32, 256); }
 
     private static void append(StringBuilder out, String text) {
         if (!out.isEmpty()) out.append(", ");
@@ -223,6 +230,18 @@ public class MinimapConfig {
                         new KeyedCodec<>("CreatureIconDiskCacheMB", Codec.INTEGER),
                         (config, value, extraInfo) -> config.creatureIconDiskCacheMb = value,
                         (config, extraInfo) -> config.creatureIconDiskCacheMb
+                )
+                .add()
+                .append(
+                        new KeyedCodec<>("PngCompressionLevel", Codec.INTEGER),
+                        (config, value, extraInfo) -> config.pngCompressionLevel = value,
+                        (config, extraInfo) -> config.getPngCompressionLevel()
+                )
+                .add()
+                .append(
+                        new KeyedCodec<>("TerrainColours", Codec.INTEGER),
+                        (config, value, extraInfo) -> config.terrainColours = value,
+                        (config, extraInfo) -> config.getTerrainColours()
                 )
                 .add()
                 .build();

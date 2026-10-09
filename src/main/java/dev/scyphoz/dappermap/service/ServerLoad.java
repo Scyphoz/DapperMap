@@ -37,10 +37,17 @@ public final class ServerLoad {
     private static final LongAdder REJECTIONS = new LongAdder();
     private static final LongAdder BYTES_SENT = new LongAdder();
     private static final LongAdder ASSETS_SENT = new LongAdder();
+    // Terrain image encodes (north-up renders and player-up frames) and how many fit a palette.
+    private static final LongAdder TERRAIN_ENCODED = new LongAdder();
+    private static final LongAdder TERRAIN_PALETTE = new LongAdder();
+    private static final LongAdder TERRAIN_REDUCED = new LongAdder();
+    private static final LongAdder TERRAIN_BYTES = new LongAdder();
 
     // Per-second samples for the last minute (heartbeat thread only, read under the class lock).
     private static final long[] JOBS = new long[WINDOW], NANOS = new long[WINDOW], PEAKS = new long[WINDOW],
-            REJECTED = new long[WINDOW], BYTES = new long[WINDOW], ASSETS = new long[WINDOW];
+            REJECTED = new long[WINDOW], BYTES = new long[WINDOW], ASSETS = new long[WINDOW],
+            TERRAIN = new long[WINDOW], TERRAIN_PAL = new long[WINDOW], TERRAIN_RED = new long[WINDOW],
+            TERRAIN_SIZE = new long[WINDOW];
     private static int slot;
     private static long startedMs;
 
@@ -74,6 +81,14 @@ public final class ServerLoad {
     public static void recordAsset(int bytes) {
         ASSETS_SENT.increment();
         BYTES_SENT.add(bytes);
+    }
+
+    /** One terrain image encoded: PNG size and kind (0 exact palette, 1 colour-reduced, 2 full colour). */
+    public static void recordTerrainImage(int bytes, int kind) {
+        TERRAIN_ENCODED.increment();
+        TERRAIN_BYTES.add(bytes);
+        if (kind == 0) TERRAIN_PALETTE.increment();
+        else if (kind == 1) TERRAIN_REDUCED.increment();
     }
 
     /** Extra update-speed steps applied to live minimaps (0 or 1). */
@@ -116,6 +131,10 @@ public final class ServerLoad {
             REJECTED[slot] = REJECTIONS.sumThenReset();
             BYTES[slot] = BYTES_SENT.sumThenReset();
             ASSETS[slot] = ASSETS_SENT.sumThenReset();
+            TERRAIN[slot] = TERRAIN_ENCODED.sumThenReset();
+            TERRAIN_PAL[slot] = TERRAIN_PALETTE.sumThenReset();
+            TERRAIN_RED[slot] = TERRAIN_REDUCED.sumThenReset();
+            TERRAIN_SIZE[slot] = TERRAIN_BYTES.sumThenReset();
             rejectedLastMinute = (int) Math.min(Integer.MAX_VALUE, sum(REJECTED));
         }
         MinimapSessionManager manager = sessions;
@@ -164,7 +183,7 @@ public final class ServerLoad {
 
     /** Lines for {@code /dappermap admin stats}. Work is done only when the command runs. */
     public static List<String> report(MinimapSessionManager manager, MinimapConfig config) {
-        long jobs, nanos, peak, rejected, bytes, assets;
+        long jobs, nanos, peak, rejected, bytes, assets, terrain, terrainPalette, terrainReduced, terrainBytes;
         synchronized (ServerLoad.class) {
             jobs = sum(JOBS);
             nanos = sum(NANOS);
@@ -172,6 +191,10 @@ public final class ServerLoad {
             rejected = sum(REJECTED);
             bytes = sum(BYTES);
             assets = sum(ASSETS);
+            terrain = sum(TERRAIN);
+            terrainPalette = sum(TERRAIN_PAL);
+            terrainReduced = sum(TERRAIN_RED);
+            terrainBytes = sum(TERRAIN_SIZE);
         }
         long seconds = Math.max(1, Math.min(WINDOW, (System.currentTimeMillis() - startedMs) / 1000L));
         int[] pool = DynamicMinimapSession.renderPoolStatus();
@@ -180,8 +203,12 @@ public final class ServerLoad {
         lines.add("DapperMap stats (last " + seconds + " s):");
         lines.add(String.format(Locale.ROOT, "Render pool: %d jobs, avg %.1f ms, peak %.1f ms, %d refused; now %d running, %d queued (%d threads)",
                 jobs, jobs == 0 ? 0.0 : nanos / 1e6 / jobs, peak / 1e6, rejected, pool[0], pool[1], pool[2]));
-        lines.add(String.format(Locale.ROOT, "Images sent: %d (%.1f KB/min across all players)",
-                assets, bytes / 1024.0 * 60.0 / seconds));
+        lines.add(String.format(Locale.ROOT, "Images sent: %d (%.1f KB/min across all players, PNG level %d)",
+                assets, bytes / 1024.0 * 60.0 / seconds, dev.scyphoz.dappermap.util.DapperMapUtil.pngCompression()));
+        // Encoded (not sent): images the client already has are not sent again.
+        lines.add(String.format(Locale.ROOT, "Terrain images: %d encoded (%d exact palette, %d colour-reduced, %d full colour), avg %.1f KB",
+                terrain, terrainPalette, terrainReduced, terrain - terrainPalette - terrainReduced,
+                terrain == 0 ? 0.0 : terrainBytes / 1024.0 / terrain));
         lines.add("Live minimaps: " + (speeds[0] + speeds[1] + speeds[2] + speeds[3])
                 + " (very-fast " + speeds[0] + ", fast " + speeds[1] + ", normal " + speeds[2] + ", slow " + speeds[3] + ")");
         if (config != null) {

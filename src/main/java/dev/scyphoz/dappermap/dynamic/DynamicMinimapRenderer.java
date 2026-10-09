@@ -193,7 +193,7 @@ public final class DynamicMinimapRenderer {
 
         graphics.dispose();
         if (present == 0) return new Terrain(null, null, 0, total, signature);
-        return new Terrain(encodePng ? toPng(terrain) : null, terrain, present, total, signature);
+        return new Terrain(encodePng ? terrainPng(terrain) : null, terrain, present, total, signature);
     }
 
     /**
@@ -1247,18 +1247,26 @@ public final class DynamicMinimapRenderer {
 
         /** North-up frame of this terrain. Render pool only. */
         synchronized byte[] png() {
-            if (this.png == null) this.png = this.frame(0);
+            if (this.png == null) this.png = this.frame(0, false);
             return this.png;
         }
 
-        /** Cropped frame rotated to a heading bucket, PNG encoded (null on failure). */
-        private byte[] frame(int bucket) {
+        /**
+         * Cropped frame rotated to a heading bucket, PNG encoded (null on failure). A reduced
+         * frame (sent mid-turn) is drawn at {@link #TURNING_SCALE} of the texels;
+         * the HUD stretches it to the same logical size, so only its sharpness changes.
+         */
+        private byte[] frame(int bucket, boolean reduced) {
             int width = this.image.getWidth(), height = this.image.getHeight(), crop = this.cropTexels;
-            BufferedImage rotated = new BufferedImage(crop, crop, BufferedImage.TYPE_INT_ARGB);
+            int size = reduced ? Math.max(64, evenRound(crop * TURNING_SCALE)) : crop;
+            BufferedImage rotated = new BufferedImage(size, size, BufferedImage.TYPE_INT_ARGB);
             Graphics2D graphics = rotated.createGraphics();
             try {
                 graphics.setColor(MAP_BACKGROUND_FILL);
-                graphics.fillRect(0, 0, crop, crop);
+                graphics.fillRect(0, 0, size, size);
+                if (size != crop) graphics.scale(size / (double)crop, size / (double)crop);
+                // Nearest-pixel sampling at either size: it keeps the map's own colours, so the
+                // PNG stays palette-encoded (smoothing adds colours and made frames bigger).
                 graphics.setRenderingHint(RenderingHints.KEY_INTERPOLATION,
                         RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR);
                 // Shift by the (integer) crop offset, then rotate about the source centre as the
@@ -1269,8 +1277,8 @@ public final class DynamicMinimapRenderer {
             } finally {
                 graphics.dispose();
             }
-            if (this.visibleRadius > 0) flattenHiddenCorners(rotated);
-            return toPng(rotated);
+            if (this.visibleRadius > 0) flattenHiddenCorners(rotated, size / (double)crop);
+            return terrainPng(rotated);
         }
 
         /**
@@ -1278,20 +1286,21 @@ public final class DynamicMinimapRenderer {
          * A pixel is reachable when it is within the aperture radius of some viewport centre in
          * the square of pan offsets (+-panReach) around the frame centre.
          */
-        private void flattenHiddenCorners(BufferedImage frame) {
+        private void flattenHiddenCorners(BufferedImage frame, double scale) {
             int size = frame.getWidth();
-            double centre = size / 2.0D, radiusSquared = this.visibleRadius * this.visibleRadius;
+            double radius = this.visibleRadius * scale, panReach = this.panReach * scale;
+            double centre = size / 2.0D, radiusSquared = radius * radius;
             int fill = MAP_BACKGROUND_FILL.getRGB();
             int[] row = new int[size];
             // Furthest any pixel in a row can be (horizontally) outside the pan square.
-            double rowEdge = Math.max(0, centre - this.panReach);
+            double rowEdge = Math.max(0, centre - panReach);
             for (int y = 0; y < size; y++) {
-                double outsideY = Math.max(0, Math.abs(y + 0.5D - centre) - this.panReach);
+                double outsideY = Math.max(0, Math.abs(y + 0.5D - centre) - panReach);
                 if (rowEdge * rowEdge + outsideY * outsideY <= radiusSquared) continue; // Whole row reachable.
                 boolean changed = false;
                 frame.getRGB(0, y, size, 1, row, 0, size);
                 for (int x = 0; x < size; x++) {
-                    double outsideX = Math.max(0, Math.abs(x + 0.5D - centre) - this.panReach);
+                    double outsideX = Math.max(0, Math.abs(x + 0.5D - centre) - panReach);
                     if (outsideX * outsideX + outsideY * outsideY > radiusSquared && row[x] != fill) {
                         row[x] = fill;
                         changed = true;
@@ -1357,13 +1366,27 @@ public final class DynamicMinimapRenderer {
         }
     }
 
-    /** Cropped player-up frame for a map angle (bucket 0 is the cached north-up frame). */
+    /** Share of the texels used for reduced (mid-turn) player-up frames: about a third of the bytes. */
+    public static final double TURNING_SCALE = 0.5D;
+
+    /** Nearest even whole number (frames stay centred on whole texels). */
+    private static int evenRound(double value) {
+        int rounded = (int)Math.round(value);
+        return rounded + (rounded & 1);
+    }
+
+    /** Cropped full-sharpness player-up frame for a map angle (bucket 0 is the cached north-up frame). */
     public static byte[] rotateTerrain(RotationSource base, double mapAngle) {
+        return rotateTerrain(base, mapAngle, false);
+    }
+
+    /** Cropped player-up frame; {@code reduced} draws the lighter mid-turn version. */
+    public static byte[] rotateTerrain(RotationSource base, double mapAngle, boolean reduced) {
         if (base == null || base.image == null) return null;
         int bucket = rotationBucket(mapAngle);
-        if (bucket == 0) return base.png();
+        if (bucket == 0 && !reduced) return base.png();
         try {
-            return base.frame(bucket);
+            return base.frame(bucket, reduced);
         } catch (Exception ignored) {
             return null;
         }
@@ -1493,6 +1516,165 @@ public final class DynamicMinimapRenderer {
         graphics.drawString(label, left + 1, baseline + 1);
         graphics.setColor(colours.awt(CARDINAL_TEXT, 255));
         graphics.drawString(label, left, baseline);
+    }
+
+    /** {@link #toPng} for terrain images, also counted for /dappermap admin stats (palette or true colour). */
+    private static byte[] terrainPng(BufferedImage image) {
+        // 0 = exact palette, 1 = colour-reduced, 2 = full colour (for /dappermap admin stats).
+        int kind = 0;
+        BufferedImage encoded = paletteImage(image);
+        if (encoded == image) {
+            BufferedImage reduced = terrainColours > 0 ? reduceColours(image, terrainColours) : null;
+            kind = reduced != null ? 1 : 2;
+            if (reduced != null) encoded = reduced;
+        }
+        byte[] png = DapperMapUtil.encodePng(encoded, Math.min(32768, image.getWidth() * image.getHeight()));
+        if (png != null) dev.scyphoz.dappermap.service.ServerLoad.recordTerrainImage(png.length, kind);
+        return png;
+    }
+
+    /** Colour limit for full-colour terrain images (0 = off); set from the config. */
+    private static volatile int terrainColours = 256;
+
+    /** Sets the terrain colour limit: 0 keeps full colour, otherwise 32..256 colours. */
+    public static void setTerrainColours(int colours) {
+        terrainColours = colours <= 0 ? 0 : Math.max(32, Math.min(256, colours));
+    }
+
+    /** Most translucent colours kept exact (the map background and its rotated corners). */
+    private static final int MAX_TRANSLUCENT = 16;
+
+    /**
+     * Reduces a full-colour terrain image to at most {@code colours} colours, or null when it
+     * cannot (too many translucent colours). Opaque pixels are grouped on a 5-bit-per-channel
+     * histogram and split by median cut (each split goes across the widest channel at the
+     * pixel-weighted median); each group becomes its average colour. Translucent colours are
+     * kept exact. No dithering: flat areas stay flat, which keeps the PNG small. Terrain PNGs
+     * are 2-3x smaller this way; colours shift by a few steps at most. Render pool only.
+     */
+    static BufferedImage reduceColours(BufferedImage source, int colours) {
+        int width = source.getWidth(), height = source.getHeight();
+        int[] count = new int[32768], sumR = new int[32768], sumG = new int[32768], sumB = new int[32768];
+        int[] translucent = new int[MAX_TRANSLUCENT];
+        int translucentCount = 0;
+        int[] row = new int[width];
+        // Pass 1: histogram of opaque colours; translucent colours collected exactly.
+        for (int y = 0; y < height; y++) {
+            source.getRGB(0, y, width, 1, row, 0, width);
+            for (int argb : row) {
+                if ((argb >>> 24) == 255) {
+                    int r = (argb >>> 16) & 0xFF, g = (argb >>> 8) & 0xFF, b = argb & 0xFF;
+                    int bin = ((r >>> 3) << 10) | ((g >>> 3) << 5) | (b >>> 3);
+                    count[bin]++;
+                    sumR[bin] += r;
+                    sumG[bin] += g;
+                    sumB[bin] += b;
+                } else if (indexOf(translucent, translucentCount, argb) < 0) {
+                    if (translucentCount == MAX_TRANSLUCENT) return null;
+                    translucent[translucentCount++] = argb;
+                }
+            }
+        }
+        int occupied = 0;
+        for (int c : count) if (c > 0) occupied++;
+        int[] bins = new int[occupied];
+        for (int bin = 0, i = 0; bin < count.length; bin++) if (count[bin] > 0) bins[i++] = bin;
+
+        // Median cut: boxes are ranges of the bins array; split the most populated box until the budget is used.
+        int budget = Math.max(1, colours - translucentCount);
+        int[] boxStart = new int[budget], boxEnd = new int[budget];
+        long[] boxPixels = new long[budget];
+        int boxes = 1;
+        boxStart[0] = 0;
+        boxEnd[0] = occupied;
+        boxPixels[0] = (long)width * height;
+        long[] sortKeys = new long[occupied];
+        while (boxes < budget) {
+            int pick = -1;
+            for (int i = 0; i < boxes; i++)
+                if (boxEnd[i] - boxStart[i] > 1 && (pick < 0 || boxPixels[i] > boxPixels[pick])) pick = i;
+            if (pick < 0) break; // Every box is a single bin: the image fits the budget already.
+            int start = boxStart[pick], end = boxEnd[pick];
+            // Widest channel of this box (5-bit components of the bin index).
+            int axis = widestChannel(bins, start, end);
+            int shift = axis == 0 ? 10 : axis == 1 ? 5 : 0;
+            for (int i = start; i < end; i++) sortKeys[i] = ((long)((bins[i] >>> shift) & 31) << 32) | bins[i];
+            java.util.Arrays.sort(sortKeys, start, end);
+            for (int i = start; i < end; i++) bins[i] = (int)sortKeys[i];
+            // Split at the pixel-weighted median, keeping at least one bin on each side.
+            long half = boxPixels[pick] / 2, running = 0;
+            int split = start + 1;
+            for (int i = start; i < end - 1; i++) {
+                running += count[bins[i]];
+                split = i + 1;
+                if (running >= half) break;
+            }
+            long left = 0;
+            for (int i = start; i < split; i++) left += count[bins[i]];
+            boxEnd[pick] = split;
+            boxPixels[pick] = left;
+            boxStart[boxes] = split;
+            boxEnd[boxes] = end;
+            long right = 0;
+            for (int i = split; i < end; i++) right += count[bins[i]];
+            boxPixels[boxes] = right;
+            boxes++;
+        }
+
+        // Palette: each box's pixel-weighted average colour, then the exact translucent colours.
+        int[] palette = new int[boxes + translucentCount];
+        short[] binIndex = new short[32768];
+        for (int box = 0; box < boxes; box++) {
+            long r = 0, g = 0, b = 0, pixels = 0;
+            for (int i = boxStart[box]; i < boxEnd[box]; i++) {
+                int bin = bins[i];
+                r += sumR[bin];
+                g += sumG[bin];
+                b += sumB[bin];
+                pixels += count[bin];
+                binIndex[bin] = (short)box;
+            }
+            pixels = Math.max(1, pixels);
+            palette[box] = 0xFF000000 | (int)(r / pixels) << 16 | (int)(g / pixels) << 8 | (int)(b / pixels);
+        }
+        System.arraycopy(translucent, 0, palette, boxes, translucentCount);
+
+        // Pass 2: write palette indices.
+        var model = new java.awt.image.IndexColorModel(8, palette.length, palette, 0, true, -1,
+                java.awt.image.DataBuffer.TYPE_BYTE);
+        BufferedImage indexed = new BufferedImage(width, height, BufferedImage.TYPE_BYTE_INDEXED, model);
+        byte[] pixels = ((java.awt.image.DataBufferByte)indexed.getRaster().getDataBuffer()).getData();
+        int offset = 0;
+        for (int y = 0; y < height; y++) {
+            source.getRGB(0, y, width, 1, row, 0, width);
+            for (int argb : row) {
+                if ((argb >>> 24) == 255) {
+                    int bin = ((((argb >>> 16) & 0xFF) >>> 3) << 10) | ((((argb >>> 8) & 0xFF) >>> 3) << 5) | ((argb & 0xFF) >>> 3);
+                    pixels[offset++] = (byte)binIndex[bin];
+                } else {
+                    pixels[offset++] = (byte)(boxes + indexOf(translucent, translucentCount, argb));
+                }
+            }
+        }
+        return indexed;
+    }
+
+    private static int indexOf(int[] values, int length, int value) {
+        for (int i = 0; i < length; i++) if (values[i] == value) return i;
+        return -1;
+    }
+
+    /** 0 = red, 1 = green, 2 = blue: the channel with the widest range among bins[start..end). */
+    private static int widestChannel(int[] bins, int start, int end) {
+        int minR = 31, maxR = 0, minG = 31, maxG = 0, minB = 31, maxB = 0;
+        for (int i = start; i < end; i++) {
+            int r = (bins[i] >>> 10) & 31, g = (bins[i] >>> 5) & 31, b = bins[i] & 31;
+            minR = Math.min(minR, r); maxR = Math.max(maxR, r);
+            minG = Math.min(minG, g); maxG = Math.max(maxG, g);
+            minB = Math.min(minB, b); maxB = Math.max(maxB, b);
+        }
+        int red = maxR - minR, green = maxG - minG, blue = maxB - minB;
+        return green >= red && green >= blue ? 1 : red >= blue ? 0 : 2;
     }
 
     /** Palette-optimised PNG (exact palette when the image has at most 256 colours). */
