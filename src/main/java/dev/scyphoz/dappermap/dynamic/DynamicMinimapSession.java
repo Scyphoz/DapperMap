@@ -820,6 +820,18 @@ public final class DynamicMinimapSession {
      * at the end ("...-compass-7.png") because ImagePublicationCache rotates slots by
      * that trailing number; "...-7-compass.png" had none and could throw on reuse.
      */
+    /**
+     * Player-up compass frame path: one fixed name per heading for this frame artwork (shape,
+     * size, resolution, info panel, colours). The publisher skips images the client already
+     * holds under the same name, so after one full turn the frames cost no more data.
+     */
+    private String headingFramePath(DynamicMinimapSetting settings, int rotationBucket) {
+        return "UI/DapperMap/compass-" + this.slug + "-" + (settings.isCircle() ? "c" : "s")
+                + settings.sizePixels + "-r" + settings.textureResolution
+                + (settings.infoPanelEnabled ? "p" : "n") + "-" + settings.colours.frameKey()
+                + "-" + rotationBucket + ".png";
+    }
+
     private static String compassFramePath(String terrainPath) {
         int slot = terrainPath.lastIndexOf('-');
         return terrainPath.substring(0, slot) + "-compass" + terrainPath.substring(slot);
@@ -1035,7 +1047,7 @@ public final class DynamicMinimapSession {
             }
 
             DynamicMinimapRenderer.RotationSource source = playerUp
-                    ? DynamicMinimapRenderer.prepareRotationSource(terrain.image) : null;
+                    ? DynamicMinimapRenderer.prepareRotationSource(terrain.image, renderSettings) : null;
             byte[] displayPng = playerUp
                     ? DynamicMinimapRenderer.rotateTerrain(source, mapAngle)
                     : terrain.png;
@@ -1051,7 +1063,8 @@ public final class DynamicMinimapSession {
             byte[] framePng = DynamicMinimapRenderer.renderNativeHudFrame(renderSettings, renderSettings.sizePixels, mapAngle);
             if (framePng == null) return;
             DynamicAssetPublisher.PreparedAsset preparedFrame = DynamicAssetPublisher.prepare(
-                    compassFramePath(prepared.path()), framePng);
+                    playerUp ? this.headingFramePath(renderSettings, rotationBucket)
+                            : compassFramePath(prepared.path()), framePng);
             // Change signature of exactly the chunk images drawn, hashed while stitching.
             long renderSignature = terrain.signature;
             executeWorld(world, "terrain delivery", () -> {
@@ -1101,7 +1114,8 @@ public final class DynamicMinimapSession {
                         mapCenter,
                         mapAngle
                 );
-                this.hud.setTerrain(path, pan[0], pan[1]);
+                // Player-up frames are cropped around the buffer centre; the HUD sizes the terrain to match.
+                this.hud.setTerrain(path, pan[0], pan[1], DynamicMinimapRenderer.terrainImagePixels(renderSettings));
 
                 // Keep marker projection in the exact same accepted orientation
                 // as the terrain/frame that was just delivered.
@@ -1165,8 +1179,9 @@ public final class DynamicMinimapSession {
             if (!this.canRenderHud(renderHud)) return;
             byte[] framePng = DynamicMinimapRenderer.renderNativeHudFrame(renderSettings, renderSettings.sizePixels, mapAngle);
             if (framePng == null) return;
+            // Rotation-only renders are player-up: one fixed frame path per heading.
             DynamicAssetPublisher.PreparedAsset preparedFrame = DynamicAssetPublisher.prepare(
-                    compassFramePath(prepared.path()), framePng);
+                    this.headingFramePath(renderSettings, rotationBucket), framePng);
             executeWorld(world, "rotation delivery", () -> {
                 if (!this.canRenderHud(renderHud)
                         || generation != this.terrainGeneration
@@ -1206,7 +1221,8 @@ public final class DynamicMinimapSession {
                         mapCenter,
                         mapAngle
                 );
-                this.hud.setTerrain(path, pan[0], pan[1]);
+                // Player-up frames are cropped around the buffer centre; the HUD sizes the terrain to match.
+                this.hud.setTerrain(path, pan[0], pan[1], DynamicMinimapRenderer.terrainImagePixels(renderSettings));
 
                 // Rotation-only updates do not rescan entities. Re-project the
                 // cached world-space markers immediately against the accepted

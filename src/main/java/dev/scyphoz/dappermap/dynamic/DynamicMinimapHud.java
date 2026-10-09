@@ -211,6 +211,8 @@ public final class DynamicMinimapHud extends CustomUIHud {
     private double frameAngle = 0.0D;
     private String selfPath;
     private String terrainPath;
+    /** Logical side of the terrain image (the buffer, or a cropped player-up frame). */
+    private int terrainPixels;
     private volatile boolean built = false;
     private boolean terrainShown = false;
     private int hudPositionX;
@@ -237,6 +239,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
         this.infoPanelPosition = this.settings.infoPanelPosition;
         this.logicalUiSize = this.settings.sizePixels;
         this.bufferPixels = DynamicMinimapRenderer.bufferPixels(this.settings);
+        this.terrainPixels = this.bufferPixels;
         this.selfSize = Math.max(18, this.logicalUiSize / 10);
         this.interfaceScalePercent = this.settings.interfaceScalePercent;
         this.slug = DapperMapUtil.playerSlug(this.uuid);
@@ -266,8 +269,10 @@ public final class DynamicMinimapHud extends CustomUIHud {
                         layer.size[i], layer.path[i].contains("/mk-") && layer.size[i] <= 9));
             }
         }
+        // The preview draws the terrain image into its own box (cropped player-up frames are inset).
+        int inset = this.terrainInset();
         return new DynamicMinimapRenderer.LiveSnapshot(terrain.clone(), this.logicalUiSize,
-                this.bufferPixels, this.panLeft, this.panTop, selfAngle, this.frameAngle,
+                this.terrainPixels, this.panLeft + inset, this.panTop + inset, selfAngle, this.frameAngle,
                 this.coordsText, this.compassText, this.clockText, this.biomeText,
                 java.util.List.copyOf(markers));
     }
@@ -363,10 +368,15 @@ public final class DynamicMinimapHud extends CustomUIHud {
         builder.appendInline((String)null, this.buildMarkup());
     }
 
-    /** left/top are logical minimap coordinates supplied by DynamicMinimapSession. */
-    public void setTerrain(String assetPath, int left, int top) {
+    /**
+     * left/top are logical minimap coordinates supplied by DynamicMinimapSession; imagePixels is
+     * the logical side of the terrain image, centred in the pan group (smaller than the buffer
+     * for cropped player-up frames). Markers keep using buffer coordinates either way.
+     */
+    public void setTerrain(String assetPath, int left, int top, int imagePixels) {
         if (this.built && assetPath != null) {
-            if (this.terrainShown && assetPath.equals(this.terrainPath)) {
+            int size = Math.max(1, Math.min(this.bufferPixels, imagePixels));
+            if (this.terrainShown && assetPath.equals(this.terrainPath) && size == this.terrainPixels) {
                 this.pan(left, top);
                 return;
             }
@@ -375,6 +385,14 @@ public final class DynamicMinimapHud extends CustomUIHud {
             this.panTop = top;
             UICommandBuilder builder = new UICommandBuilder();
             builder.set("#WayfinderMmRoot #WayfinderMmClip #WayfinderMmTerrain.AssetPath", assetPath);
+            if (size != this.terrainPixels) {
+                // Only when switching between full and cropped images (mode or size change).
+                this.terrainPixels = size;
+                int inset = this.terrainInset();
+                builder.setObject("#WayfinderMmRoot #WayfinderMmClip #WayfinderMmTerrain.Anchor", anchor(
+                        this.displayCoordinate(inset), this.displayCoordinate(inset),
+                        this.displaySize(size), this.displaySize(size)));
+            }
             // Terrain and markers share one pan group: one Anchor update moves both.
             builder.setObject("#WayfinderMmRoot #WayfinderMmClip #WayfinderMmPan.Anchor", this.fullAnchor(left, top));
             builder.set("#WayfinderMmRoot #WayfinderMmClip #WayfinderMmTerrain.Visible", true);
@@ -796,6 +814,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
 
         this.logicalUiSize = this.settings.sizePixels;
         this.bufferPixels = DynamicMinimapRenderer.bufferPixels(this.settings);
+        this.terrainPixels = this.bufferPixels; // Blank until the next terrain sets its size.
         this.selfSize = Math.max(18, this.logicalUiSize / 10);
 
         // Frame and mask are reused across logical map sizes. Only terrain and
@@ -990,9 +1009,12 @@ public final class DynamicMinimapHud extends CustomUIHud {
                 .append(", Width: ").append(displayBuffer)
                 .append(", Height: ").append(displayBuffer).append("); ");
 
+        int terrainInset = this.displayCoordinate(this.terrainInset());
+        int displayTerrain = this.displaySize(this.terrainPixels);
         out.append("AssetImage #WayfinderMmTerrain { ")
-                .append("Anchor: (Left: 0, Top: 0, Width: ").append(displayBuffer)
-                .append(", Height: ").append(displayBuffer)
+                .append("Anchor: (Left: ").append(terrainInset).append(", Top: ").append(terrainInset)
+                .append(", Width: ").append(displayTerrain)
+                .append(", Height: ").append(displayTerrain)
                 .append("); AssetPath: \"").append(this.terrainPath)
                 .append("\"; Visible: ").append(this.terrainShown).append("; } ");
 
@@ -1185,6 +1207,11 @@ public final class DynamicMinimapHud extends CustomUIHud {
         String shape = maskSettings.isCircle() ? "circle" : "square";
         return "DapperMap-" + this.slug + "-" + shape
                 + "-r" + maskSettings.textureResolution + "-mask.png";
+    }
+
+    /** Logical offset of the terrain image inside the pan group (0 for a full buffer). */
+    private int terrainInset() {
+        return (this.bufferPixels - this.terrainPixels) / 2;
     }
 
     private int readoutHeight() { return readoutHeight(this.settings); }

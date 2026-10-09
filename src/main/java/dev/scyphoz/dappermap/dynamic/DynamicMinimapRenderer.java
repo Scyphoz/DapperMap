@@ -413,7 +413,8 @@ public final class DynamicMinimapRenderer {
     private record RowLayerKey(OverlayLayout layout, int row, String value) {}
     private record FrameLayerKey(int mapSize, int width, int height, int mapX, int mapY,
                                  int resolution, int shape, boolean panel, int angle, String colours) {}
-    private static final PngCache OVERLAY_LAYERS = new PngCache(64, 4 * 1024 * 1024);
+    /** Room for every player-up compass frame (72 headings) of a couple of HUD set-ups, plus panel layers. */
+    private static final PngCache OVERLAY_LAYERS = new PngCache(192, 6 * 1024 * 1024);
     /** Bound encoded-byte retention, with gradual eviction instead of cache-wide clearing. */
     static final class PngCache {
         private final java.util.LinkedHashMap<Object, byte[]> entries = new java.util.LinkedHashMap<>(16, .75F, true);
@@ -1158,8 +1159,18 @@ public final class DynamicMinimapRenderer {
         return Double.isNaN(yaw) ? 0.0D : -screenAngleForYaw(yaw);
     }
 
+    /** Player-up maps turn in steps of this many degrees (72 headings). */
+    public static final int PLAYER_UP_STEP_DEGREES = 5;
+
+    /**
+     * Player-up map bucket (degrees, 0..359) for a yaw, snapped to {@link #PLAYER_UP_STEP_DEGREES}.
+     * Fewer distinct headings mean fewer rotation renders, and repeated headings reuse images
+     * the client already has (terrain slots, and one compass frame per heading).
+     */
     public static int rotationBucketForYaw(double yaw) {
-        return rotationBucket(mapRotationForYaw(yaw));
+        int bucket = rotationBucket(mapRotationForYaw(yaw));
+        int step = PLAYER_UP_STEP_DEGREES;
+        return Math.floorMod(Math.round(bucket / (float)step) * step, ROTATION_BUCKETS);
     }
 
     public static int rotationBucket(double angle) {
@@ -1178,29 +1189,116 @@ public final class DynamicMinimapRenderer {
     }
 
     /**
+     * Share of the pan margin kept around the viewport in player-up frames. Player-up maps
+     * re-centre once the player is 0.35 of the margin away on either axis (up to 0.495 after
+     * rotation, diagonally); 0.65 leaves the rest as slack for movement while the new terrain
+     * is rendered. The other 0.35 of the margin was sent with every frame but never shown.
+     */
+    private static final double ROTATION_CROP_MARGIN = 0.65D;
+
+    /**
+     * Logical side length of the terrain image in player-up mode: the viewport plus the part of
+     * the pan margin that can come into view before the map re-centres (even, at most the
+     * full buffer). North-up maps keep the full buffer.
+     */
+    public static int rotationCropPixels(DynamicMinimapSetting settings) {
+        int buffer = bufferPixels(settings);
+        int crop = settings.sizePixels + 2 * (int)Math.ceil(panMarginPixels(settings) * ROTATION_CROP_MARGIN);
+        crop += crop & 1;
+        return Math.min(buffer, crop);
+    }
+
+    /** Logical side length of the terrain image the HUD shows for these settings. */
+    public static int terrainImagePixels(DynamicMinimapSetting settings) {
+        return settings.rotationMode == DynamicMinimapSetting.ROTATION_PLAYER_UP
+                ? rotationCropPixels(settings) : bufferPixels(settings);
+    }
+
+    /**
      * One immutable decoded source per accepted terrain. It also remembers the most recent
      * rotated frames of this terrain (encoded and hashed), so turning back to a recent
      * heading skips the rotate + PNG encode + hash work. The cache lives and dies with the
      * source, so a new terrain render can never reuse a stale frame.
+     *
+     * <p>Frames are cropped to {@link #rotationCropPixels} around the buffer centre. On circular
+     * maps, pixels the round aperture can never show (whatever the pan offset before the map
+     * re-centres) are filled with the flat background, which compresses to almost nothing.
      */
     public static final class RotationSource {
         private static final int FRAME_LIMIT = 12;
         private static final int FRAME_BYTE_LIMIT = 3 * 1024 * 1024;
         private final BufferedImage image;
-        /** North-up PNG, encoded on first use (only needed when facing exactly north). */
+        /** Side of the cropped frame in texels (even). */
+        private final int cropTexels;
+        /** Circular maps: aperture radius and largest pan offset covered, in texels; radius 0 = no fill. */
+        private final double visibleRadius, panReach;
+        /** North-up frame (bucket 0), encoded on first use. */
         private byte[] png;
         private final java.util.LinkedHashMap<Integer, DynamicAssetPublisher.PreparedAsset> frames =
                 new java.util.LinkedHashMap<>(16, 0.75F, true);
         private int frameBytes;
 
-        private RotationSource(BufferedImage image) {
+        private RotationSource(BufferedImage image, int cropTexels, double visibleRadius, double panReach) {
             this.image = image;
+            this.cropTexels = cropTexels;
+            this.visibleRadius = visibleRadius;
+            this.panReach = panReach;
         }
 
-        /** North-up PNG of this terrain. Render pool only. */
+        /** North-up frame of this terrain. Render pool only. */
         synchronized byte[] png() {
-            if (this.png == null) this.png = toPng(this.image);
+            if (this.png == null) this.png = this.frame(0);
             return this.png;
+        }
+
+        /** Cropped frame rotated to a heading bucket, PNG encoded (null on failure). */
+        private byte[] frame(int bucket) {
+            int width = this.image.getWidth(), height = this.image.getHeight(), crop = this.cropTexels;
+            BufferedImage rotated = new BufferedImage(crop, crop, BufferedImage.TYPE_INT_ARGB);
+            Graphics2D graphics = rotated.createGraphics();
+            try {
+                graphics.setColor(MAP_BACKGROUND_FILL);
+                graphics.fillRect(0, 0, crop, crop);
+                graphics.setRenderingHint(RenderingHints.KEY_INTERPOLATION,
+                        RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR);
+                // Shift by the (integer) crop offset, then rotate about the source centre as the
+                // full-buffer frames did: the result is exactly the centre of that frame.
+                graphics.translate((crop - width) / 2, (crop - height) / 2);
+                if (bucket != 0) graphics.rotate(bucketAngle(bucket), width / 2.0D, height / 2.0D);
+                graphics.drawImage(this.image, 0, 0, (ImageObserver)null);
+            } finally {
+                graphics.dispose();
+            }
+            if (this.visibleRadius > 0) flattenHiddenCorners(rotated);
+            return toPng(rotated);
+        }
+
+        /**
+         * Circular maps: fills every pixel no aperture position can reach with the background.
+         * A pixel is reachable when it is within the aperture radius of some viewport centre in
+         * the square of pan offsets (+-panReach) around the frame centre.
+         */
+        private void flattenHiddenCorners(BufferedImage frame) {
+            int size = frame.getWidth();
+            double centre = size / 2.0D, radiusSquared = this.visibleRadius * this.visibleRadius;
+            int fill = MAP_BACKGROUND_FILL.getRGB();
+            int[] row = new int[size];
+            // Furthest any pixel in a row can be (horizontally) outside the pan square.
+            double rowEdge = Math.max(0, centre - this.panReach);
+            for (int y = 0; y < size; y++) {
+                double outsideY = Math.max(0, Math.abs(y + 0.5D - centre) - this.panReach);
+                if (rowEdge * rowEdge + outsideY * outsideY <= radiusSquared) continue; // Whole row reachable.
+                boolean changed = false;
+                frame.getRGB(0, y, size, 1, row, 0, size);
+                for (int x = 0; x < size; x++) {
+                    double outsideX = Math.max(0, Math.abs(x + 0.5D - centre) - this.panReach);
+                    if (outsideX * outsideX + outsideY * outsideY > radiusSquared && row[x] != fill) {
+                        row[x] = fill;
+                        changed = true;
+                    }
+                }
+                if (changed) frame.setRGB(0, y, size, 1, row, 0, size);
+            }
         }
 
         /** Previously rotated frame for a heading bucket, or null. Thread-safe. */
@@ -1223,9 +1321,10 @@ public final class DynamicMinimapRenderer {
 
     /**
      * Rotation source straight from a stitched terrain image (no PNG encode/decode round trip).
-     * Rotating uploads are capped at 512 square pixels without changing logical map coverage.
+     * Rotating uploads are capped at 512 square pixels without changing logical map coverage;
+     * frames are cropped to {@link #rotationCropPixels} for these settings.
      */
-    public static RotationSource prepareRotationSource(BufferedImage image) {
+    public static RotationSource prepareRotationSource(BufferedImage image, DynamicMinimapSetting settings) {
         if (image == null) return null;
         try {
             int largest = Math.max(image.getWidth(), image.getHeight());
@@ -1243,36 +1342,28 @@ public final class DynamicMinimapRenderer {
                 }
                 image = reduced;
             }
-            return new RotationSource(image);
+            // Texels per logical pixel of this (square) terrain image.
+            double texels = image.getWidth() / (double)bufferPixels(settings);
+            int crop = (int)Math.round(rotationCropPixels(settings) * texels);
+            crop = Math.max(2, Math.min(image.getWidth() - (image.getWidth() & 1), crop + (crop & 1)));
+            double radius = 0, reach = 0;
+            if (settings.isCircle()) {
+                radius = settings.sizePixels / 2.0D * texels + 2.0D; // Aperture (inside the frame) plus a safety texel.
+                reach = Math.max(0, (crop - settings.sizePixels * texels) / 2.0D);
+            }
+            return new RotationSource(image, crop, radius, reach);
         } catch (Exception ignored) {
             return null;
         }
     }
 
+    /** Cropped player-up frame for a map angle (bucket 0 is the cached north-up frame). */
     public static byte[] rotateTerrain(RotationSource base, double mapAngle) {
         if (base == null || base.image == null) return null;
         int bucket = rotationBucket(mapAngle);
         if (bucket == 0) return base.png();
         try {
-            BufferedImage source = base.image;
-            int width = source.getWidth();
-            int height = source.getHeight();
-            BufferedImage rotated = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
-            Graphics2D graphics = rotated.createGraphics();
-            graphics.setColor(MAP_BACKGROUND_FILL);
-            graphics.fillRect(0, 0, width, height);
-            graphics.setRenderingHint(
-                    RenderingHints.KEY_INTERPOLATION,
-                    RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR
-            );
-            graphics.rotate(
-                    bucketAngle(bucket),
-                    (double)width / 2.0D,
-                    (double)height / 2.0D
-            );
-            graphics.drawImage(source, 0, 0, (ImageObserver)null);
-            graphics.dispose();
-            return toPng(rotated);
+            return base.frame(bucket);
         } catch (Exception ignored) {
             return null;
         }
