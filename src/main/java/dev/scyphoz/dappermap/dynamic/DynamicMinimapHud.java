@@ -167,6 +167,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
     /** Called on normal world ticks so throttled changes eventually publish the latest state. */
     public void flushPendingVisuals(int updateSpeed) {
         this.settings.updateSpeed = updateSpeed;
+        this.applyPendingLayout();
         this.queueOverlayRender();
         this.flushPendingCommands();
     }
@@ -304,14 +305,14 @@ public final class DynamicMinimapHud extends CustomUIHud {
     public void deliverStaticAssets() {
         byte[] blank = DynamicMinimapRenderer.renderBlank();
         if (blank != null) {
-            DynamicAssetPublisher.deliver(this.ownerRef, this.blankPath, blank);
+            DynamicAssetPublisher.deliverShared(this.ownerRef, this.blankPath, blank);
         }
 
         this.publishOverlayAsset(false);
 
         byte[] self = DynamicMinimapRenderer.renderSelfArrow(0.0D, this.settings.colours);
         if (self != null) {
-            DynamicAssetPublisher.deliver(this.ownerRef, this.selfPath, self);
+            DynamicAssetPublisher.deliverShared(this.ownerRef, this.selfPath, self);
         }
 
         // MaskTexturePath is resolved from Hytale's common UI asset set, unlike
@@ -338,7 +339,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
                 maskSettings.normalize();
                 byte[] candidate = DynamicMinimapRenderer.renderShapeMask(maskSettings);
                 if (candidate != null) {
-                    DynamicAssetPublisher.deliver(
+                    DynamicAssetPublisher.deliverShared( // Cached mask bytes: remembered hash.
                             this.ownerRef,
                             "UI/Custom/" + maskFileFor(maskSettings),
                             candidate
@@ -349,7 +350,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
 
         byte[] mask = DynamicMinimapRenderer.renderShapeMask(this.settings);
         if (mask != null) {
-            DynamicAssetPublisher.deliverWithRebuild(
+            DynamicAssetPublisher.deliverSharedWithRebuild(
                     this.ownerRef,
                     "UI/Custom/" + this.maskFile,
                     mask
@@ -385,7 +386,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
             boolean panChanged = !this.terrainShown || left != this.panLeft || top != this.panTop;
             this.panLeft = left;
             this.panTop = top;
-            UICommandBuilder builder = new UICommandBuilder();
+            UICommandBuilder builder = new AnchorCommandBuilder();
             builder.set("#WayfinderMmRoot #WayfinderMmClip #WayfinderMmTerrain.AssetPath", assetPath);
             if (size != this.terrainPixels) {
                 // Only when switching between full and cropped images (mode or size change).
@@ -396,9 +397,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
                         this.displaySize(size), this.displaySize(size)));
             }
             // Terrain and markers share one pan group: one Anchor update moves both.
-            if (panChanged) {
-                builder.setObject("#WayfinderMmRoot #WayfinderMmClip #WayfinderMmPan.Anchor", this.fullAnchor(left, top));
-            }
+            if (panChanged) this.setFullAnchor(builder, left, top);
             if (!this.terrainShown) builder.set("#WayfinderMmRoot #WayfinderMmClip #WayfinderMmTerrain.Visible", true);
             this.terrainShown = true;
             this.update(false, builder);
@@ -409,9 +408,9 @@ public final class DynamicMinimapHud extends CustomUIHud {
         if (this.built && this.terrainShown && (left != this.panLeft || top != this.panTop)) {
             this.panLeft = left;
             this.panTop = top;
-            UICommandBuilder builder = new UICommandBuilder();
+            UICommandBuilder builder = new AnchorCommandBuilder();
             // Terrain and markers share one pan group: one Anchor update moves both.
-            builder.setObject("#WayfinderMmRoot #WayfinderMmClip #WayfinderMmPan.Anchor", this.fullAnchor(left, top));
+            this.setFullAnchor(builder, left, top);
             this.update(false, builder);
         }
     }
@@ -538,7 +537,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
         Slot[] arranged = arrangeMapSlots(this.mapLayer, map, mapCount, this.scratchPlaced, this.scratchTaken);
         int arrangedCount = 0;
         for (int i = 0; i < arranged.length; i++) if (arranged[i] != null) arrangedCount = i + 1;
-        UICommandBuilder builder = new UICommandBuilder();
+        UICommandBuilder builder = new AnchorCommandBuilder();
         boolean changed = this.applyLayer(builder, this.mapLayer, arranged, arrangedCount);
         changed |= this.applyLayer(builder, this.edgeLayer, edge, edgeCount);
         if (changed) this.update(false, builder);
@@ -638,9 +637,9 @@ public final class DynamicMinimapHud extends CustomUIHud {
         boolean imageChanged = !Objects.equals(oldPath, path);
         boolean visibilityChanged = oldVisible != visible;
         boolean anchorChanged = visible && (!oldVisible || oldLeft != left || oldTop != top || oldSize != size);
-        if (anchorChanged) builder.setObject(layer.anchorSel[slot], anchor(
+        if (anchorChanged) setAnchor(builder, layer.anchorSel[slot],
                 settings.displayCoordinate(left), settings.displayCoordinate(top),
-                settings.displaySize(size), settings.displaySize(size)));
+                settings.displaySize(size), settings.displaySize(size));
         if (imageChanged) builder.set(layer.assetSel[slot], visible ? path : blankPath);
         if (visibilityChanged) builder.set(layer.visibleSel[slot], visible);
         return anchorChanged || imageChanged || visibilityChanged;
@@ -650,7 +649,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
         this.settings.colours = colours;
         if (this.built) {
             this.overlayRevision++;
-            this.publishOverlayAsset(false);
+            this.overlayPublishPending = true;
             this.rebuildPositionLayout();
             this.invalidateMarkerSlots();
         }
@@ -665,7 +664,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
         if (this.settings.infoPanelEnabled == enabled) return;
         this.settings.infoPanelEnabled = enabled;
         if (this.built) {
-            this.publishOverlayAsset(false);
+            this.overlayPublishPending = true;
             this.rebuildPositionLayout();
         }
     }
@@ -684,7 +683,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
         this.settings.showBiome = showBiome;
 
         if (this.built) {
-            this.publishOverlayAsset(false);
+            this.overlayPublishPending = true;
             this.rebuildPositionLayout();
         }
     }
@@ -698,7 +697,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
         if (this.built) {
             // Headers are raster artwork; values are native labels. Publish the
             // matching panel before replacing both in the same layout update.
-            this.publishOverlayAsset(false);
+            this.overlayPublishPending = true;
             this.rebuildPositionLayout();
         }
     }
@@ -787,13 +786,14 @@ public final class DynamicMinimapHud extends CustomUIHud {
             return;
         }
 
+        boolean panelMoved = panel != this.infoPanelPosition;
         this.hudPositionX = x;
         this.hudPositionY = y;
         this.infoPanelPosition = panel;
         this.settings.infoPanelPosition = panel;
 
         if (this.built) {
-            this.publishOverlayAsset(false);
+            if (panelMoved) this.overlayPublishPending = true; // The overlay depends on the panel side, not X/Y.
             this.rebuildPositionLayout();
         }
     }
@@ -833,7 +833,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
             return;
         }
 
-        this.publishOverlayAsset(false);
+        this.overlayPublishPending = true;
         this.rebuildPositionLayout();
     }
 
@@ -1113,8 +1113,8 @@ public final class DynamicMinimapHud extends CustomUIHud {
                 this.settings, this.logicalUiSize, READOUT_WIDTH,
                 this.readoutHeight(), this.readoutGap(), this.frameAngle);
         if (overlay == null) return;
-        var readout = DynamicAssetPublisher.prepare(this.overlayPath, overlay.readout());
-        var frame = DynamicAssetPublisher.prepare(this.framePath, overlay.frame());
+        var readout = DynamicAssetPublisher.prepareShared(this.overlayPath, overlay.readout());
+        var frame = DynamicAssetPublisher.prepareShared(this.framePath, overlay.frame());
         String readoutPath = publishPart(this.overlayPublications, readout);
         String framePath = publishPart(this.framePublications, frame);
         if (readoutPath != null) this.displayedOverlayPath = this.overlayPath = readoutPath;
@@ -1154,8 +1154,8 @@ public final class DynamicMinimapHud extends CustomUIHud {
                 if (!this.overlayWorkAllowed()) return;
                 var image = DynamicMinimapRenderer.renderNativeHudParts(
                         snapshot, mapSize, READOUT_WIDTH, panelHeight, gap, angle);
-                var prepared = image == null ? null : DynamicAssetPublisher.prepare(path, image.readout());
-                var preparedFrame = image == null ? null : DynamicAssetPublisher.prepare(framePath, image.frame());
+                var prepared = image == null ? null : DynamicAssetPublisher.prepareShared(path, image.readout());
+                var preparedFrame = image == null ? null : DynamicAssetPublisher.prepareShared(framePath, image.frame());
                 if (!this.overlayWorkAllowed()) return;
                 this.worldExecute.accept(() -> {
                     this.overlayRenderQueued = false;
@@ -1243,7 +1243,33 @@ public final class DynamicMinimapHud extends CustomUIHud {
         return height;
     }
 
+    /** Overlay publish requested by a layout setter; applied once by applyPendingLayout(). */
+    private boolean overlayPublishPending;
+    /** Layout rebuild requested; applied once by applyPendingLayout() (world thread only). */
+    private boolean layoutRebuildPending;
+
+    /** Marks the position layout for one rebuild; several setting changes in one tick share it. */
     private void rebuildPositionLayout() {
+        if (this.built) this.layoutRebuildPending = true;
+    }
+
+    /**
+     * Applies queued layout work once: the overlay is published first, then the layout that
+     * references it is rebuilt. Called right after a tick's settings changes, and from
+     * flushPendingVisuals as a safety net.
+     */
+    public void applyPendingLayout() {
+        if (this.overlayPublishPending) {
+            this.overlayPublishPending = false;
+            this.publishOverlayAsset(false);
+        }
+        if (this.layoutRebuildPending) {
+            this.layoutRebuildPending = false;
+            this.rebuildPositionLayoutNow();
+        }
+    }
+
+    private void rebuildPositionLayoutNow() {
         if (!this.built) {
             return;
         }
@@ -1311,14 +1337,6 @@ public final class DynamicMinimapHud extends CustomUIHud {
         return settings.isCircle() ? CIRCLE_READOUT_GAP : SQUARE_READOUT_GAP;
     }
 
-    private Anchor fullAnchor(int logicalLeft, int logicalTop) {
-        return anchor(
-                this.displayCoordinate(logicalLeft),
-                this.displayCoordinate(logicalTop),
-                this.displaySize(this.bufferPixels),
-                this.displaySize(this.bufferPixels));
-    }
-
     /** Logical HUD value in display units (same rounding as DynamicMinimapSetting, used for marker updates). */
     private int displayCoordinate(int logicalValue) {
         return DapperMapUtil.scaled(logicalValue, this.interfaceScalePercent);
@@ -1327,6 +1345,69 @@ public final class DynamicMinimapHud extends CustomUIHud {
     /** Positive logical size in display units (0 stays 0, anything else at least 1). */
     private int displaySize(int logicalValue) {
         return logicalValue <= 0 ? 0 : Math.max(1, this.displayCoordinate(logicalValue));
+    }
+
+    private static final String PAN_ANCHOR = "#WayfinderMmRoot #WayfinderMmClip #WayfinderMmPan.Anchor";
+
+    /** Sets the pan group's Anchor (terrain and markers move together). */
+    private void setFullAnchor(UICommandBuilder builder, int logicalLeft, int logicalTop) {
+        int size = this.displaySize(this.bufferPixels);
+        setAnchor(builder, PAN_ANCHOR, this.displayCoordinate(logicalLeft), this.displayCoordinate(logicalTop), size, size);
+    }
+
+    /** Anchor Set via the hand-built fast path when the builder supports it, else the codec. */
+    static void setAnchor(UICommandBuilder builder, String selector, int left, int top, int width, int height) {
+        if (builder instanceof AnchorCommandBuilder fast && AnchorCommandBuilder.ENABLED) {
+            fast.setAnchor(selector, left, top, width, height);
+        } else {
+            builder.setObject(selector, anchor(left, top, width, height));
+        }
+    }
+
+    /**
+     * UICommandBuilder that adds Anchor Sets as hand-built JSON (about 15x cheaper than the
+     * Codec -> BSON -> JSON path; the output is byte-identical, checked once at class load).
+     * Only for builders holding Set commands: the extra commands are appended after the
+     * builder's own, which is order-safe because Sets on different selectors are independent.
+     */
+    static final class AnchorCommandBuilder extends UICommandBuilder {
+        static final boolean ENABLED = selfCheck();
+        private java.util.ArrayList<com.hypixel.hytale.protocol.packets.interface_.CustomUICommand> anchors;
+        private final StringBuilder json = new StringBuilder(64);
+
+        void setAnchor(String selector, int left, int top, int width, int height) {
+            if (this.anchors == null) this.anchors = new java.util.ArrayList<>(8);
+            this.anchors.add(new com.hypixel.hytale.protocol.packets.interface_.CustomUICommand(
+                    com.hypixel.hytale.protocol.packets.interface_.CustomUICommandType.Set,
+                    selector, anchorJson(this.json, left, top, width, height), null));
+        }
+
+        @Override public com.hypixel.hytale.protocol.packets.interface_.CustomUICommand[] getCommands() {
+            var own = super.getCommands();
+            if (this.anchors == null || this.anchors.isEmpty()) return own;
+            var all = java.util.Arrays.copyOf(own, own.length + this.anchors.size());
+            for (int i = 0; i < this.anchors.size(); i++) all[own.length + i] = this.anchors.get(i);
+            return all;
+        }
+
+        /** Same text UICommandBuilder.setObject produces for an Anchor (field order Left, Top, Height, Width). */
+        static String anchorJson(StringBuilder out, int left, int top, int width, int height) {
+            out.setLength(0);
+            return out.append("{\"0\": {\"Left\": ").append(left).append(", \"Top\": ").append(top)
+                    .append(", \"Height\": ").append(height).append(", \"Width\": ").append(width)
+                    .append("}}").toString();
+        }
+
+        /** Falls back to the codec for good if a future Hytale changes the Anchor JSON format. */
+        private static boolean selfCheck() {
+            try {
+                UICommandBuilder reference = new UICommandBuilder();
+                reference.setObject("#Check.Anchor", anchor(12, -34, 300, 301));
+                return anchorJson(new StringBuilder(), 12, -34, 300, 301).equals(reference.getCommands()[0].data);
+            } catch (RuntimeException failed) {
+                return false;
+            }
+        }
     }
 
     private static Anchor anchor(int left, int top, int width, int height) {

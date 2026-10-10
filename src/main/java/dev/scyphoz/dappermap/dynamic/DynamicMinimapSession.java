@@ -789,6 +789,8 @@ public final class DynamicMinimapSession {
                 this.updateRotatingFrame(Math.max(0, this.lastMapRotationBucket));
                 this.hud.setColours(this.renderedColours);
             }
+            // One overlay publish and one layout rebuild for all of this tick's setting changes.
+            this.hud.applyPendingLayout();
 
             // Switching creature dots/icons or the hostile-only filter rescans markers straight away.
             if (this.settings.creatureIcons != this.builtCreatureIcons
@@ -1057,7 +1059,7 @@ public final class DynamicMinimapSession {
         }
         String path = "UI/DapperMap/self-" + this.slug + "-" + colours.arrowKey() + "-" + bucket + ".png";
         if (!this.selfArrowDelivered[bucket]) {
-            if (!DynamicAssetPublisher.deliver(this.playerRef, path, arrows[bucket])) return;
+            if (!DynamicAssetPublisher.deliverShared(this.playerRef, path, arrows[bucket])) return;
             this.selfArrowDelivered[bucket] = true;
         }
         this.lastSelfBucket = bucket;
@@ -1073,7 +1075,7 @@ public final class DynamicMinimapSession {
         for (int bucket = 0; bucket < SELF_BUCKETS && budget > 0; bucket++) {
             if (this.selfArrowDelivered[bucket]) continue;
             String path = "UI/DapperMap/self-" + this.slug + "-" + colours.arrowKey() + "-" + bucket + ".png";
-            if (!DynamicAssetPublisher.deliver(this.playerRef, path, arrows[bucket])) return;
+            if (!DynamicAssetPublisher.deliverShared(this.playerRef, path, arrows[bucket])) return;
             this.selfArrowDelivered[bucket] = true;
             budget--;
         }
@@ -1164,7 +1166,7 @@ public final class DynamicMinimapSession {
             if (source != null) source.rememberFrame(rotationBucket, prepared); // Seed the rotation cache.
             byte[] framePng = DynamicMinimapRenderer.renderNativeHudFrame(renderSettings, renderSettings.sizePixels, mapAngle);
             if (framePng == null) return;
-            DynamicAssetPublisher.PreparedAsset preparedFrame = DynamicAssetPublisher.prepare(
+            DynamicAssetPublisher.PreparedAsset preparedFrame = DynamicAssetPublisher.prepareShared( // Cached frame bytes: remembered hash.
                     playerUp ? this.headingFramePath(renderSettings, rotationBucket)
                             : compassFramePath(prepared.path()), framePng);
             // Change signature of exactly the chunk images drawn, hashed while stitching.
@@ -1290,7 +1292,7 @@ public final class DynamicMinimapSession {
             byte[] framePng = DynamicMinimapRenderer.renderNativeHudFrame(renderSettings, renderSettings.sizePixels, mapAngle);
             if (framePng == null) return;
             // Rotation-only renders are player-up: one fixed frame path per heading.
-            DynamicAssetPublisher.PreparedAsset preparedFrame = DynamicAssetPublisher.prepare(
+            DynamicAssetPublisher.PreparedAsset preparedFrame = DynamicAssetPublisher.prepareShared( // Cached frame bytes: remembered hash.
                     this.headingFramePath(renderSettings, rotationBucket), framePng);
             executeDelivery(world, "rotation delivery", () -> {
                 if (!this.canRenderHud(renderHud)
@@ -1530,7 +1532,8 @@ public final class DynamicMinimapSession {
                         || Math.abs(clamped[1] - visibleZ) > 0.001;
                 double[] stable = this.edgeTracker.update(marker, clamped[0], clamped[1], outside,
                         this.settings.sizePixels, this.settings.shape, size, projectionTime);
-                if (outside) stable = EdgeTracker.clamp(this.settings, stable[0], stable[1], size,
+                // Only a held (previous) position needs re-clamping; a fresh one is already clamped.
+                if (outside && (stable[0] != clamped[0] || stable[1] != clamped[1])) stable = EdgeTracker.clamp(this.settings, stable[0], stable[1], size,
                         DynamicMinimapRenderer.bucketAngle(Math.max(0, this.lastMapRotationBucket)));
                 markerX = stable[0];
                 markerZ = stable[1];
@@ -1790,9 +1793,12 @@ public final class DynamicMinimapSession {
             // Intersect the bearing ray with expanded upright cardinal badge boxes.
             // Move radially inward so the marker still indicates its true direction.
             double clearance = 11 * uiScale + markerSize / 2.0D + 1;
+            // Cardinal k sits at bearing -90° + k·90° + angle; its unit vector follows from one
+            // cos/sin pair: (sin, -cos), (cos, sin), (-sin, cos), (-cos, -sin).
+            double cos = Math.cos(angle), sin = Math.sin(angle);
             for (int cardinal = 0; cardinal < 4; cardinal++) {
-                double bearing = -Math.PI / 2 + cardinal * Math.PI / 2 + angle;
-                double badgeDirectionX = Math.cos(bearing), badgeDirectionZ = Math.sin(bearing);
+                double badgeDirectionX = switch (cardinal) { case 0 -> sin; case 1 -> cos; case 2 -> -sin; default -> -cos; };
+                double badgeDirectionZ = switch (cardinal) { case 0 -> -cos; case 1 -> sin; case 2 -> cos; default -> -sin; };
                 double badgeRadius = (center - 27 * uiScale)
                         / (settings.isCircle() ? 1 : Math.max(Math.abs(badgeDirectionX), Math.abs(badgeDirectionZ)));
                 double badgeX = badgeDirectionX * badgeRadius, badgeZ = badgeDirectionZ * badgeRadius;
