@@ -17,7 +17,19 @@ import java.util.concurrent.ConcurrentMap;
 
 /** Sends generated PNG assets to a player's client and avoids retransmitting identical bytes. */
 public final class DynamicAssetPublisher {
-    private static final ConcurrentMap<UUID, ConcurrentMap<String, byte[]>> MARKER_BYTES = new ConcurrentHashMap<>();
+    /**
+     * Per-player marker images (by path) for the settings preview. Access-ordered and bounded:
+     * the least recently delivered image is dropped, so icons seen late in a session still
+     * reach the preview. Guarded by the map's own monitor.
+     */
+    private static final ConcurrentMap<UUID, Map<String, byte[]>> MARKER_BYTES = new ConcurrentHashMap<>();
+    /**
+     * Remembered SHA-256 of shared, never-modified PNG arrays (renderer caches, tinted icons).
+     * byte[] keys use identity equals/hashCode, so this is an identity map; entries vanish when
+     * the cache that owns the array drops it.
+     */
+    private static final Map<byte[], String> SHARED_HASHES =
+            java.util.Collections.synchronizedMap(new java.util.WeakHashMap<>());
     private static final int PART_SIZE = 2621440;
     private static final ConcurrentMap<UUID, ConcurrentMap<String, String>> DELIVERED = new ConcurrentHashMap<>();
 
@@ -47,6 +59,44 @@ public final class DynamicAssetPublisher {
         return path == null || data == null || data.length == 0 ? null : new PreparedAsset(path, data);
     }
 
+    /**
+     * Content hash of a shared PNG array that is reused unchanged (renderer caches, tinted
+     * icons), computed once per array. Use only for arrays that are never modified; freshly
+     * encoded images (terrain frames) should use {@link #prepare} directly.
+     */
+    public static String rememberedHash(byte[] data) {
+        String hash = SHARED_HASHES.get(data);
+        if (hash == null) {
+            // Hash outside the lock; a concurrent duplicate computes the same value.
+            hash = com.hypixel.hytale.server.core.asset.common.CommonAsset.hash(data).toLowerCase(java.util.Locale.ROOT);
+            SHARED_HASHES.put(data, hash);
+        }
+        return hash;
+    }
+
+    /** {@link #prepare} for a shared, never-modified array: its hash is remembered across calls. */
+    public static PreparedAsset prepareShared(String path, byte[] data) {
+        return path == null || data == null || data.length == 0 ? null
+                : new PreparedAsset(path, data, rememberedHash(data));
+    }
+
+    /** {@link #deliver(PlayerRef, String, byte[])} for a shared, never-modified array (remembered hash). */
+    public static boolean deliverShared(PlayerRef playerRef, String path, byte[] data) {
+        return deliverPrepared(playerRef, prepareShared(path, data), false);
+    }
+
+    /** {@link #deliverWithRebuild} for a shared, never-modified array (remembered hash). */
+    public static boolean deliverSharedWithRebuild(PlayerRef playerRef, String path, byte[] data) {
+        return deliverPrepared(playerRef, prepareShared(path, data), true);
+    }
+
+    /** True when this player's client was already sent exactly this content at this path. */
+    public static boolean isDelivered(UUID uuid, String path, String hash) {
+        if (uuid == null || path == null || hash == null) return false;
+        Map<String, String> delivered = DELIVERED.get(uuid);
+        return delivered != null && hash.equals(delivered.get(path));
+    }
+
     public static boolean deliver(PlayerRef playerRef, PreparedAsset prepared) {
         return deliverPrepared(playerRef, prepared, false);
     }
@@ -54,6 +104,10 @@ public final class DynamicAssetPublisher {
     private DynamicAssetPublisher() {
     }
 
+    /**
+     * Forgets everything recorded for a player (delivered paths and preview marker images).
+     * Call on disconnect and whenever the client may have dropped its dynamic assets.
+     */
     public static void clear(UUID uuid) {
         if (uuid != null) {
             DELIVERED.remove(uuid);
@@ -71,8 +125,10 @@ public final class DynamicAssetPublisher {
 
     public static byte[] markerBytes(UUID uuid, String path) {
         Map<String, byte[]> assets = uuid == null ? null : MARKER_BYTES.get(uuid);
-        byte[] bytes = assets == null ? null : assets.get(path);
-        return bytes; // Shared, never modified: encoded PNGs are immutable once prepared.
+        if (assets == null) return null;
+        synchronized (assets) {
+            return assets.get(path); // Shared, never modified: encoded PNGs are immutable once prepared.
+        }
     }
 
     public static boolean deliver(PlayerRef playerRef, String path, byte[] data) {
@@ -102,6 +158,7 @@ public final class DynamicAssetPublisher {
                 if (uuid != null) {
                     Map<String, String> delivered = DELIVERED.get(uuid);
                     if (delivered != null && hash.equals(delivered.get(path))) {
+                        rememberMarker(uuid, path, data); // Keep it in the preview store (refreshes its LRU position).
                         return true;
                     }
                 }
@@ -122,14 +179,7 @@ public final class DynamicAssetPublisher {
                     }
                     ServerLoad.recordAsset(data.length); // Counter only (admin stats).
 
-                    // Marker images (including creature icons) are kept for the settings preview.
-                    if (uuid != null && path.startsWith("UI/DapperMap/")
-                            && (path.contains("/mk-") || path.contains("/bettermap-")
-                            || path.contains("/worldmap-") || path.contains("/creature-"))) {
-                        Map<String, byte[]> markers = MARKER_BYTES.computeIfAbsent(uuid, ignored -> new ConcurrentHashMap<>());
-                        if (markers.size() < DynamicMinimapHud.MARKER_SLOTS || markers.containsKey(path))
-                            markers.put(path, data); // Reference, not a copy: the bytes are immutable.
-                    }
+                    rememberMarker(uuid, path, data);
 
                     if (rebuildCommonAssets) {
                         packetHandler.writeNoCache(new RequestCommonAssetsRebuild());
@@ -149,6 +199,26 @@ public final class DynamicAssetPublisher {
         } else {
             return false;
         }
+    }
+
+    /** Marker images (including creature icons) are kept, by reference, for the settings preview. */
+    private static void rememberMarker(UUID uuid, String path, byte[] data) {
+        if (uuid == null || !path.startsWith("UI/DapperMap/")
+                || !(path.contains("/mk-") || path.contains("/bettermap-")
+                || path.contains("/worldmap-") || path.contains("/creature-"))) return;
+        Map<String, byte[]> markers = MARKER_BYTES.computeIfAbsent(uuid, ignored -> newMarkerStore());
+        synchronized (markers) {
+            markers.put(path, data); // Reference, not a copy: the bytes are immutable.
+        }
+    }
+
+    /** Access-ordered marker image store that drops its least recently used entry beyond the slot count. */
+    private static Map<String, byte[]> newMarkerStore() {
+        return new LinkedHashMap<>(64, 0.75F, true) {
+            @Override protected boolean removeEldestEntry(Map.Entry<String, byte[]> eldest) {
+                return size() > DynamicMinimapHud.MARKER_SLOTS;
+            }
+        };
     }
 
     private static byte[][] splitBytes(byte[] data, int partSize) {

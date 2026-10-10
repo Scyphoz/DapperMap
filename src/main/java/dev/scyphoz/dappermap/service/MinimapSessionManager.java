@@ -4,6 +4,7 @@ import com.hypixel.hytale.server.core.entity.entities.Player;
 import com.hypixel.hytale.server.core.universe.PlayerRef;
 import dev.scyphoz.dappermap.DapperMap;
 import dev.scyphoz.dappermap.config.MinimapConfig;
+import dev.scyphoz.dappermap.dynamic.DynamicAssetPublisher;
 import dev.scyphoz.dappermap.dynamic.DynamicMinimapSession;
 import dev.scyphoz.dappermap.dynamic.DynamicMinimapSetting;
 import dev.scyphoz.dappermap.dynamic.DynamicMinimapSettingsStore;
@@ -38,6 +39,14 @@ public class MinimapSessionManager {
     public void showIfEnabledByDefault(Player player, PlayerRef playerRef, MinimapConfig config) {
         DynamicMinimapSetting settings = this.getSettings(playerRef.getUuid(), config);
         if (settings.enabled) {
+            // PlayerReadyEvent fires on every world join (and after Universe.resetPlayer). A running
+            // session for the same PlayerRef follows the player across worlds itself, so rebuild its
+            // client-side HUD in place instead of a full stop/start (blank map, asset resends).
+            DynamicMinimapSession live = this.sessionsByPlayer.get(playerRef.getUuid());
+            if (live != null && live.isRunning() && live.playerRef() == playerRef) {
+                live.resyncClient();
+                return;
+            }
             this.start(playerRef, settings);
         }
 
@@ -163,6 +172,7 @@ public class MinimapSessionManager {
             DynamicMinimapSetting own = this.settingsByPlayer.get(uuid);
             if (own != null) target.copyFrom(liveSettings(own)); // Same field list as copy().
         }
+        session.requestPromptTick(); // Idle players would otherwise see the change up to a marker interval late.
     }
 
     /** Number of players with a running minimap. */
@@ -220,6 +230,8 @@ public class MinimapSessionManager {
             UUID uuid = playerRef.getUuid();
             this.save(uuid);
             this.stop(uuid, false);
+            // Settings-page previews record delivered assets even with the minimap off; drop them.
+            DynamicAssetPublisher.clear(uuid);
             // Drop every cached copy so the next join re-reads from disk, or re-derives from
             // the admin defaults as they stand at that moment.
             this.settingsByPlayer.remove(uuid);

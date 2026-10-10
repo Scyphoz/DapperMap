@@ -59,6 +59,8 @@ public final class DapperMapSettingsPage
     );
 
     private static final Row[] ROWS;
+    /** Ids of the player-setting dropdown rows (server-limit rows are handled separately). */
+    private static final java.util.Set<String> DROPDOWN_IDS;
     private final PlayerRef playerRef;
     private final MinimapSessionManager sessions;
     private final MinimapConfig config;
@@ -69,7 +71,17 @@ public final class DapperMapSettingsPage
     private volatile int previewRequest = 0;
     private volatile boolean closed = false;
     private final java.util.concurrent.atomic.AtomicBoolean previewQueued = new java.util.concurrent.atomic.AtomicBoolean();
-    private String lastPreviewHash, lastPreviewPath;
+    private String lastPreviewPath;
+    /** Next of the 16 preview slot paths to overwrite with a new image (world thread). */
+    private int nextPreviewSlot = 0;
+    /** When the last preview render was admitted; renders are paced to PREVIEW_MIN_INTERVAL_MS. */
+    private long lastPreviewStartMs = 0L;
+    /** A paced preview is waiting on DapperMap's heartbeat thread. */
+    private final java.util.concurrent.atomic.AtomicBoolean previewTimerPending = new java.util.concurrent.atomic.AtomicBoolean();
+    private static final long PREVIEW_MIN_INTERVAL_MS = 150L;
+    private static final int PREVIEW_SLOTS = 16;
+    /** Per-event memo of setting permissions (null outside an event): each node is checked once per click. */
+    private java.util.Map<String, Boolean> permissionMemo;
     private World previewWorld;
     private DynamicMinimapRenderer.LiveSnapshot previewSnapshot;
     /** Unsaved working copy used by the settings UI and live preview. */
@@ -126,6 +138,16 @@ public final class DapperMapSettingsPage
             UIEventBuilder events,
             Store<EntityStore> store
     ) {
+        this.permissionMemo = new java.util.HashMap<>(); // Each node checked once per build.
+        try {
+            this.buildPage(ref, builder, events, store);
+        } finally {
+            this.permissionMemo = null;
+        }
+    }
+
+    private void buildPage(Ref<EntityStore> ref, UICommandBuilder builder, UIEventBuilder events,
+                           Store<EntityStore> store) {
         if (this.adminMode && !this.playerRef.hasPermission(ADMIN_PERMISSION)) return;
         this.previewWorld = store.getExternalData().getWorld();
         if (this.draftSettings == null) {
@@ -178,7 +200,7 @@ public final class DapperMapSettingsPage
                 this.activeTab != Tab.COLOURS && this.activeTab != Tab.POSITION);
         builder.set("#DapperMapColourEditor.Visible", this.activeTab == Tab.COLOURS);
         builder.set("#DapperMapPositionEditor.Visible", this.activeTab == Tab.POSITION);
-        builder.set("#PageSectionTitle.Text", this.activeTab.label.toUpperCase());
+        builder.set("#PageSectionTitle.Text", this.activeTab.label.toUpperCase(java.util.Locale.ROOT));
         String sectionDescription = switch (this.activeTab) {
             case DISPLAY -> "Customize how DapperMap appears in-game.";
             case MARKERS -> "Choose the navigation markers shown on your minimap.";
@@ -281,6 +303,11 @@ public final class DapperMapSettingsPage
         builder.set("#PositionSummary.Text",
                 positionName(settings.hudPositionX, settings.hudPositionY)
                         + "   •   " + settings.hudPositionX + "% / " + settings.hudPositionY + "%");
+        this.updatePositionGrid(builder, settings);
+    }
+
+    /** The 3x3 quick-position grid: highlight and colour the stop nearest the current position. */
+    private void updatePositionGrid(UICommandBuilder builder, DynamicMinimapSetting settings) {
         int selectedX = nearestPositionStop(settings.hudPositionX);
         int selectedY = nearestPositionStop(settings.hudPositionY);
         for (int row = 0; row < POSITION_STOPS.length; row++) {
@@ -294,6 +321,22 @@ public final class DapperMapSettingsPage
                                 .color(selected ? VIOLET : MUTED));
             }
         }
+    }
+
+    /**
+     * Slider move: re-sends only the moved row's value label and the summary; the 3x3 grid
+     * (18 commands) only when its selected stop changes. The slider already shows its value.
+     */
+    private void updatePositionSlider(UICommandBuilder builder, DynamicMinimapSetting settings, int index,
+                                      int previousX, int previousY) {
+        int value = index == 0 ? settings.hudPositionX : settings.hudPositionY;
+        builder.set("#PositionFineTuneList[" + index + "] #ValueLabel.Text", value + "%");
+        builder.set("#PositionSummary.Text",
+                positionName(settings.hudPositionX, settings.hudPositionY)
+                        + "   •   " + settings.hudPositionX + "% / " + settings.hudPositionY + "%");
+        if (nearestPositionStop(previousX) != nearestPositionStop(settings.hudPositionX)
+                || nearestPositionStop(previousY) != nearestPositionStop(settings.hudPositionY))
+            this.updatePositionGrid(builder, settings);
     }
 
     private void updatePreview(UICommandBuilder ui, DynamicMinimapSetting settings) {
@@ -317,7 +360,17 @@ public final class DapperMapSettingsPage
             ui.set("#PreviewDisabled.Visible", true);
         }
         World world = this.previewWorld;
-        if (world == null || this.closed || !this.previewQueued.compareAndSet(false, true)) return;
+        if (world == null || this.closed) return;
+        // Pace renders while sliders or the colour picker are dragged; the newest draft is
+        // always rendered when the timer fires (it re-enters updatePreview on the world thread).
+        long waitMs = this.lastPreviewStartMs + PREVIEW_MIN_INTERVAL_MS - System.currentTimeMillis();
+        if (waitMs > 0) {
+            this.schedulePacedPreview(world, waitMs);
+            return;
+        }
+        if (!this.previewQueued.compareAndSet(false, true)) return;
+        this.lastPreviewStartMs = System.currentTimeMillis();
+        ++this.previewRevision;
         DynamicMinimapSetting draft = settings.copy();
         // In Icons mode the live creature icons are drawn from the HUD snapshot itself, so the
         // preview's sample threat-colour dots (shown only for showEntities) are skipped.
@@ -327,7 +380,7 @@ public final class DapperMapSettingsPage
         DynamicMinimapRenderer.LiveSnapshot snapshot = this.previewSnapshot;
         boolean position = this.activeTab == Tab.POSITION;
         String slug = dev.scyphoz.dappermap.util.DapperMapUtil.playerSlug(this.playerRef.getUuid());
-        String path = "UI/DapperMap/settings-preview-" + slug + "-" + ((++this.previewRevision) & 15) + ".png";
+        String path = previewSlotPath(slug, 0); // Final slot chosen on delivery (see showPreview).
         if (!DynamicMinimapSession.renderAsync(() -> {
             if (this.closed) { this.previewQueued.set(false); return; }
             try {
@@ -345,12 +398,9 @@ public final class DapperMapSettingsPage
                         return;
                     }
                     if (prepared == null) return;
-                    boolean reused = prepared.hash().equals(this.lastPreviewHash);
-                    if (reused || DynamicAssetPublisher.deliver(this.playerRef, prepared)) {
-                        if (!reused) {
-                            this.lastPreviewHash = prepared.hash();
-                            this.lastPreviewPath = prepared.path();
-                        }
+                    String shown = this.publishPreview(slug, prepared);
+                    if (shown != null) {
+                        this.lastPreviewPath = shown;
                         UICommandBuilder update = new UICommandBuilder();
                         update.set("#PreviewHudImage.AssetPath", this.lastPreviewPath);
                         update.set("#PreviewHudImage.Visible", true);
@@ -363,6 +413,47 @@ public final class DapperMapSettingsPage
                 if (!DynamicMinimapSession.isStoppedWorldException(failure)) throw failure;
             }
         })) this.previewQueued.set(false);
+    }
+
+    private static String previewSlotPath(String slug, int slot) {
+        return "UI/DapperMap/settings-preview-" + slug + "-" + slot + ".png";
+    }
+
+    /**
+     * Shows a rendered preview: reuses any of the 16 slot paths whose image the client already
+     * holds (the publisher's delivered records are the source of truth, so teleports and world
+     * changes are handled), otherwise sends it to the next slot. Returns the path, or null. World thread.
+     */
+    private String publishPreview(String slug, DynamicAssetPublisher.PreparedAsset prepared) {
+        java.util.UUID uuid = this.playerRef.getUuid();
+        for (int slot = 0; slot < PREVIEW_SLOTS; slot++) {
+            String candidate = previewSlotPath(slug, slot);
+            if (DynamicAssetPublisher.isDelivered(uuid, candidate, prepared.hash())) return candidate;
+        }
+        var publication = prepared.withPath(previewSlotPath(slug, this.nextPreviewSlot));
+        if (!DynamicAssetPublisher.deliver(this.playerRef, publication)) return null;
+        this.nextPreviewSlot = (this.nextPreviewSlot + 1) % PREVIEW_SLOTS;
+        return publication.path();
+    }
+
+    /** Runs updatePreview again once the pacing interval has passed (one timer at a time). */
+    private void schedulePacedPreview(World world, long delayMs) {
+        if (!this.previewTimerPending.compareAndSet(false, true)) return;
+        try {
+            DynamicMinimapSession.heartbeat().schedule(() -> {
+                try {
+                    world.execute(() -> {
+                        this.previewTimerPending.set(false);
+                        if (this.closed || this.previewWorld != world || this.draftSettings == null) return;
+                        this.updatePreview(new UICommandBuilder(), this.draftSettings);
+                    });
+                } catch (RuntimeException stoppedWorld) {
+                    this.previewTimerPending.set(false);
+                }
+            }, delayMs, java.util.concurrent.TimeUnit.MILLISECONDS);
+        } catch (RuntimeException rejected) {
+            this.previewTimerPending.set(false); // Heartbeat stopped (plugin shutting down).
+        }
     }
 
     @Override public void onDismiss(Ref<EntityStore> ref, Store<EntityStore> store) {
@@ -379,7 +470,7 @@ public final class DapperMapSettingsPage
             boolean selected = tab == this.activeTab;
             builder.set("#DapperMapTab" + tab.uiLabel + "Active.Visible", selected);
             builder.set("#DapperMapTab" + tab.uiLabel + "Label.TextSpans",
-                    Message.raw(tab.label.toUpperCase()).color(selected ? VIOLET
+                    Message.raw(tab.label.toUpperCase(java.util.Locale.ROOT)).color(selected ? VIOLET
                             : this.canOpenTab(tab) ? MUTED : new Color(0x555B6D)));
         }
     }
@@ -432,8 +523,11 @@ public final class DapperMapSettingsPage
 
     /** Returns whether this page may edit the named player-setting permission. */
     private boolean hasSettingPermission(String permission) {
-        return this.adminMode || permission == null
-                || this.playerRef.hasPermission(DapperMapPermissions.player(permission));
+        if (this.adminMode || permission == null) return true;
+        java.util.Map<String, Boolean> memo = this.permissionMemo;
+        if (memo == null) return this.playerRef.hasPermission(DapperMapPermissions.player(permission));
+        return memo.computeIfAbsent(permission,
+                node -> this.playerRef.hasPermission(DapperMapPermissions.player(node)));
     }
 
     private boolean canOpenTab(Tab tab) {
@@ -639,6 +733,16 @@ public final class DapperMapSettingsPage
             Store<EntityStore> store,
             Ev event
     ) {
+        // Permissions are still read fresh on every event, but each node only once per event.
+        this.permissionMemo = new java.util.HashMap<>();
+        try {
+            this.handleEvent(ref, store, event);
+        } finally {
+            this.permissionMemo = null;
+        }
+    }
+
+    private void handleEvent(Ref<EntityStore> ref, Store<EntityStore> store, Ev event) {
         String action = event.action;
         this.previewWorld = store.getExternalData().getWorld();
         // BetterMap cave availability is checked once in build(): it is a reflective plugin
@@ -715,8 +819,8 @@ public final class DapperMapSettingsPage
             UICommandBuilder navBuilder = new UICommandBuilder();
             UIEventBuilder navEvents = new UIEventBuilder();
             this.renderList(navBuilder, navEvents, current);
-            this.refreshColourEditor(navBuilder, current, true);
-            this.updatePositionEditor(navBuilder, current, true);
+            // The hidden colour and position editors are already in sync: every action that changes
+            // colours or position refreshes them (and build/reset send a full refresh).
             if (previewModeChanged) this.updatePreview(navBuilder, current);
             this.updateTabVisibility(navBuilder);
             this.updateEditorAvailability(navBuilder, current);
@@ -767,6 +871,8 @@ public final class DapperMapSettingsPage
         String rowId = null;
         boolean[] disabledBefore = null;
         List<String> entriesBefore = null;
+        // Position before a slider move: only the 3x3 grid's selection may need re-sending.
+        int previousX = settings.hudPositionX, previousY = settings.hudPositionY;
 
         if (!settings.enabled
                 && !"toggle_enabled".equals(action)
@@ -820,6 +926,8 @@ public final class DapperMapSettingsPage
             );
 
         } else if (action.startsWith("dropdown_")) {
+            // Ignore ids that are not dropdown rows (a malformed or forged event must not throw).
+            if (!DROPDOWN_IDS.contains(action.substring("dropdown_".length()))) return;
             // Cheap value check first; the entry list is only built when the value is unchanged.
             if (event.value != null && event.value.equals(dropdownValue(action.substring("dropdown_".length()), settings))
                     && dropdownEntries(action.substring("dropdown_".length()), settings).stream()
@@ -845,8 +953,10 @@ public final class DapperMapSettingsPage
 
         if (action.startsWith("colour_")) {
             this.refreshColourEditor(builder, settings, !"colour_value".equals(action));
+        } else if (action.startsWith("position_slider_")) {
+            this.updatePositionSlider(builder, settings, "position_slider_x".equals(action) ? 0 : 1, previousX, previousY);
         } else if (action.startsWith("position_")) {
-            this.updatePositionEditor(builder, settings, !action.startsWith("position_slider_"));
+            this.updatePositionEditor(builder, settings, true);
         } else if (rowId != null && java.util.Arrays.equals(disabledBefore, this.disabledRows(settings))
                 && (entriesBefore == null || entriesBefore.equals(this.entryValues(rowId, settings)))) {
             // No other row changed state: update only this row instead of rebuilding the list.
@@ -1416,6 +1526,9 @@ public final class DapperMapSettingsPage
                 new Row("bettermap_markers", "BetterMap Markers", Kind.DROPDOWN),
                 new Row("bettermap_caves", "BetterMap Cave Mode", Kind.DROPDOWN)
         };
+        java.util.Set<String> dropdowns = new java.util.HashSet<>();
+        for (Row row : ROWS) if (row.kind == Kind.DROPDOWN && !isLimitRow(row.id)) dropdowns.add(row.id);
+        DROPDOWN_IDS = java.util.Set.copyOf(dropdowns);
     }
 
     public static final class Ev {

@@ -5,6 +5,7 @@ import com.google.gson.JsonObject;
 import com.hypixel.hytale.server.core.asset.common.CommonAsset;
 import com.hypixel.hytale.server.core.asset.common.CommonAssetRegistry;
 import java.awt.image.BufferedImage;
+import java.awt.image.IndexColorModel;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.file.AtomicMoveNotSupportedException;
@@ -114,6 +115,20 @@ public final class DapperMapUtil {
      * at the configured deflate level.
      */
     public static byte[] encodePng(BufferedImage image, int initialCapacity) {
+        // Palette images: DapperMap's own writer (see IndexedPng). Anything it declines uses ImageIO.
+        if (image.getColorModel() instanceof IndexColorModel && IndexedPng.VERIFIED) {
+            try {
+                byte[] png = IndexedPng.encode(image, initialCapacity, pngCompression);
+                if (png != null) return png;
+            } catch (RuntimeException ignored) {
+                // Fall through to ImageIO.
+            }
+        }
+        return encodePngImageIO(image, initialCapacity);
+    }
+
+    /** PNG bytes through ImageIO at the configured deflate level, or null on failure. */
+    private static byte[] encodePngImageIO(BufferedImage image, int initialCapacity) {
         javax.imageio.ImageWriter writer = null;
         try {
             var writers = ImageIO.getImageWritersByFormatName("png");
@@ -133,6 +148,193 @@ public final class DapperMapUtil {
             return null;
         } finally {
             if (writer != null) writer.dispose();
+        }
+    }
+
+    /**
+     * Minimal PNG writer for palette images (colour type 3, bit depth 1/2/4/8).
+     *
+     * <p>Why: the JDK's PNG writer runs its adaptive row filters (Sub/Up/Average/Paeth) only on
+     * palette images ({@code RowFilter.filterRow} returns filter 0 for every other colour type).
+     * Filtering palette indices works against deflate: measured on map frames, filter None
+     * gives 25-39% smaller files and encodes about twice as fast. Pixels are identical.
+     *
+     * <p>Translucent palette entries are written first (as the JDK does), so the tRNS chunk only
+     * lists them. Images whose raster is not the plain packed layout return null (ImageIO is
+     * used instead). Stateless and thread-safe; the Deflater is per call and always ended.
+     */
+    static final class IndexedPng {
+        private static final byte[] SIGNATURE = {(byte)137, 80, 78, 71, 13, 10, 26, 10};
+        private static final int IDAT_CHUNK = 32768;
+        private static final byte[] NO_DATA = new byte[0];
+        /** Startup round-trip self-test passed; false keeps every image on ImageIO. */
+        static final boolean VERIFIED = selfTest();
+
+        private IndexedPng() {
+        }
+
+        /** PNG bytes, or null when the image is not a plainly laid out palette image. */
+        static byte[] encode(BufferedImage image, int initialCapacity, int level) {
+            if (!(image.getColorModel() instanceof IndexColorModel palette)) return null;
+            int bits = palette.getPixelSize();
+            if (bits != 1 && bits != 2 && bits != 4 && bits != 8) return null;
+            int entries = palette.getMapSize();
+            if (entries < 1 || entries > (1 << bits)) return null;
+            int width = image.getWidth(), height = image.getHeight();
+            int stride = (width * bits + 7) / 8;
+            byte[] indices = packedIndices(image, bits, stride);
+            if (indices == null) return null;
+
+            // Palette order: translucent entries first (8-bit only; sub-byte palettes are tiny).
+            int[] order = new int[entries]; // order[newIndex] = original index
+            int translucent = 0;
+            byte[] remap = null;
+            if (bits == 8) {
+                for (int i = 0; i < entries; i++) if (palette.getAlpha(i) < 255) order[translucent++] = i;
+                int next = translucent;
+                for (int i = 0; i < entries; i++) if (palette.getAlpha(i) == 255) order[next++] = i;
+                boolean identity = true;
+                for (int i = 0; i < entries; i++) identity &= order[i] == i;
+                if (!identity) {
+                    remap = new byte[256];
+                    for (int i = 0; i < entries; i++) remap[order[i]] = (byte)i;
+                }
+            } else {
+                for (int i = 0; i < entries; i++) {
+                    order[i] = i;
+                    if (palette.getAlpha(i) < 255) translucent = i + 1; // tRNS runs to the last translucent entry.
+                }
+            }
+
+            ByteArrayOutputStream out = new ByteArrayOutputStream(Math.max(256, initialCapacity));
+            out.writeBytes(SIGNATURE);
+            byte[] header = new byte[13];
+            putInt(header, 0, width);
+            putInt(header, 4, height);
+            header[8] = (byte)bits;
+            header[9] = 3; // Colour type 3: palette. Compression, filter and interlace stay 0.
+            chunk(out, "IHDR", header, 13);
+            byte[] rgb = new byte[entries * 3];
+            for (int i = 0; i < entries; i++) {
+                int argb = palette.getRGB(order[i]);
+                rgb[i * 3] = (byte)(argb >>> 16);
+                rgb[i * 3 + 1] = (byte)(argb >>> 8);
+                rgb[i * 3 + 2] = (byte)argb;
+            }
+            chunk(out, "PLTE", rgb, rgb.length);
+            if (translucent > 0) {
+                byte[] alphas = new byte[translucent];
+                for (int i = 0; i < translucent; i++) alphas[i] = (byte)palette.getAlpha(order[i]);
+                chunk(out, "tRNS", alphas, translucent);
+            }
+
+            // Image data: each scanline is filter byte 0 (None) followed by the packed indices.
+            java.util.zip.Deflater deflater = new java.util.zip.Deflater(clamp(level, 1, 9));
+            try {
+                byte[] scanline = new byte[stride + 1];
+                byte[] idat = new byte[IDAT_CHUNK];
+                int used = 0;
+                for (int y = 0; y < height; y++) {
+                    int rowStart = y * stride;
+                    if (remap == null) System.arraycopy(indices, rowStart, scanline, 1, stride);
+                    else for (int x = 0; x < stride; x++) scanline[x + 1] = remap[indices[rowStart + x] & 0xFF];
+                    deflater.setInput(scanline);
+                    while (!deflater.needsInput()) {
+                        used += deflater.deflate(idat, used, IDAT_CHUNK - used);
+                        if (used == IDAT_CHUNK) { chunk(out, "IDAT", idat, used); used = 0; }
+                    }
+                }
+                deflater.finish();
+                while (!deflater.finished()) {
+                    used += deflater.deflate(idat, used, IDAT_CHUNK - used);
+                    if (used == IDAT_CHUNK) { chunk(out, "IDAT", idat, used); used = 0; }
+                }
+                if (used > 0) chunk(out, "IDAT", idat, used);
+            } finally {
+                deflater.end();
+            }
+            chunk(out, "IEND", NO_DATA, 0);
+            return out.toByteArray();
+        }
+
+        /**
+         * The raster's packed index bytes when they are laid out exactly as PNG scanlines
+         * (one bank, no offsets, no sub-image translation, MSB-first rows of {@code stride}
+         * bytes), else null.
+         */
+        private static byte[] packedIndices(BufferedImage image, int bits, int stride) {
+            java.awt.image.WritableRaster raster = image.getRaster();
+            if (raster.getMinX() != 0 || raster.getMinY() != 0
+                    || raster.getSampleModelTranslateX() != 0 || raster.getSampleModelTranslateY() != 0
+                    || raster.getNumBands() != 1) return null;
+            if (!(raster.getDataBuffer() instanceof java.awt.image.DataBufferByte buffer)
+                    || buffer.getNumBanks() != 1 || buffer.getOffset() != 0) return null;
+            java.awt.image.SampleModel model = raster.getSampleModel();
+            if (model instanceof java.awt.image.MultiPixelPackedSampleModel packed) {
+                if (packed.getPixelBitStride() != bits || packed.getScanlineStride() != stride
+                        || packed.getDataBitOffset() != 0) return null;
+            } else if (model instanceof java.awt.image.PixelInterleavedSampleModel interleaved) {
+                if (bits != 8 || interleaved.getPixelStride() != 1 || interleaved.getScanlineStride() != stride
+                        || interleaved.getBandOffsets()[0] != 0) return null;
+            } else {
+                return null;
+            }
+            byte[] data = buffer.getData();
+            return data.length >= (long)stride * image.getHeight() ? data : null;
+        }
+
+        private static void putInt(byte[] target, int offset, int value) {
+            target[offset] = (byte)(value >>> 24);
+            target[offset + 1] = (byte)(value >>> 16);
+            target[offset + 2] = (byte)(value >>> 8);
+            target[offset + 3] = (byte)value;
+        }
+
+        /** One PNG chunk: length, type, data, CRC-32 of type and data. */
+        private static void chunk(ByteArrayOutputStream out, String type, byte[] data, int length) {
+            byte[] typeBytes = type.getBytes(java.nio.charset.StandardCharsets.US_ASCII);
+            byte[] number = new byte[4];
+            putInt(number, 0, length);
+            out.writeBytes(number);
+            out.writeBytes(typeBytes);
+            out.write(data, 0, length);
+            java.util.zip.CRC32 crc = new java.util.zip.CRC32();
+            crc.update(typeBytes);
+            crc.update(data, 0, length);
+            putInt(number, 0, (int)crc.getValue());
+            out.writeBytes(number);
+        }
+
+        /**
+         * Encodes small 1/2/4/8-bit test images (odd widths, translucent entries in the middle
+         * of the palette) and checks that ImageIO decodes exactly the same pixels.
+         */
+        private static boolean selfTest() {
+            try {
+                int[] colours = {0xFF102030, 0x800A1218, 0xFFE0C040, 0x00000000, 0xEB0A1218, 0xFF4F8A3A,
+                        0xFFFFFFFF, 0x40FF0000, 0xFF000000, 0xFF123456, 0xFF654321, 0xFFABCDEF,
+                        0xFF00FF00, 0x7F7F7F7F, 0xFF0000FF, 0xFFFF00FF};
+                for (int bits : new int[]{1, 2, 4, 8}) {
+                    int entries = Math.min(1 << bits, colours.length);
+                    var model = new IndexColorModel(bits, entries, colours, 0, true, -1,
+                            java.awt.image.DataBuffer.TYPE_BYTE);
+                    BufferedImage image = new BufferedImage(37, 5,
+                            bits == 8 ? BufferedImage.TYPE_BYTE_INDEXED : BufferedImage.TYPE_BYTE_BINARY, model);
+                    var raster = image.getRaster();
+                    for (int y = 0; y < 5; y++)
+                        for (int x = 0; x < 37; x++) raster.setSample(x, y, 0, (x * 7 + y * 3) % entries);
+                    byte[] png = encode(image, 256, DEFAULT_PNG_COMPRESSION);
+                    if (png == null) return false;
+                    BufferedImage decoded = ImageIO.read(new java.io.ByteArrayInputStream(png));
+                    if (decoded == null) return false;
+                    for (int y = 0; y < 5; y++)
+                        for (int x = 0; x < 37; x++)
+                            if (decoded.getRGB(x, y) != image.getRGB(x, y)) return false;
+                }
+                return true;
+            } catch (Exception | LinkageError failed) {
+                return false;
+            }
         }
     }
 

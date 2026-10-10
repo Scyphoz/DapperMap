@@ -21,6 +21,13 @@ public final class DynamicMinimapSettingsStore {
      */
     private final ConcurrentHashMap<UUID, DynamicMinimapSetting> pendingWrites = new ConcurrentHashMap<>();
     private static final DynamicMinimapSetting DELETE = new DynamicMinimapSetting();
+    /**
+     * The exact text of each player's file as last written or read, so an unchanged save (every
+     * disconnect and shutdown) skips the disk. Updated together with the file under fileLock.
+     */
+    private final ConcurrentHashMap<UUID, String> lastWritten = new ConcurrentHashMap<>();
+    /** Pairs each file read or write with its lastWritten update, so the two never disagree. */
+    private final Object fileLock = new Object();
     /** One background thread per store: settings files are never written on a world thread. */
     private final java.util.concurrent.ExecutorService writer = java.util.concurrent.Executors.newSingleThreadExecutor(
             DapperMapUtil.daemonThreads("DapperMap-Settings-IO"));
@@ -53,6 +60,7 @@ public final class DynamicMinimapSettingsStore {
         if (uuid != null) {
             this.cache.remove(uuid);
             this.hasFile.remove(uuid);
+            this.lastWritten.remove(uuid);
         }
     }
 
@@ -91,8 +99,14 @@ public final class DynamicMinimapSettingsStore {
         DynamicMinimapSetting snapshot = this.pendingWrites.remove(uuid);
         if (snapshot == null) return;
         try {
-            if (snapshot == DELETE) Files.deleteIfExists(this.file(uuid));
-            else this.write(uuid, snapshot);
+            synchronized (this.fileLock) {
+                if (snapshot == DELETE) {
+                    this.lastWritten.remove(uuid); // A later save must write again.
+                    Files.deleteIfExists(this.file(uuid));
+                } else {
+                    this.write(uuid, snapshot);
+                }
+            }
         } catch (IOException | RuntimeException ignored) {
             // A failed write keeps the in-memory settings; the next change writes again.
         }
@@ -111,8 +125,16 @@ public final class DynamicMinimapSettingsStore {
 
     /** Writes one player's settings file (temp file + atomic move, so a crash never leaves half a file). */
     private void write(UUID uuid, DynamicMinimapSetting settings) throws IOException {
-        // Locale.ROOT: numbers are always written with ASCII digits, which load() expects.
-        DapperMapUtil.writeAtomically(this.file(uuid), String.format(java.util.Locale.ROOT,
+        String json = json(settings);
+        if (json.equals(this.lastWritten.get(uuid))) return; // File already holds exactly this.
+        this.lastWritten.remove(uuid); // Unknown state if the write below fails.
+        DapperMapUtil.writeAtomically(this.file(uuid), json.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        this.lastWritten.put(uuid, json);
+    }
+
+    /** The settings file text (Locale.ROOT: numbers always use ASCII digits, which load() expects). */
+    private static String json(DynamicMinimapSetting settings) {
+        return String.format(java.util.Locale.ROOT,
                 "{\n"
                         + "  \"enabled\": %s,\n"
                         + "  \"rotationMode\": %d,\n"
@@ -178,7 +200,7 @@ public final class DynamicMinimapSettingsStore {
                 settings.betterMapMarkersEnabled,
                 settings.betterMapCaveModeEnabled,
                 colourFields(settings.colours)
-        ).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        );
     }
 
     private DynamicMinimapSetting load(UUID uuid, DynamicMinimapSetting defaults) {
@@ -192,7 +214,12 @@ public final class DynamicMinimapSettingsStore {
             this.hasFile.put(uuid, exists);
             if (exists) {
                 try {
-                    java.util.Map<String, String> json = fields(Files.readString(file));
+                    String text;
+                    synchronized (this.fileLock) { // Never between a write and its lastWritten update.
+                        text = Files.readString(file);
+                        this.lastWritten.put(uuid, text);
+                    }
+                    java.util.Map<String, String> json = fields(text);
                     for (MinimapColours.Key key : MinimapColours.Key.values()) {
                         Integer rgb = extractColour(json, "colour_" + key.id);
                         if (rgb != null) settings.colours = settings.colours.with(key, rgb);

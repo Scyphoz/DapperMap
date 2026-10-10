@@ -315,34 +315,49 @@ public final class BetterMapIntegration {
             return entry.future.getNow(null);
         }
 
-        public synchronized V request(K key, Supplier<CompletableFuture<V>> start) {
-            V cached=peek(key);
-            if(cached!=null || entries.containsKey(key)) return cached;
-            long now=clock.getAsLong();
-            if(now-windowStart>=windowMs) { windowStart=now; starts=0; }
-            if(pending>=maxPending || starts>=startsPerWindow) return null;
-            if(entries.size()>=capacity) {
-                var iterator=entries.entrySet().iterator();
-                boolean removed=false;
-                while(iterator.hasNext()) {
-                    if(iterator.next().getValue().future.isDone()) {iterator.remove();removed=true;break;}
+        /**
+         * Starts (or returns) the image for {@code key}. A slot is reserved under the lock, but the
+         * builder ({@code start}, BetterMap code that touches the chunk store) runs outside it, so
+         * other render threads and the signature probe never wait behind a BetterMap build.
+         */
+        public V request(K key, Supplier<CompletableFuture<V>> start) {
+            Entry<V> placeholder;
+            synchronized (this) {
+                V cached=peek(key);
+                if(cached!=null || entries.containsKey(key)) return cached;
+                long now=clock.getAsLong();
+                if(now-windowStart>=windowMs) { windowStart=now; starts=0; }
+                if(pending>=maxPending || starts>=startsPerWindow) return null;
+                if(entries.size()>=capacity) {
+                    var iterator=entries.entrySet().iterator();
+                    boolean removed=false;
+                    while(iterator.hasNext()) {
+                        if(iterator.next().getValue().future.isDone()) {iterator.remove();removed=true;break;}
+                    }
+                    if(!removed) return null;
                 }
-                if(!removed) return null;
+                ++starts; ++pending;
+                // Reserve the key: concurrent requests see it as pending and do not start a second build.
+                placeholder=new Entry<>(new CompletableFuture<>());
+                entries.put(key,placeholder);
             }
-            ++starts; ++pending;
             CompletableFuture<V> future;
             try { future=start.get(); if(future==null) throw new IllegalStateException("Missing image future"); }
-            catch(RuntimeException e) {--pending;return null;}
-            Entry<V> entry=new Entry<>(future);
-            entries.put(key,entry);
+            catch(RuntimeException e) {
+                synchronized (this) { --pending; entries.remove(key,placeholder); } // Identity: never a newer entry.
+                return null;
+            }
             future.whenComplete((value,error)-> {
                 synchronized(this) {
                     --pending;
-                    entry.completedAt=clock.getAsLong();
-                    if(error!=null || value==null) entries.remove(key,entry);
+                    placeholder.completedAt=clock.getAsLong();
+                    // Identity remove: a clear()/removeIf racing this build must not drop a newer entry.
+                    if(error!=null || value==null) entries.remove(key,placeholder);
                 }
+                // Completed outside the lock; peek reads the placeholder's result.
+                if(error!=null) placeholder.future.completeExceptionally(error); else placeholder.future.complete(value);
             });
-            return peek(key);
+            synchronized (this) { return peek(key); }
         }
 
         public synchronized void prune(Predicate<K> dead) {

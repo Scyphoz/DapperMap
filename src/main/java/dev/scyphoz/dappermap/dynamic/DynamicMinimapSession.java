@@ -40,7 +40,19 @@ public final class DynamicMinimapSession {
     private static final ExecutorService RENDER_POOL = new java.util.concurrent.ThreadPoolExecutor(
             RENDER_THREADS, RENDER_THREADS, 0L, TimeUnit.MILLISECONDS,
             new java.util.concurrent.ArrayBlockingQueue<>(64), DapperMapUtil.daemonThreads("DapperMap-Render"),
-            new java.util.concurrent.ThreadPoolExecutor.AbortPolicy());
+            (rejectedTask, executor) -> { throw PoolSaturated.INSTANCE; });
+
+    /**
+     * Thrown when the render queue is full (or the pool is shut down). One shared instance with
+     * no stack trace: under overload every session retries each tick, and AbortPolicy built a
+     * new exception with a full stack trace for every refusal.
+     */
+    private static final class PoolSaturated extends java.util.concurrent.RejectedExecutionException {
+        private static final long serialVersionUID = 1L;
+        static final PoolSaturated INSTANCE = new PoolSaturated();
+        private PoolSaturated() { super("DapperMap render pool saturated"); }
+        @Override public synchronized Throwable fillInStackTrace() { return this; }
+    }
 
     /** False means saturation or shutdown; callers can retry on a later tick. */
     public static boolean renderAsync(Runnable work) {
@@ -133,6 +145,14 @@ public final class DynamicMinimapSession {
         // Tick handles disabling; overlay completion must clear its admission flag.
         return this.running && (kind.equals("tick") || kind.equals("overlay delivery")
                 || this.canRenderHud(this.hud));
+    }
+
+    /** Runs a delivery, then asks the heartbeat to dispatch a tick soon so its queued HUD commands are flushed. */
+    private void executeDelivery(World world, String kind, Runnable work) {
+        executeWorld(world, kind, () -> {
+            work.run();
+            this.flushSoon = true;
+        });
     }
 
     private void executeWorld(World world, String kind, Runnable work) {
@@ -357,6 +377,19 @@ public final class DynamicMinimapSession {
     private static final double HEADING_EPSILON = Math.toRadians(2.0D);
     /** Yaw seen by the last dispatched tick; only touched on the scheduler thread. */
     private float lastDispatchedYaw = Float.NaN;
+    /** Position seen by the last dispatched tick (scheduler thread only); used to spot idle players. */
+    private double lastDispatchedX = Double.NaN, lastDispatchedZ = Double.NaN;
+    /** Smallest movement (blocks) since the last dispatch that counts as moving. */
+    private static final double IDLE_MOVE_EPSILON = 1.0D / 16.0D;
+    /**
+     * Player-up only: a rotation request or sharpen is still due, so keep the fast tick cadence.
+     * Written by the world thread at the end of each tick, read by the heartbeat.
+     */
+    private volatile boolean rotationCatchUp;
+    /** Set when HUD commands are waiting (deliveries, settings refresh): dispatch at the next poll. */
+    private volatile boolean flushSoon;
+    /** Set by PlayerReady on an existing session: rebuild the client-side HUD in place on the next tick. */
+    private volatile boolean clientResyncPending;
     /** When the last map-rotation render was requested; paces rotation by request, not delivery. */
     private long lastRotationRequestMs = 0L;
     /** Once the heading has been steady this long, a reduced frame is replaced by a sharp one. */
@@ -381,6 +414,30 @@ public final class DynamicMinimapSession {
 
     public DynamicMinimapSetting settings() {
         return this.settings;
+    }
+
+    public PlayerRef playerRef() {
+        return this.playerRef;
+    }
+
+    public boolean isRunning() {
+        return this.running;
+    }
+
+    /**
+     * The client is (re)joining a world (PlayerReadyEvent fires on every world join, and after
+     * Universe.resetPlayer, which can wipe custom UI even in the same world). Instead of a full
+     * stop/start, the next tick rebuilds the HUD and re-sends client assets in place, keeping the
+     * session's server-side caches. Any thread.
+     */
+    public void resyncClient() {
+        this.clientResyncPending = true;
+        this.flushSoon = true;
+    }
+
+    /** Live settings changed: run a tick at the next heartbeat poll so the change shows promptly. */
+    public void requestPromptTick() {
+        this.flushSoon = true;
     }
 
     /**
@@ -453,15 +510,17 @@ public final class DynamicMinimapSession {
     }
 
     /**
-     * Player-up maps always poll at the rotation cadence. North-up maps use it only while the
-     * player is turning (so the locator and bearing keep up), then fall back to the cheaper
-     * pan cadence when the heading is steady.
+     * The fast rotation cadence is used only while the player is turning, or (player-up) while a
+     * rotation request or reduced-to-sharp swap is still due. Otherwise the cheaper pan cadence,
+     * and the marker cadence for a player who is neither moving nor turning.
      */
-    private long tickIntervalMs() {
+    private long tickIntervalMs(boolean idle) {
         boolean turning = System.currentTimeMillis() - this.lastHeadingChangeMs < TURNING_WINDOW_MS;
-        return this.settings.rotationMode == 1 || turning
-                ? Math.min(this.settings.panIntervalMs(), this.rotationPollIntervalMs())
-                : this.settings.panIntervalMs();
+        if (turning || this.rotationCatchUp) {
+            return Math.min(this.settings.panIntervalMs(), this.rotationPollIntervalMs());
+        }
+        long pan = this.settings.panIntervalMs();
+        return idle ? Math.max(pan, this.settings.markerIntervalMs()) : pan;
     }
 
     /**
@@ -476,9 +535,27 @@ public final class DynamicMinimapSession {
             float yaw = this.peekYaw();
             boolean headingMoved = !Float.isNaN(yaw) && (Float.isNaN(this.lastDispatchedYaw)
                     || Math.abs(Math.IEEEremainder(yaw - this.lastDispatchedYaw, Math.PI * 2.0D)) >= HEADING_EPSILON);
-            if (headingMoved || now - this.lastTickMs >= this.tickIntervalMs()) {
+            // Player-up: a heading move starts the turning window, so pending rotations keep the
+            // fast cadence (north-up sets this from the locator bucket instead).
+            if (headingMoved && this.settings.rotationMode == 1) this.lastHeadingChangeMs = now;
+            // Cheap peek at the cached position: an idle player is ticked at the marker cadence.
+            double px = Double.NaN, pz = Double.NaN;
+            try {
+                var position = this.playerRef.getTransform().getPosition();
+                px = position.x();
+                pz = position.z();
+            } catch (RuntimeException ignored) {
+                // Unavailable: treat the player as moving.
+            }
+            boolean idle = !Double.isNaN(px) && Math.abs(px - this.lastDispatchedX) < IDLE_MOVE_EPSILON
+                    && Math.abs(pz - this.lastDispatchedZ) < IDLE_MOVE_EPSILON;
+            boolean flush = this.flushSoon;
+            if (headingMoved || flush || now - this.lastTickMs >= this.tickIntervalMs(idle)) {
+                this.flushSoon = false;
                 this.lastTickMs = now;
                 this.lastDispatchedYaw = yaw;
+                this.lastDispatchedX = px;
+                this.lastDispatchedZ = pz;
                 this.tick();
             }
         } catch (Throwable ignored) {
@@ -535,7 +612,10 @@ public final class DynamicMinimapSession {
             double x = position.x();
             double y = position.y();
             double z = position.z();
-            boolean worldChanged = lastObservedWorld != null && lastObservedWorld != world;
+            // PlayerReady on a live session (world join / resetPlayer): rebuild the client HUD in place.
+            boolean resync = this.clientResyncPending;
+            this.clientResyncPending = false;
+            boolean worldChanged = (lastObservedWorld != null && lastObservedWorld != world) || resync;
             boolean teleported = lastObservedWorld != null
                     && (worldChanged
                     || (x - lastObservedX) * (x - lastObservedX) + (z - lastObservedZ) * (z - lastObservedZ)
@@ -562,7 +642,8 @@ public final class DynamicMinimapSession {
                 this.lastSelfBucket = -1;
                 if (this.hud != null) this.hud.invalidateMarkerSlots();
                 if (worldChanged) {
-                    BetterMapIntegration.clearWorld(this.lastCaveView == null ? null : this.lastCaveView.world());
+                    // The BetterMap cave-image cache is shared by every player: leave it (it is
+                    // bounded, expires, and dead worlds are pruned) instead of flushing it here.
                     this.worldPending.clear();
                     if (this.hud != null) this.hud.detach();
                     this.hud = null;
@@ -761,7 +842,9 @@ public final class DynamicMinimapSession {
             int mapCenter = this.settings.sizePixels / 2;
             double panMargin = (double)DynamicMinimapRenderer.panMarginPixels(this.settings);
             boolean signatureChanged = this.signatureChangedPending;
-            if (!Double.isNaN(this.bufferCenterX)
+            // No probe while a redraw is already due or rendering: it could not add anything, and a
+            // result arriving during a terrain render is discarded anyway.
+            if (!Double.isNaN(this.bufferCenterX) && !signatureChanged && !this.renderBusy("terrain")
                     && now - this.lastSignatureMs > this.settings.signatureIntervalMs()) {
                 this.lastSignatureMs = now;
                 this.scheduleSignatureCheck(world, this.bufferCenterX, this.bufferCenterZ, caveView);
@@ -785,6 +868,9 @@ public final class DynamicMinimapSession {
                 if (this.scheduleTerrainRender(world, x, z, yaw, caveView)) {
                     this.lastTerrainMs = now;
                     this.signatureChangedPending = false;
+                } else if (!this.renderBusy("terrain")) {
+                    // Render pool full: retry in about 250 ms rather than on every tick.
+                    this.lastTerrainMs = now - this.settings.terrainIntervalMs() + 250L;
                 }
             } else if (!noBuffer) {
                 int[] pan = panOffset(x, z, this.bufferCenterX, this.bufferCenterZ, pixelsPerBlock,
@@ -793,7 +879,7 @@ public final class DynamicMinimapSession {
             }
 
             if (!Double.isNaN(this.bufferCenterX)
-                    && now - this.lastMarkerMs > this.settings.markerIntervalMs()) {
+                    && now - this.lastMarkerMs >= this.settings.markerIntervalMs()) {
                 this.lastMarkerMs = now;
                 this.scanMarkers(store, ref, position, world, player);
                 this.projectCachedMarkers(pixelsPerBlock, bufferPixels, yaw);
@@ -806,6 +892,10 @@ public final class DynamicMinimapSession {
             String biome = panel && this.settings.showBiome ? this.readouts.biome(rawBiome(player)) : "";
             this.hud.setStatus(coords, compass, clock, biome);
             this.hud.flushPendingVisuals(this.settings.updateSpeed);
+            // Player-up: keep the fast cadence while a rotation or a sharpen is still due.
+            this.rotationCatchUp = this.settings.rotationMode == 1
+                    && (mapRotationBucket != this.lastMapRotationBucket || this.displayedRotationReduced
+                    || this.renderBusy("rotation"));
         } catch (Throwable ignored) {
             // A failed tick only skips this update; the next tick starts afresh.
         }
@@ -902,7 +992,7 @@ public final class DynamicMinimapSession {
             // One consistent snapshot builds the HUD and records what it was built with, so a
             // settings refresh landing mid-build is picked up on the next tick, never lost.
             DynamicMinimapSetting snap = this.settings.copy();
-            this.hud = new DynamicMinimapHud(this.playerRef, snap, work -> executeWorld(world, "overlay delivery", work),
+            this.hud = new DynamicMinimapHud(this.playerRef, snap, work -> executeDelivery(world, "overlay delivery", work),
                     () -> this.running && this.settings.enabled);
             this.builtSize = snap.sizePixels;
             this.builtShape = snap.shape;
@@ -1079,7 +1169,7 @@ public final class DynamicMinimapSession {
                             : compassFramePath(prepared.path()), framePng);
             // Change signature of exactly the chunk images drawn, hashed while stitching.
             long renderSignature = terrain.signature;
-            executeWorld(world, "terrain delivery", () -> {
+            executeDelivery(world, "terrain delivery", () -> {
                 if (!this.canRenderHud(renderHud)
                         || !java.util.Objects.equals(caveView, this.lastCaveView)
                         || sequence <= this.deliveredSequence
@@ -1202,7 +1292,7 @@ public final class DynamicMinimapSession {
             // Rotation-only renders are player-up: one fixed frame path per heading.
             DynamicAssetPublisher.PreparedAsset preparedFrame = DynamicAssetPublisher.prepare(
                     this.headingFramePath(renderSettings, rotationBucket), framePng);
-            executeWorld(world, "rotation delivery", () -> {
+            executeDelivery(world, "rotation delivery", () -> {
                 if (!this.canRenderHud(renderHud)
                         || generation != this.terrainGeneration
                         || rotationRequest != this.rotationSequence.get()

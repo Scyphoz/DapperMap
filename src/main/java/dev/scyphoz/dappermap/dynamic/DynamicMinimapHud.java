@@ -381,6 +381,8 @@ public final class DynamicMinimapHud extends CustomUIHud {
                 return;
             }
             this.terrainPath = assetPath;
+            // Only send the pan and Visible flag when they change (a new frame usually keeps both).
+            boolean panChanged = !this.terrainShown || left != this.panLeft || top != this.panTop;
             this.panLeft = left;
             this.panTop = top;
             UICommandBuilder builder = new UICommandBuilder();
@@ -394,8 +396,10 @@ public final class DynamicMinimapHud extends CustomUIHud {
                         this.displaySize(size), this.displaySize(size)));
             }
             // Terrain and markers share one pan group: one Anchor update moves both.
-            builder.setObject("#WayfinderMmRoot #WayfinderMmClip #WayfinderMmPan.Anchor", this.fullAnchor(left, top));
-            builder.set("#WayfinderMmRoot #WayfinderMmClip #WayfinderMmTerrain.Visible", true);
+            if (panChanged) {
+                builder.setObject("#WayfinderMmRoot #WayfinderMmClip #WayfinderMmPan.Anchor", this.fullAnchor(left, top));
+            }
+            if (!this.terrainShown) builder.set("#WayfinderMmRoot #WayfinderMmClip #WayfinderMmTerrain.Visible", true);
             this.terrainShown = true;
             this.update(false, builder);
         }

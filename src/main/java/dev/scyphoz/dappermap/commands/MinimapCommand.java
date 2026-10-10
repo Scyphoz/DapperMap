@@ -113,9 +113,9 @@ public class MinimapCommand extends AbstractPlayerCommand {
         args = args.trim();
         if (!args.isEmpty() && !args.equalsIgnoreCase("toggle")) {
             String[] parts = args.split("\\s+", 3);
-            String subcommand = parts[0].toLowerCase();
-            String value = parts.length > 1 ? parts[1].toLowerCase() : "";
-            String extra = parts.length > 2 ? parts[2].toLowerCase() : "";
+            String subcommand = parts[0].toLowerCase(java.util.Locale.ROOT);
+            String value = parts.length > 1 ? parts[1].toLowerCase(java.util.Locale.ROOT) : "";
+            String extra = parts.length > 2 ? parts[2].toLowerCase(java.util.Locale.ROOT) : "";
             DynamicMinimapSetting settings = this.sessions.getSettings(playerRef.getUuid(), config);
             switch (subcommand) {
                 case "colour":
@@ -397,9 +397,9 @@ public class MinimapCommand extends AbstractPlayerCommand {
             return;
         }
         String[] parts = args.split("\\s+", 3);
-        String key = parts[0].toLowerCase();
-        String value = parts.length > 1 ? parts[1].toLowerCase() : "";
-        String extra = parts.length > 2 ? parts[2].toLowerCase() : "";
+        String key = parts[0].toLowerCase(java.util.Locale.ROOT);
+        String value = parts.length > 1 ? parts[1].toLowerCase(java.util.Locale.ROOT) : "";
+        String extra = parts.length > 2 ? parts[2].toLowerCase(java.util.Locale.ROOT) : "";
         DynamicMinimapSetting settings = this.sessions.getAdminDefaults(config).copy();
         boolean changed = false;
         String usage = null;
@@ -1018,7 +1018,7 @@ public class MinimapCommand extends AbstractPlayerCommand {
                     ? this.withRequiredArg("y", "Vertical position", ArgTypes.INTEGER) : null;
             if (this.firstString != null && suggestions != null) {
                 this.firstString.suggest((sender, entered, count, result) -> {
-                    String prefix = entered.toLowerCase();
+                    String prefix = entered.toLowerCase(java.util.Locale.ROOT);
                     for (String value : suggestions) if (value.startsWith(prefix)) result.suggest(value);
                 });
             }

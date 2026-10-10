@@ -21,7 +21,6 @@ import java.awt.image.ImageObserver;
 import java.awt.Shape;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
-import java.util.Arrays;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.BiFunction;
@@ -60,9 +59,12 @@ public final class DynamicMinimapRenderer {
     private static final double[][] SQUARE_COMPASS_POINTS = {{0,-1},{1,-1},{1,0},{1,1},{0,1},{-1,1},{-1,0},{-1,-1},{0,-1}};
     private static final Font CARDINAL_FONT = new Font("SansSerif", 1, 15);
     private static final Map<String, byte[]> MASK_CACHE = new ConcurrentHashMap<>();
-    private static final PngCache FRAME_CACHE = new PngCache(256, 8 * 1024 * 1024);
     private record ArrowKey(long angle, int rgb) {}
-    private static final PngCache ARROW_CACHE = new PngCache(512, 2 * 1024 * 1024);
+    /**
+     * Single locator images by exact angle. The 72 heading images live in ARROW_SETS, so this only
+     * needs room for the HUD's initial arrow and the settings previews' arbitrary angles.
+     */
+    private static final PngCache ARROW_CACHE = new PngCache(32, 256 * 1024);
     private static final byte[] BLANK_PNG = toPng(new BufferedImage(1, 1, BufferedImage.TYPE_INT_ARGB));
 
     private DynamicMinimapRenderer() {
@@ -145,6 +147,11 @@ public final class DynamicMinimapRenderer {
                 return dx * dx + dz * dz;
             }));
             int requests = 0;
+            // One scratch image for chunk pixels, decoded straight into its backing array and
+            // recreated only when a chunk has another size (BetterMap cave chunks differ).
+            BufferedImage chunkImage = null;
+            int[] chunkArgb = null;
+            Object interpolation = null; // Current interpolation hint, set only when it changes.
             for (int[] coordinate : chunks) {
                 int chunkX = coordinate[0], chunkZ = coordinate[1];
                 ++total;
@@ -168,19 +175,24 @@ public final class DynamicMinimapRenderer {
                     }
                     // Hash before drawing, so an image that fails to decode still counts as seen.
                     if (image != null) chunkHashes[range.indexOf(chunkX, chunkZ)] = chunkHash(image);
-                    if (image != null && image.width > 0 && image.height > 0) {
-                        int[] pixels = decodePixels(image);
-                        if (pixels != null) {
-                            BufferedImage chunk = new BufferedImage(image.width, image.height, BufferedImage.TYPE_INT_ARGB);
-                            chunk.setRGB(0, 0, image.width, image.height, pixels, 0, image.width);
+                    if (image != null && image.width > 0 && image.height > 0
+                            && (long)image.width * image.height <= Integer.MAX_VALUE) {
+                        if (chunkImage == null || chunkImage.getWidth() != image.width || chunkImage.getHeight() != image.height) {
+                            chunkImage = new BufferedImage(image.width, image.height, BufferedImage.TYPE_INT_ARGB);
+                            chunkArgb = backingArgb(chunkImage);
+                        }
+                        if (decodePixels(image, chunkArgb, chunkImage)) {
                             int drawX = (int)Math.round(((double)chunkX * (double)CHUNK_SIZE - originX) * texturePixelsPerBlock);
                             int drawZ = (int)Math.round(((double)chunkZ * (double)CHUNK_SIZE - originZ) * texturePixelsPerBlock);
                             // Preserve detail when BetterMap supplies more samples per chunk.
-                            graphics.setRenderingHint(RenderingHints.KEY_INTERPOLATION,
-                                    image.width > chunkPixels || image.height > chunkPixels
-                                            ? RenderingHints.VALUE_INTERPOLATION_BILINEAR
-                                            : RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR);
-                            graphics.drawImage(chunk, drawX, drawZ, chunkPixels, chunkPixels, (ImageObserver)null);
+                            Object wanted = image.width > chunkPixels || image.height > chunkPixels
+                                    ? RenderingHints.VALUE_INTERPOLATION_BILINEAR
+                                    : RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR;
+                            if (wanted != interpolation) {
+                                graphics.setRenderingHint(RenderingHints.KEY_INTERPOLATION, wanted);
+                                interpolation = wanted;
+                            }
+                            graphics.drawImage(chunkImage, drawX, drawZ, chunkPixels, chunkPixels, (ImageObserver)null);
                             ++present;
                         }
                     }
@@ -294,31 +306,6 @@ public final class DynamicMinimapRenderer {
         return png;
     }
 
-    /**
-     * Renders the frame with compass/cardinal markings rotated by mapAngle.
-     * The geometric bezel remains fixed (especially important for square maps),
-     * while the directional markings rotate with the terrain.
-     */
-    public static byte[] renderFrame(DynamicMinimapSetting settings, double mapAngle) {
-        String key = frameCacheKey(settings, mapAngle);
-        byte[] cached = FRAME_CACHE.get(key);
-        if (cached != null) {
-            return cached;
-        }
-
-        byte[] png = toPng(renderFrameImage(settings, mapAngle));
-        if (png != null) {
-            FRAME_CACHE.put(key, png);
-        }
-
-        return png;
-    }
-
-    private static String frameCacheKey(DynamicMinimapSetting settings, double mapAngle) {
-        return (settings.isCircle() ? "c" : "r") + "@" + settings.textureResolution
-                + "-rot" + rotationBucket(mapAngle) + "-" + settings.colours.frameKey();
-    }
-
     /** The frame artwork at texture resolution (bezel fixed, compass markings at mapAngle's bucket). */
     private static BufferedImage renderFrameImage(DynamicMinimapSetting settings, double mapAngle) {
         MinimapColours colours = settings.colours;
@@ -393,21 +380,6 @@ public final class DynamicMinimapRenderer {
         return image;
     }
 
-    /**
-     * Renders every foreground HUD element into one coordinate space. The live
-     * terrain, markers, and player arrow remain independent layers underneath
-     * this overlay, while the frame, divider, panel, and telemetry can no longer
-     * drift apart through separate UI layout/scaling rules.
-     */
-    public static byte[] renderHudOverlay(DynamicMinimapSetting settings, int mapSize,
-                                          int sidePanelWidth, int panelHeight, int gap,
-                                          double frameAngle, String coords, String compass,
-                                          String clock, String biome) {
-        BufferedImage image = renderHudOverlayImage(settings, mapSize, sidePanelWidth, panelHeight, gap,
-                frameAngle, coords, compass, clock, biome);
-        return image == null ? null : toPng(image);
-    }
-
     private record OverlayLayout(int mapSize, int width, int height, int panelHeight, int gap,
                                  int shape, int position, int alignment, int flags, MinimapColours colours) {}
     private record RowLayerKey(OverlayLayout layout, int row, String value) {}
@@ -471,10 +443,7 @@ public final class DynamicMinimapRenderer {
         try {
             // Draw from the frame image directly: encoding it as a PNG at texture resolution and
             // decoding it again (identical pixels) was the most expensive part of a new heading.
-            byte[] framePng = FRAME_CACHE.get(frameCacheKey(settings, angle));
-            BufferedImage decoded = framePng != null ? ImageIO.read(new ByteArrayInputStream(framePng))
-                    : renderFrameImage(settings, angle);
-            if (decoded == null) return null;
+            BufferedImage decoded = renderFrameImage(settings, angle);
             BufferedImage image = new BufferedImage(size, size, BufferedImage.TYPE_INT_ARGB);
             Graphics2D graphics = image.createGraphics();
             if (!settings.infoPanelEnabled)
@@ -490,9 +459,13 @@ public final class DynamicMinimapRenderer {
             byte[] png = toPng(image);
             OVERLAY_LAYERS.put(key, png);
             return png;
-        } catch (IOException ignored) { return null; }
+        } catch (RuntimeException ignored) { return null; }
     }
 
+    /**
+     * Every foreground HUD element (frame, panel, telemetry) in one coordinate space. The live
+     * terrain, markers and player arrow are independent layers underneath this overlay.
+     */
     private static BufferedImage renderHudOverlayImage(DynamicMinimapSetting settings, int mapSize,
                                                        int sidePanelWidth, int panelHeight, int gap,
                                                        double frameAngle, String coords, String compass,
@@ -508,9 +481,9 @@ public final class DynamicMinimapRenderer {
         if (!settings.infoPanelEnabled) {
             try {
                 BufferedImage overlay = new BufferedImage(mapSize, mapSize, BufferedImage.TYPE_INT_ARGB);
-                byte[] framePng = includeFrame ? renderFrame(settings, frameAngle) : null;
-                if (framePng != null) {
-                    BufferedImage frame = ImageIO.read(new ByteArrayInputStream(framePng));
+                // Frame artwork drawn directly (no PNG encode and decode of the texture-size frame).
+                BufferedImage frame = includeFrame ? renderFrameImage(settings, frameAngle) : null;
+                if (frame != null) {
                     Graphics2D g = overlay.createGraphics();
                     g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC);
                     g.drawImage(frame, 0, 0, mapSize, mapSize, null);
@@ -544,9 +517,7 @@ public final class DynamicMinimapRenderer {
                     ? mapSize + gap : (settings.infoPanelPosition == DynamicMinimapSetting.INFO_ABOVE
                     ? 0 : Math.max(0, (overlay.getHeight() - panelHeight) / 2));
 
-            byte[] framePng = includeFrame ? renderFrame(settings, frameAngle) : null;
-            BufferedImage frame = framePng == null ? null
-                    : ImageIO.read(new ByteArrayInputStream(framePng));
+            BufferedImage frame = includeFrame ? renderFrameImage(settings, frameAngle) : null;
             if (frame != null) {
                 graphics.drawImage(frame, mapX, mapY, mapSize, mapSize, null);
             }
@@ -569,6 +540,12 @@ public final class DynamicMinimapRenderer {
                                java.util.List<PreviewMarker> markers) { }
 
     public static byte[] renderSettingsPreview(DynamicMinimapSetting settings, LiveSnapshot snapshot) {
+        BufferedImage stage = settingsPreviewImage(settings, snapshot);
+        return stage == null ? null : toPng(stage);
+    }
+
+    /** The settings preview stage (360x286, HUD centred), or null. Render pool only. */
+    private static BufferedImage settingsPreviewImage(DynamicMinimapSetting settings, LiveSnapshot snapshot) {
         if (snapshot == null || snapshot.terrain() == null) return null;
         DynamicMinimapSetting preview = settings.copy();
         preview.normalize();
@@ -581,11 +558,11 @@ public final class DynamicMinimapRenderer {
         if (preview.showClock) panelHeight += 43;
         if (preview.showBiome) panelHeight += 43;
 
-        byte[] overlayPng = renderHudOverlay(preview, mapSize, panelWidth, panelHeight, gap, snapshot.frameAngle(),
+        // The overlay is composited directly (it used to be PNG encoded and decoded first).
+        BufferedImage overlay = renderHudOverlayImage(preview, mapSize, panelWidth, panelHeight, gap, snapshot.frameAngle(),
                 snapshot.coords(), snapshot.compass(), snapshot.clock(), snapshot.biome());
-        if (overlayPng == null) return null;
+        if (overlay == null) return null;
         try {
-            BufferedImage overlay = ImageIO.read(new ByteArrayInputStream(overlayPng));
             BufferedImage hud = new BufferedImage(overlay.getWidth(), overlay.getHeight(), BufferedImage.TYPE_INT_ARGB);
             Graphics2D g = hud.createGraphics();
             g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
@@ -709,15 +686,11 @@ public final class DynamicMinimapRenderer {
             int h = Math.max(1, (int)Math.round(hud.getHeight() * scale));
             sg.drawImage(hud, (stageW - w) / 2, (stageH - h) / 2, w, h, null);
             sg.dispose();
-            return toPng(stage);
+            return stage;
         } catch (Exception ignored) { return null; }
     }
 
-    /**
-     * Renders the Position-tab preview as a complete screen rather than a
-     * close-up of the HUD. The HUD image is the same settings preview used by
-     * the other tabs, scaled and placed from the draft X/Y percentages.
-     */
+    /** True when the candidate point is at least minimumDistance from every other point. */
     private static boolean previewPositionClear(double[] candidate, java.util.List<double[]> others,
                                                 double minimumDistance) {
         for (double[] other : others) {
@@ -728,64 +701,113 @@ public final class DynamicMinimapRenderer {
         return true;
     }
 
-    public static byte[] renderPositionPreview(DynamicMinimapSetting settings, LiveSnapshot snapshot) {
-        byte[] hudPng = renderSettingsPreview(settings, snapshot);
-        if (hudPng == null) return null;
+    /**
+     * The Position-tab preview's HUD image: the settings preview trimmed to its visible pixels,
+     * plus the extent its scale is based on. Independent of the HUD X/Y position.
+     */
+    private record PositionPreviewBase(BufferedImage hud, int scaleReference) {}
+
+    /** A cached base, valid for one snapshot and one draft (compared without its X/Y position). */
+    private record CachedPositionBase(LiveSnapshot snapshot, DynamicMinimapSetting settings, PositionPreviewBase base) {}
+
+    /** A few recent bases (one per open settings page, typically), so slider moves skip the HUD render. */
+    private static final java.util.ArrayDeque<CachedPositionBase> POSITION_BASES = new java.util.ArrayDeque<>();
+    private static final int POSITION_BASE_LIMIT = 4;
+
+    /** Every public instance field of the settings, except the HUD position (the base does not depend on it). */
+    private static final java.lang.reflect.Field[] PREVIEW_FIELDS = java.util.Arrays.stream(
+                    DynamicMinimapSetting.class.getFields())
+            .filter(field -> !java.lang.reflect.Modifier.isStatic(field.getModifiers()))
+            .filter(field -> !field.getName().equals("hudPositionX") && !field.getName().equals("hudPositionY"))
+            .toArray(java.lang.reflect.Field[]::new);
+
+    /** True when two drafts give the same preview HUD (every field equal except the X/Y position). */
+    private static boolean samePreviewHud(DynamicMinimapSetting first, DynamicMinimapSetting second) {
         try {
-            BufferedImage hud = ImageIO.read(new ByteArrayInputStream(hudPng));
-            if (hud == null) return null;
+            for (java.lang.reflect.Field field : PREVIEW_FIELDS)
+                if (!java.util.Objects.equals(field.get(first), field.get(second))) return false;
+            return true;
+        } catch (IllegalAccessException unexpected) {
+            return false;
+        }
+    }
 
-            // renderSettingsPreview returns a transparent preview-stage canvas with the
-            // HUD centred inside it. Position the visible HUD bounds, not that canvas;
-            // otherwise its transparent margins keep corner selections near the centre.
-            int minX = hud.getWidth();
-            int minY = hud.getHeight();
-            int maxX = -1;
-            int maxY = -1;
-            for (int py = 0; py < hud.getHeight(); py++) {
-                for (int px = 0; px < hud.getWidth(); px++) {
-                    if ((hud.getRGB(px, py) >>> 24) == 0) continue;
-                    minX = Math.min(minX, px);
-                    minY = Math.min(minY, py);
-                    maxX = Math.max(maxX, px);
-                    maxY = Math.max(maxY, py);
-                }
+    /**
+     * Renders the Position-tab preview as a complete screen rather than a close-up of the HUD.
+     * The HUD image is the same settings preview used by the other tabs, scaled and placed from
+     * the draft X/Y percentages. Position-only edits reuse the HUD image of the previous call.
+     */
+    public static byte[] renderPositionPreview(DynamicMinimapSetting settings, LiveSnapshot snapshot) {
+        if (snapshot == null) return null;
+        DynamicMinimapSetting draft = settings.copy();
+        PositionPreviewBase base = null;
+        synchronized (POSITION_BASES) {
+            for (CachedPositionBase cached : POSITION_BASES)
+                if (cached.snapshot() == snapshot && samePreviewHud(cached.settings(), draft)) { base = cached.base(); break; }
+        }
+        if (base == null) {
+            base = positionPreviewBase(draft, snapshot);
+            if (base == null) return null;
+            synchronized (POSITION_BASES) {
+                POSITION_BASES.removeIf(cached -> cached.snapshot() == snapshot);
+                POSITION_BASES.addFirst(new CachedPositionBase(snapshot, draft, base));
+                while (POSITION_BASES.size() > POSITION_BASE_LIMIT) POSITION_BASES.removeLast();
             }
-            if (maxX >= minX && maxY >= minY) {
-                hud = hud.getSubimage(minX, minY, maxX - minX + 1, maxY - minY + 1);
-            }
+        }
+        return composePositionPreview(base, draft);
+    }
 
+    /** Visible bounds {minX, minY, maxX, maxY} of an image (alpha above 0), or null when empty. */
+    private static int[] visibleBounds(BufferedImage image) {
+        int width = image.getWidth(), height = image.getHeight();
+        int[] pixels = argbPixels(image);
+        int minX = width, minY = height, maxX = -1, maxY = -1;
+        for (int y = 0; y < height; y++) {
+            int rowStart = y * width;
+            for (int x = 0; x < width; x++) {
+                if ((pixels[rowStart + x] >>> 24) == 0) continue;
+                if (x < minX) minX = x;
+                if (x > maxX) maxX = x;
+                if (y < minY) minY = y;
+                maxY = y;
+            }
+        }
+        return maxX >= minX && maxY >= minY ? new int[]{minX, minY, maxX, maxY} : null;
+    }
+
+    private static PositionPreviewBase positionPreviewBase(DynamicMinimapSetting settings, LiveSnapshot snapshot) {
+        BufferedImage hud = settingsPreviewImage(settings, snapshot);
+        if (hud == null) return null;
+        // The preview stage is a transparent canvas with the HUD centred inside it. Position the
+        // visible HUD bounds, not that canvas; otherwise its transparent margins keep corner
+        // selections near the centre.
+        int[] bounds = visibleBounds(hud);
+        if (bounds != null) hud = hud.getSubimage(bounds[0], bounds[1], bounds[2] - bounds[0] + 1, bounds[3] - bounds[1] + 1);
+        int scaleReference = Math.max(hud.getWidth(), hud.getHeight());
+        if (!settings.infoPanelEnabled) {
+            // The disabled-panel map is deliberately smaller so its scale matches the enabled
+            // preview. Do not enlarge it again after trimming: scale by the enabled HUD footprint.
+            DynamicMinimapSetting reference = settings.copy();
+            reference.infoPanelEnabled = true;
+            BufferedImage referenceHud = settingsPreviewImage(reference, snapshot);
+            int[] referenceBounds = referenceHud == null ? null : visibleBounds(referenceHud);
+            if (referenceBounds != null) {
+                scaleReference = Math.max(referenceBounds[2] - referenceBounds[0] + 1,
+                        referenceBounds[3] - referenceBounds[1] + 1);
+            }
+        }
+        return new PositionPreviewBase(hud, scaleReference);
+    }
+
+    /** The 360x286 screen with the HUD placed at the draft's X/Y percentages, as PNG. */
+    private static byte[] composePositionPreview(PositionPreviewBase base, DynamicMinimapSetting settings) {
+        try {
+            BufferedImage hud = base.hud();
             int width = 360;
             int height = 286;
             int inset = 8;
             int widgetExtent = 154;
-            int widgetScaleReference = Math.max(hud.getWidth(), hud.getHeight());
-            if (!settings.infoPanelEnabled) {
-                // renderSettingsPreview intentionally leaves the disabled-panel map smaller so
-                // its map scale matches the enabled preview. Do not enlarge it again here after
-                // trimming transparent pixels: use the enabled HUD footprint as the scale basis.
-                DynamicMinimapSetting reference = settings.copy();
-                reference.infoPanelEnabled = true;
-                byte[] referencePng = renderSettingsPreview(reference, snapshot);
-                if (referencePng != null) {
-                    BufferedImage referenceHud = ImageIO.read(new ByteArrayInputStream(referencePng));
-                    if (referenceHud != null) {
-                        int rMinX = referenceHud.getWidth(), rMinY = referenceHud.getHeight();
-                        int rMaxX = -1, rMaxY = -1;
-                        for (int py = 0; py < referenceHud.getHeight(); py++) {
-                            for (int px = 0; px < referenceHud.getWidth(); px++) {
-                                if ((referenceHud.getRGB(px, py) >>> 24) == 0) continue;
-                                rMinX = Math.min(rMinX, px); rMinY = Math.min(rMinY, py);
-                                rMaxX = Math.max(rMaxX, px); rMaxY = Math.max(rMaxY, py);
-                            }
-                        }
-                        if (rMaxX >= rMinX && rMaxY >= rMinY) {
-                            widgetScaleReference = Math.max(rMaxX - rMinX + 1, rMaxY - rMinY + 1);
-                        }
-                    }
-                }
-            }
-            double widgetScale = widgetExtent / (double) widgetScaleReference;
+            double widgetScale = widgetExtent / (double) base.scaleReference();
             int widgetWidth = Math.max(1, (int) Math.round(hud.getWidth() * widgetScale));
             int widgetHeight = Math.max(1, (int) Math.round(hud.getHeight() * widgetScale));
             int x = inset + (int) Math.round((width - inset * 2 - widgetWidth)
@@ -1234,6 +1256,9 @@ public final class DynamicMinimapRenderer {
         private final double visibleRadius, panReach;
         /** North-up frame (bucket 0), encoded on first use. */
         private byte[] png;
+        /** Colour reduction shared by every frame of this terrain (built on first use; null = none). */
+        private ColourReduction reduction;
+        private boolean reductionBuilt;
         private final java.util.LinkedHashMap<Integer, DynamicAssetPublisher.PreparedAsset> frames =
                 new java.util.LinkedHashMap<>(16, 0.75F, true);
         private int frameBytes;
@@ -1243,6 +1268,21 @@ public final class DynamicMinimapRenderer {
             this.cropTexels = cropTexels;
             this.visibleRadius = visibleRadius;
             this.panReach = panReach;
+        }
+
+        /**
+         * One median-cut reduction of the whole source, reused by every rotated frame (bucket 0
+         * included) instead of a new histogram per frame; colours also stay the same while turning.
+         * Frames are nearest-pixel samples of the source, so every opaque frame colour is in it.
+         * Translucent slots: the source's own plus one for the background drawn behind them.
+         */
+        private synchronized ColourReduction reduction() {
+            if (!this.reductionBuilt) {
+                this.reductionBuilt = true;
+                int colours = terrainColours;
+                this.reduction = colours > 0 ? buildReduction(argbPixels(this.image), colours, 1) : null;
+            }
+            return this.reduction;
         }
 
         /** North-up frame of this terrain. Render pool only. */
@@ -1278,7 +1318,7 @@ public final class DynamicMinimapRenderer {
                 graphics.dispose();
             }
             if (this.visibleRadius > 0) flattenHiddenCorners(rotated, size / (double)crop);
-            return terrainPng(rotated);
+            return terrainPng(rotated, this.reduction());
         }
 
         /**
@@ -1291,12 +1331,21 @@ public final class DynamicMinimapRenderer {
             double radius = this.visibleRadius * scale, panReach = this.panReach * scale;
             double centre = size / 2.0D, radiusSquared = radius * radius;
             int fill = MAP_BACKGROUND_FILL.getRGB();
-            int[] row = new int[size];
+            int[] pixels = backingArgb(frame); // Written in place when available (always, for frames made here).
+            int[] row = pixels != null ? null : new int[size];
             // Furthest any pixel in a row can be (horizontally) outside the pan square.
             double rowEdge = Math.max(0, centre - panReach);
             for (int y = 0; y < size; y++) {
                 double outsideY = Math.max(0, Math.abs(y + 0.5D - centre) - panReach);
                 if (rowEdge * rowEdge + outsideY * outsideY <= radiusSquared) continue; // Whole row reachable.
+                if (pixels != null) {
+                    int rowStart = y * size;
+                    for (int x = 0; x < size; x++) {
+                        double outsideX = Math.max(0, Math.abs(x + 0.5D - centre) - panReach);
+                        if (outsideX * outsideX + outsideY * outsideY > radiusSquared) pixels[rowStart + x] = fill;
+                    }
+                    continue;
+                }
                 boolean changed = false;
                 frame.getRGB(0, y, size, 1, row, 0, size);
                 for (int x = 0; x < size; x++) {
@@ -1520,11 +1569,24 @@ public final class DynamicMinimapRenderer {
 
     /** {@link #toPng} for terrain images, also counted for /dappermap admin stats (palette or true colour). */
     private static byte[] terrainPng(BufferedImage image) {
+        return terrainPng(image, null);
+    }
+
+    /**
+     * Terrain PNG: exact palette when the image has at most 256 colours, otherwise colour-reduced
+     * (through {@code shared} when given, else a reduction of this image alone), otherwise full colour.
+     */
+    private static byte[] terrainPng(BufferedImage image, ColourReduction shared) {
         // 0 = exact palette, 1 = colour-reduced, 2 = full colour (for /dappermap admin stats).
         int kind = 0;
-        BufferedImage encoded = paletteImage(image);
+        int[] pixels = argbPixels(image);
+        BufferedImage encoded = paletteImage(image, pixels);
         if (encoded == image) {
-            BufferedImage reduced = terrainColours > 0 ? reduceColours(image, terrainColours) : null;
+            BufferedImage reduced = null;
+            if (terrainColours > 0) {
+                if (shared != null) reduced = shared.apply(pixels, image.getWidth(), image.getHeight());
+                if (reduced == null) reduced = reduceColours(image, pixels, terrainColours);
+            }
             kind = reduced != null ? 1 : 2;
             if (reduced != null) encoded = reduced;
         }
@@ -1545,49 +1607,128 @@ public final class DynamicMinimapRenderer {
     private static final int MAX_TRANSLUCENT = 16;
 
     /**
-     * Reduces a full-colour terrain image to at most {@code colours} colours, or null when it
-     * cannot (too many translucent colours). Opaque pixels are grouped on a 5-bit-per-channel
-     * histogram and split by median cut (each split goes across the widest channel at the
-     * pixel-weighted median); each group becomes its average colour. Translucent colours are
-     * kept exact. No dithering: flat areas stay flat, which keeps the PNG small. Terrain PNGs
-     * are 2-3x smaller this way; colours shift by a few steps at most. Render pool only.
+     * Backing pixel array of a plain TYPE_INT_ARGB image (one bank, no offsets, not a sub-image),
+     * else null. Its values are exactly what getRGB returns (non-premultiplied ARGB).
      */
-    static BufferedImage reduceColours(BufferedImage source, int colours) {
-        int width = source.getWidth(), height = source.getHeight();
+    private static int[] backingArgb(BufferedImage image) {
+        if (image.getType() != BufferedImage.TYPE_INT_ARGB) return null;
+        java.awt.image.WritableRaster raster = image.getRaster();
+        if (raster.getMinX() != 0 || raster.getMinY() != 0
+                || raster.getSampleModelTranslateX() != 0 || raster.getSampleModelTranslateY() != 0) return null;
+        if (!(raster.getDataBuffer() instanceof java.awt.image.DataBufferInt buffer)
+                || buffer.getNumBanks() != 1 || buffer.getOffset() != 0) return null;
+        if (!(raster.getSampleModel() instanceof java.awt.image.SinglePixelPackedSampleModel model)
+                || model.getScanlineStride() != image.getWidth()) return null;
+        int[] data = buffer.getData();
+        return data.length >= image.getWidth() * image.getHeight() ? data : null;
+    }
+
+    /** All pixels as ARGB in row order: the backing array when possible (treat as read-only), else a copy. */
+    private static int[] argbPixels(BufferedImage image) {
+        int[] backing = backingArgb(image);
+        if (backing != null) return backing;
+        int width = image.getWidth(), height = image.getHeight();
+        return image.getRGB(0, 0, width, height, null, 0, width);
+    }
+
+    /** 5-bit-per-channel histogram bin of an opaque colour. */
+    private static int colourBin(int argb) {
+        return ((((argb >>> 16) & 0xFF) >>> 3) << 10) | ((((argb >>> 8) & 0xFF) >>> 3) << 5) | ((argb & 0xFF) >>> 3);
+    }
+
+    /**
+     * A median-cut colour reduction: one colour per box of 5-bit histogram bins, plus room for
+     * up to {@code translucentSlots} exact translucent colours. Immutable once built, so one
+     * reduction can be shared by every rotated frame of a player-up terrain.
+     */
+    static final class ColourReduction {
+        private final int[] boxColours;
+        /** Box index per histogram bin; -1 for bins the reduction never saw. */
+        private final short[] binToBox;
+        private final int translucentSlots;
+
+        private ColourReduction(int[] boxColours, short[] binToBox, int translucentSlots) {
+            this.boxColours = boxColours;
+            this.binToBox = binToBox;
+            this.translucentSlots = translucentSlots;
+        }
+
+        /**
+         * Indexed image of {@code argb}: opaque pixels by bin, translucent colours exact (in order of
+         * appearance, after the box colours). Null when a pixel's bin is unknown to this reduction or
+         * there are more translucent colours than slots; callers then fall back.
+         */
+        BufferedImage apply(int[] argb, int width, int height) {
+            int boxes = this.boxColours.length;
+            int[] translucent = new int[Math.max(1, this.translucentSlots)];
+            int translucentCount = 0;
+            byte[] pixels = new byte[width * height];
+            for (int i = 0; i < pixels.length; i++) {
+                int colour = argb[i];
+                if ((colour >>> 24) == 255) {
+                    short box = this.binToBox[colourBin(colour)];
+                    if (box < 0) return null; // Colour the shared reduction never saw.
+                    pixels[i] = (byte)box;
+                } else {
+                    int slot = indexOf(translucent, translucentCount, colour);
+                    if (slot < 0) {
+                        if (translucentCount == this.translucentSlots) return null;
+                        slot = translucentCount;
+                        translucent[translucentCount++] = colour;
+                    }
+                    pixels[i] = (byte)(boxes + slot);
+                }
+            }
+            int[] palette = new int[boxes + translucentCount];
+            System.arraycopy(this.boxColours, 0, palette, 0, boxes);
+            System.arraycopy(translucent, 0, palette, boxes, translucentCount);
+            var model = new java.awt.image.IndexColorModel(8, palette.length, palette, 0, true, -1,
+                    java.awt.image.DataBuffer.TYPE_BYTE);
+            // Wrap the index array directly (same layout as TYPE_BYTE_INDEXED, no copy).
+            var raster = java.awt.image.Raster.createInterleavedRaster(
+                    new java.awt.image.DataBufferByte(pixels, pixels.length), width, height, width, 1, new int[]{0}, null);
+            return new BufferedImage(model, raster, false, null);
+        }
+    }
+
+    /**
+     * Median cut over the opaque pixels of {@code argb}: each split goes across the widest channel
+     * of the most populated box at the pixel-weighted median; each box becomes its pixel-weighted
+     * average colour. {@code reservedTranslucent} palette entries are left for exact translucent
+     * colours. Null when the pixels hold more than {@link #MAX_TRANSLUCENT} translucent colours.
+     */
+    static ColourReduction buildReduction(int[] argb, int colours, int extraTranslucent) {
         int[] count = new int[32768], sumR = new int[32768], sumG = new int[32768], sumB = new int[32768];
         int[] translucent = new int[MAX_TRANSLUCENT];
         int translucentCount = 0;
-        int[] row = new int[width];
-        // Pass 1: histogram of opaque colours; translucent colours collected exactly.
-        for (int y = 0; y < height; y++) {
-            source.getRGB(0, y, width, 1, row, 0, width);
-            for (int argb : row) {
-                if ((argb >>> 24) == 255) {
-                    int r = (argb >>> 16) & 0xFF, g = (argb >>> 8) & 0xFF, b = argb & 0xFF;
-                    int bin = ((r >>> 3) << 10) | ((g >>> 3) << 5) | (b >>> 3);
-                    count[bin]++;
-                    sumR[bin] += r;
-                    sumG[bin] += g;
-                    sumB[bin] += b;
-                } else if (indexOf(translucent, translucentCount, argb) < 0) {
-                    if (translucentCount == MAX_TRANSLUCENT) return null;
-                    translucent[translucentCount++] = argb;
-                }
+        // Histogram of opaque colours; translucent colours counted exactly.
+        for (int colour : argb) {
+            if ((colour >>> 24) == 255) {
+                int bin = colourBin(colour);
+                count[bin]++;
+                sumR[bin] += (colour >>> 16) & 0xFF;
+                sumG[bin] += (colour >>> 8) & 0xFF;
+                sumB[bin] += colour & 0xFF;
+            } else if (indexOf(translucent, translucentCount, colour) < 0) {
+                if (translucentCount == MAX_TRANSLUCENT) return null;
+                translucent[translucentCount++] = colour;
             }
         }
+        int translucentSlots = Math.min(MAX_TRANSLUCENT, translucentCount + extraTranslucent);
         int occupied = 0;
         for (int c : count) if (c > 0) occupied++;
         int[] bins = new int[occupied];
         for (int bin = 0, i = 0; bin < count.length; bin++) if (count[bin] > 0) bins[i++] = bin;
+        long opaquePixels = (long)argb.length;
 
         // Median cut: boxes are ranges of the bins array; split the most populated box until the budget is used.
-        int budget = Math.max(1, colours - translucentCount);
+        int budget = Math.max(1, colours - translucentSlots);
         int[] boxStart = new int[budget], boxEnd = new int[budget];
         long[] boxPixels = new long[budget];
         int boxes = 1;
         boxStart[0] = 0;
         boxEnd[0] = occupied;
-        boxPixels[0] = (long)width * height;
+        boxPixels[0] = opaquePixels;
         long[] sortKeys = new long[occupied];
         while (boxes < budget) {
             int pick = -1;
@@ -1621,9 +1762,10 @@ public final class DynamicMinimapRenderer {
             boxes++;
         }
 
-        // Palette: each box's pixel-weighted average colour, then the exact translucent colours.
-        int[] palette = new int[boxes + translucentCount];
-        short[] binIndex = new short[32768];
+        // Each box's pixel-weighted average colour; bins map to their box (unseen bins stay -1).
+        int[] boxColours = new int[boxes];
+        short[] binToBox = new short[32768];
+        java.util.Arrays.fill(binToBox, (short)-1);
         for (int box = 0; box < boxes; box++) {
             long r = 0, g = 0, b = 0, pixels = 0;
             for (int i = boxStart[box]; i < boxEnd[box]; i++) {
@@ -1632,31 +1774,27 @@ public final class DynamicMinimapRenderer {
                 g += sumG[bin];
                 b += sumB[bin];
                 pixels += count[bin];
-                binIndex[bin] = (short)box;
+                binToBox[bin] = (short)box;
             }
             pixels = Math.max(1, pixels);
-            palette[box] = 0xFF000000 | (int)(r / pixels) << 16 | (int)(g / pixels) << 8 | (int)(b / pixels);
+            boxColours[box] = 0xFF000000 | (int)(r / pixels) << 16 | (int)(g / pixels) << 8 | (int)(b / pixels);
         }
-        System.arraycopy(translucent, 0, palette, boxes, translucentCount);
+        return new ColourReduction(boxColours, binToBox, translucentSlots);
+    }
 
-        // Pass 2: write palette indices.
-        var model = new java.awt.image.IndexColorModel(8, palette.length, palette, 0, true, -1,
-                java.awt.image.DataBuffer.TYPE_BYTE);
-        BufferedImage indexed = new BufferedImage(width, height, BufferedImage.TYPE_BYTE_INDEXED, model);
-        byte[] pixels = ((java.awt.image.DataBufferByte)indexed.getRaster().getDataBuffer()).getData();
-        int offset = 0;
-        for (int y = 0; y < height; y++) {
-            source.getRGB(0, y, width, 1, row, 0, width);
-            for (int argb : row) {
-                if ((argb >>> 24) == 255) {
-                    int bin = ((((argb >>> 16) & 0xFF) >>> 3) << 10) | ((((argb >>> 8) & 0xFF) >>> 3) << 5) | ((argb & 0xFF) >>> 3);
-                    pixels[offset++] = (byte)binIndex[bin];
-                } else {
-                    pixels[offset++] = (byte)(boxes + indexOf(translucent, translucentCount, argb));
-                }
-            }
-        }
-        return indexed;
+    /**
+     * Reduces a full-colour terrain image to at most {@code colours} colours, or null when it
+     * cannot (too many translucent colours). Opaque pixels are grouped on a 5-bit-per-channel
+     * histogram and split by median cut; translucent colours are kept exact. No dithering: flat
+     * areas stay flat, which keeps the PNG small. Render pool only.
+     */
+    static BufferedImage reduceColours(BufferedImage source, int colours) {
+        return reduceColours(source, argbPixels(source), colours);
+    }
+
+    private static BufferedImage reduceColours(BufferedImage source, int[] argb, int colours) {
+        ColourReduction reduction = buildReduction(argb, colours, 0);
+        return reduction == null ? null : reduction.apply(argb, source.getWidth(), source.getHeight());
     }
 
     private static int indexOf(int[] values, int length, int value) {
@@ -1686,37 +1824,38 @@ public final class DynamicMinimapRenderer {
     /** Exact palette encoding; images with more than 256 ARGB values stay true-colour. */
     private static BufferedImage paletteImage(BufferedImage source) {
         if ((long)source.getWidth() * source.getHeight() < 4096L) return source;
+        return paletteImage(source, argbPixels(source));
+    }
+
+    /** {@link #paletteImage(BufferedImage)} with the source's ARGB pixels already in hand. */
+    private static BufferedImage paletteImage(BufferedImage source, int[] argb) {
+        if ((long)source.getWidth() * source.getHeight() < 4096L) return source;
         int[] keys = new int[512], values = new int[512], colours = new int[256];
         java.util.Arrays.fill(values, -1);
-        int[] row = new int[source.getWidth()];
         int count = 0;
-        for (int y = 0; y < source.getHeight(); ++y) {
-            source.getRGB(0, y, row.length, 1, row, 0, row.length);
-            for (int argb : row) {
-                int slot = (argb * 0x9E3779B9) >>> 23;
-                while (values[slot] >= 0 && keys[slot] != argb) slot = (slot + 1) & 511;
-                if (values[slot] < 0) {
-                    if (count == 256) return source;
-                    keys[slot] = argb;
-                    values[slot] = count;
-                    colours[count++] = argb;
-                }
+        for (int colour : argb) {
+            int slot = (colour * 0x9E3779B9) >>> 23;
+            while (values[slot] >= 0 && keys[slot] != colour) slot = (slot + 1) & 511;
+            if (values[slot] < 0) {
+                if (count == 256) return source;
+                keys[slot] = colour;
+                values[slot] = count;
+                colours[count++] = colour;
             }
         }
         int bits = count <= 2 ? 1 : count <= 4 ? 2 : count <= 16 ? 4 : 8;
         var model = new java.awt.image.IndexColorModel(bits, count, colours, 0, true, -1,
                 java.awt.image.DataBuffer.TYPE_BYTE);
-        var indexed = new BufferedImage(source.getWidth(), source.getHeight(),
+        int width = source.getWidth();
+        var indexed = new BufferedImage(width, source.getHeight(),
                 bits == 8 ? BufferedImage.TYPE_BYTE_INDEXED : BufferedImage.TYPE_BYTE_BINARY, model);
         byte[] pixels = ((java.awt.image.DataBufferByte) indexed.getRaster().getDataBuffer()).getData();
-        int offset = 0;
-        int stride = (source.getWidth() * bits + 7) / 8;
-        for (int y = 0; y < source.getHeight(); ++y) {
-            source.getRGB(0, y, row.length, 1, row, 0, row.length);
-            for (int x = 0; x < row.length; x++) {
-                int argb = row[x];
-                int slot = (argb * 0x9E3779B9) >>> 23;
-                while (keys[slot] != argb || values[slot] < 0) slot = (slot + 1) & 511;
+        int stride = (width * bits + 7) / 8;
+        for (int y = 0, offset = 0; y < source.getHeight(); ++y) {
+            for (int x = 0; x < width; x++) {
+                int colour = argb[y * width + x];
+                int slot = (colour * 0x9E3779B9) >>> 23;
+                while (keys[slot] != colour || values[slot] < 0) slot = (slot + 1) & 511;
                 if (bits == 8) pixels[offset++] = (byte) values[slot];
                 else pixels[y * stride + x * bits / 8] |= (byte) (values[slot] << (8 - bits - x * bits % 8));
             }
@@ -1724,45 +1863,35 @@ public final class DynamicMinimapRenderer {
         return indexed;
     }
 
-    private static int[] decodePixels(MapImage image) {
+    /**
+     * Decodes a world-map chunk image into {@code target}, the backing array of {@code chunkImage}
+     * (exactly width*height pixels, ARGB). Falls back to setRGB when no backing array is available.
+     * False when the image cannot be decoded (the chunk is then left as background).
+     */
+    private static boolean decodePixels(MapImage image, int[] target, BufferedImage chunkImage) {
         int width = image.width;
         int height = image.height;
-        long countLong = (long)width * (long)height;
-        if (countLong > 0L && countLong <= 2147483647L) {
-            int count = (int)countLong;
-            int[] palette = image.palette;
-            if (palette != null && palette.length != 0) {
-                byte[] packedIndices = image.packedIndices;
-                int bitsPerIndex = Byte.toUnsignedInt(image.bitsPerIndex);
-                int[] pixels;
-                if (packedIndices != null && packedIndices.length != 0 && bitsPerIndex > 0) {
-                    BitFieldArr bitField = new BitFieldArr(bitsPerIndex, count);
-                    bitField.set(packedIndices);
-                    pixels = new int[count];
-
-                    for(int i = 0; i < count; ++i) {
-                        int paletteIndex = bitField.get(i);
-                        pixels[i] = palette[paletteIndex >= 0 && paletteIndex < palette.length ? paletteIndex : 0];
-                    }
-                } else {
-                    if (palette.length != count) {
-                        return null;
-                    }
-
-                    pixels = Arrays.copyOf(palette, count);
-                }
-
-                for(int i = 0; i < pixels.length; ++i) {
-                    pixels[i] = Integer.rotateRight(pixels[i], 8);
-                }
-
-                return pixels;
-            } else {
-                return null;
+        int count = width * height;
+        int[] palette = image.palette;
+        if (palette == null || palette.length == 0) return false;
+        byte[] packedIndices = image.packedIndices;
+        int bitsPerIndex = Byte.toUnsignedInt(image.bitsPerIndex);
+        boolean packed = packedIndices != null && packedIndices.length != 0 && bitsPerIndex > 0;
+        if (!packed && palette.length != count) return false;
+        int[] pixels = target != null ? target : new int[count];
+        if (packed) {
+            BitFieldArr bitField = new BitFieldArr(bitsPerIndex, count);
+            bitField.set(packedIndices);
+            for (int i = 0; i < count; ++i) {
+                int paletteIndex = bitField.get(i);
+                // Map images store RGBA; Java wants ARGB.
+                pixels[i] = Integer.rotateRight(palette[paletteIndex >= 0 && paletteIndex < palette.length ? paletteIndex : 0], 8);
             }
         } else {
-            return null;
+            for (int i = 0; i < count; ++i) pixels[i] = Integer.rotateRight(palette[i], 8);
         }
+        if (target == null) chunkImage.setRGB(0, 0, width, height, pixels, 0, width);
+        return true;
     }
 
     private static long sampleHash(byte[] bytes) {

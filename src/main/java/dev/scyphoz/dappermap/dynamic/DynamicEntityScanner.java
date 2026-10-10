@@ -86,7 +86,7 @@ public final class DynamicEntityScanner {
                                 || !creatures.wouldAccept(position.x(), position.z())) continue;
                         NPCEntity npc = store.getComponent(npcRef, NPCEntity.getComponentType());
                         if (npc == null) continue;
-                        creatures.add(npcRef, position.x(), position.z());
+                        creatures.add(npcRef, npc, position.x(), position.z());
                     } catch (RuntimeException ignored) { }
                 }
             } else {
@@ -104,7 +104,7 @@ public final class DynamicEntityScanner {
                                         NPCEntity npc = chunk.getComponent(i, NPCEntity.getComponentType());
                                         if (npc != null) {
                                             Ref<EntityStore> npcRef = chunk.getReferenceTo(i);
-                                            creatures.add(npcRef, position.x(), position.z());
+                                            creatures.add(npcRef, npc, position.x(), position.z());
                                         }
                                     }
                                 }
@@ -131,7 +131,7 @@ public final class DynamicEntityScanner {
                 if (shown >= creatures.shown) break; // Marker limit reached (nearest first).
                 try {
                     if (!candidate.ref().isValid()) continue;
-                    NPCEntity npc = store.getComponent(candidate.ref(), NPCEntity.getComponentType());
+                    NPCEntity npc = candidate.npc(); // Read during selection; no second lookup.
                     if (npc == null) continue;
                     MinimapColours.Key key = threats == null
                             ? colourFor(candidate.ref(), npc, playerRef, store)
@@ -243,7 +243,7 @@ public final class DynamicEntityScanner {
         }
     }
 
-    /** Native spatial indices are rebuilt by Hytale. Query a padded box first,
+    /** Native spatial indices are rebuilt by Hytale every tick. Query a slightly padded cylinder first,
      * then apply the original exact radius/height checks to current transforms.
      * No vertical filter means all elevations, not a three-dimensional sphere. */
     private static List<Ref<EntityStore>> nearby(Store<EntityStore> store, Vector3d position,
@@ -266,14 +266,16 @@ public final class DynamicEntityScanner {
         }
     }
 
+    /** Hytale rebuilds the spatial indices every world tick, so indexed positions are at most one tick old. */
+    private static final double INDEX_SLACK = 8.0;
+
     static <T> List<T> collectNearby(com.hypixel.hytale.component.spatial.SpatialStructure<T> structure,
                                      Vector3d position, double radius, double height) {
-        double padded = radius + 32.0; // Normal movement between spatial-index refreshes.
-        double minY = height > 0 ? position.y() - height - 32 : -Double.MAX_VALUE;
-        double maxY = height > 0 ? position.y() + height + 32 : Double.MAX_VALUE;
-        List<T> result = new ArrayList<>();
-        structure.collectBox(new Vector3d(position.x() - padded, minY, position.z() - padded),
-                new Vector3d(position.x() + padded, maxY, position.z() + padded), result);
+        // Cylinder: horizontal circle plus a vertical band. collectCylinder takes the FULL
+        // height (it tests |dy| <= height / 2); no vertical filter means every elevation.
+        double fullHeight = height > 0 ? 2.0 * (height + INDEX_SLACK) : Double.MAX_VALUE;
+        List<T> result = new ArrayList<>(64);
+        structure.collectCylinder(position, radius + INDEX_SLACK, fullHeight, result);
         return result;
     }
 
@@ -282,7 +284,7 @@ public final class DynamicEntityScanner {
 
     /** Retains positions/references only; expensive AI inspection follows selection. */
     static final class NearestNpcs {
-        record Candidate(Ref<EntityStore> ref, double x, double z, double distanceSquared) { }
+        record Candidate(Ref<EntityStore> ref, NPCEntity npc, double x, double z, double distanceSquared) { }
         /** Hostile-only pool: 4x the marker limit, capped so classification work stays bounded. */
         private static final int HOSTILE_POOL_FACTOR = 4, HOSTILE_POOL_MAX = 128;
         /** Markers to show (16/32/64); {@code limit} is how many nearest candidates are kept. */
@@ -305,13 +307,13 @@ public final class DynamicEntityScanner {
         boolean wouldAccept(double markerX, double markerZ) {
             return candidates.size() < limit || distance(markerX, markerZ) < candidates.peek().distanceSquared();
         }
-        void add(Ref<EntityStore> ref, double markerX, double markerZ) {
+        void add(Ref<EntityStore> ref, NPCEntity npc, double markerX, double markerZ) {
             double distance = distance(markerX, markerZ);
             if (candidates.size() >= limit) {
                 if (distance >= candidates.peek().distanceSquared()) return;
                 candidates.poll();
             }
-            candidates.add(new Candidate(ref, markerX, markerZ, distance));
+            candidates.add(new Candidate(ref, npc, markerX, markerZ, distance));
         }
         List<Candidate> sorted() {
             var result = new ArrayList<>(candidates);

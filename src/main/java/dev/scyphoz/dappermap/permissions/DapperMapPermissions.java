@@ -66,8 +66,10 @@ public final class DapperMapPermissions {
     public static final String DEFAULT_PLAYER_GROUP = HytalePermissionsProvider.DEFAULT_GROUP;
 
     private static boolean registered;
-    private static boolean grantPlayerSettingsByDefault = true;
-    private static final java.util.Set<String> registeredPlayerNodes = new java.util.HashSet<>();
+    private static volatile boolean grantPlayerSettingsByDefault = true;
+    /** Setting name -> registered query. PermissionQuery.of parses the node, so each is built once. */
+    private static final java.util.concurrent.ConcurrentHashMap<String, PermissionQuery> PLAYER_QUERIES =
+            new java.util.concurrent.ConcurrentHashMap<>();
 
     private DapperMapPermissions() {
     }
@@ -86,14 +88,18 @@ public final class DapperMapPermissions {
      *                     mismatch here would leave that command checking a node nobody
      *                     actually granted.
      */
-    public static synchronized PermissionQuery player(String settingName) {
+    public static PermissionQuery player(String settingName) {
+        PermissionQuery cached = PLAYER_QUERIES.get(settingName); // Lock-free on every later call.
+        return cached != null ? cached : PLAYER_QUERIES.computeIfAbsent(settingName, DapperMapPermissions::registerPlayer);
+    }
+
+    /** Registers one player node (first request only) and returns its query. */
+    private static PermissionQuery registerPlayer(String settingName) {
         String node = COMMAND_ROOT + "." + settingName;
-        if (registeredPlayerNodes.add(node)) {
-            if (grantPlayerSettingsByDefault) {
-                PermissionsModule.registerPermission(node, DEFAULT_PLAYER_GROUP);
-            } else {
-                PermissionsModule.registerPermission(node);
-            }
+        if (grantPlayerSettingsByDefault) {
+            PermissionsModule.registerPermission(node, DEFAULT_PLAYER_GROUP);
+        } else {
+            PermissionsModule.registerPermission(node);
         }
         return PermissionQuery.of(node);
     }

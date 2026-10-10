@@ -50,6 +50,8 @@ public final class NativeWorldMapIntegration {
     private static final long ICON_LOAD_TIMEOUT_MS = 2000L;
     private static volatile Map<String, String> filenameIndex;
     private static volatile long filenameIndexBuiltMs;
+    /** Common asset entry count when the filename index was last built. */
+    private static volatile int filenameIndexAssetCount = -1;
     private static final com.hypixel.hytale.logger.HytaleLogger LOGGER =
             com.hypixel.hytale.logger.HytaleLogger.get("DapperMap");
     private NativeWorldMapIntegration() { }
@@ -173,9 +175,9 @@ public final class NativeWorldMapIntegration {
         String key = filename.toLowerCase(java.util.Locale.ROOT);
         Map<String, String> index = filenameIndex;
         long now = System.currentTimeMillis();
-        if (index == null || (!index.containsKey(key) && now - filenameIndexBuiltMs >= 60000L)) {
+        if (index == null || (!index.containsKey(key) && filenameIndexRebuildDue(now))) {
             synchronized (NativeWorldMapIntegration.class) {
-                if (filenameIndex == null || (!filenameIndex.containsKey(key) && now - filenameIndexBuiltMs >= 60000L)) {
+                if (filenameIndex == null || (!filenameIndex.containsKey(key) && filenameIndexRebuildDue(now))) {
                     filenameIndex = buildFilenameIndex();
                     filenameIndexBuiltMs = now;
                 }
@@ -185,9 +187,31 @@ public final class NativeWorldMapIntegration {
         return index.get(key);
     }
 
+    /**
+     * A miss rebuilds the index at most once a minute, and only when the number of common
+     * asset entries changed (an asset pack was loaded) or 10 minutes have passed. A name that is
+     * simply missing therefore no longer walks the whole registry every minute.
+     */
+    private static boolean filenameIndexRebuildDue(long now) {
+        long age = now - filenameIndexBuiltMs;
+        if (age < 60_000L) return false;
+        if (age >= 600_000L) return true;
+        return commonAssetCount() != filenameIndexAssetCount;
+    }
+
+    /** Number of common asset entries (cheap: the registry's collection size), or -1 when unreadable. */
+    private static int commonAssetCount() {
+        try {
+            return CommonAssetRegistry.getAllAssets().size();
+        } catch (RuntimeException ignored) {
+            return -1;
+        }
+    }
+
     /** Indexes every common UI .png by filename, preferring world-map marker folders. */
     private static Map<String, String> buildFilenameIndex() {
         Map<String, String> index = new java.util.HashMap<>();
+        filenameIndexAssetCount = commonAssetCount();
         try {
             for (List<CommonAssetRegistry.PackAsset> assets : CommonAssetRegistry.getAllAssets()) {
                 if (assets == null || assets.isEmpty()) continue;
@@ -220,7 +244,8 @@ public final class NativeWorldMapIntegration {
             }
         }
         String baseName = image.substring(0, image.length() - 4).replace('/', '_');
-        return DynamicAssetPublisher.prepare("UI/DapperMap/" + kind + playerSlug + "-" + baseName + "-" + hex + ".png", published);
+        // Source and tinted arrays are cached and never modified: hash each once, not once per player.
+        return DynamicAssetPublisher.prepareShared("UI/DapperMap/" + kind + playerSlug + "-" + baseName + "-" + hex + ".png", published);
     }
 
     /** Logs each unresolvable icon name once, to help identify missing marker artwork. */

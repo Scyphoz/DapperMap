@@ -94,6 +94,8 @@ public final class CreatureIcons {
 
     /** Icon key -> source description, filled on the world thread, read on the render pool. */
     private static final ConcurrentHashMap<String, Source> SOURCES = new ConcurrentHashMap<>();
+    /** Bumped whenever SOURCES is cleared; per-viewer key caches then register their creatures again. */
+    private static volatile int sourcesGeneration;
     /** A creature's uncoloured icon: 2x canvas PNG, and whether it is a face "sticker" or an initials disc. */
     private record Base(byte[] png, boolean sticker) { }
     /** Icon key -> uncoloured base (shared by all players). Bounded: ~10-15 KB each. */
@@ -116,7 +118,8 @@ public final class CreatureIcons {
      * Model object changes; only creatures shown in the latest scan are kept. World thread only.
      */
     public static final class KeyCache {
-        private record Entry(Model model, String key) { }
+        /** {@code generation}: the SOURCES generation the key was registered in (see {@link #sourcesGeneration}). */
+        private record Entry(Model model, String key, int generation) { }
         private Map<Ref<EntityStore>, Entry> current = new HashMap<>();
         private Map<Ref<EntityStore>, Entry> next = new HashMap<>();
 
@@ -127,7 +130,10 @@ public final class CreatureIcons {
                 model = component == null ? null : component.getModel();
             } catch (RuntimeException ignored) { }
             Entry entry = this.current.get(ref);
-            if (entry == null || entry.model() != model) entry = new Entry(model, register(npc.getRoleName(), model));
+            int generation = sourcesGeneration;
+            // Re-register after SOURCES was cleared, so a creature that stayed in view keeps a resolvable key.
+            if (entry == null || entry.model() != model || entry.generation() != generation)
+                entry = new Entry(model, register(npc.getRoleName(), model), generation);
             this.next.put(ref, entry);
             return entry.key();
         }
@@ -158,7 +164,10 @@ public final class CreatureIcons {
         long hash = 0xcbf29ce484222325L;
         for (char c : source.toString().toCharArray()) hash = (hash ^ c) * 0x100000001b3L;
         String key = Long.toHexString(hash);
-        if (SOURCES.size() >= 4096 && !SOURCES.containsKey(key)) SOURCES.clear(); // Bounded; keys re-register.
+        if (SOURCES.size() >= 4096 && !SOURCES.containsKey(key)) {
+            SOURCES.clear(); // Bounded; keys re-register (KeyCache sees the new generation).
+            sourcesGeneration++;
+        }
         SOURCES.putIfAbsent(key, source);
         return key;
     }
@@ -175,8 +184,7 @@ public final class CreatureIcons {
         if (shared == null) {
             Base base = BASES.get(key);
             if (base == null) {
-                Source source = SOURCES.get(key);
-                if (source == null) return null;
+                Source source = SOURCES.get(key); // Null when SOURCES was cleared (bounded).
                 // One render per creature type: a second request waits for the first, then reuses it.
                 Object lock = BUILDING.computeIfAbsent(key, ignored -> new Object());
                 try {
@@ -184,8 +192,10 @@ public final class CreatureIcons {
                         base = BASES.get(key);
                         if (base == null) {
                             // Saved from an earlier server run? Skips the 15-60 ms model render.
+                            // The disk cache needs no Source, so it also covers a dropped source.
                             base = loadCachedBase(key);
                             if (base == null) {
+                                if (source == null) return null;
                                 base = renderBase(source);
                                 if (base == null) return null;
                                 storeCachedBase(key, base);
