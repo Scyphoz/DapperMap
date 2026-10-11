@@ -22,7 +22,13 @@ public final class DynamicMinimapHud extends CustomUIHud {
     public static final int MAP_MARKER_SLOTS = 96;
     /** Edge-tracked icons (world-map, BetterMap waypoint and death markers). */
     public static final int EDGE_MARKER_SLOTS = 64;
-    /** Total marker elements mounted in the HUD (previously 2 x 128 = 256). */
+    /**
+     * Hostile and attacking creatures, drawn above the other in-map markers so they stay visible
+     * in crowds. Any beyond this many fall back to the normal in-map layer (which has room for
+     * every in-map marker), so none are lost.
+     */
+    public static final int THREAT_MARKER_SLOTS = 32;
+    /** Markers one projection can place (in-map + edge); the threat layer takes some in-map ones. */
     public static final int MARKER_SLOTS = MAP_MARKER_SLOTS + EDGE_MARKER_SLOTS;
     /** Largest in-map marker movement (logical px) that does not trigger an Anchor update. */
     private static final int MARKER_DEADBAND = 1;
@@ -73,6 +79,9 @@ public final class DynamicMinimapHud extends CustomUIHud {
             "WayfinderMmMk", "#WayfinderMmRoot #WayfinderMmClip #WayfinderMmMarkers #");
     private final MarkerLayer edgeLayer = new MarkerLayer(true, EDGE_MARKER_SLOTS,
             "WayfinderMmEdge", "#WayfinderMmRoot #WayfinderMmEdges #");
+    /** Emitted after mapLayer in the same group, so its markers draw on top. */
+    private final MarkerLayer threatLayer = new MarkerLayer(false, THREAT_MARKER_SLOTS,
+            "WayfinderMmThr", "#WayfinderMmRoot #WayfinderMmClip #WayfinderMmMarkers #");
 
     // All constants below are logical HUD units. They are converted to display units
     // only when markup/Anchor values are produced.
@@ -259,7 +268,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
     public DynamicMinimapRenderer.LiveSnapshot snapshot(byte[] terrain, double selfAngle) {
         if (!this.built || !this.terrainShown || terrain == null) return null;
         java.util.List<DynamicMinimapRenderer.PreviewMarker> markers = new java.util.ArrayList<>();
-        for (MarkerLayer layer : new MarkerLayer[]{this.mapLayer, this.edgeLayer}) {
+        for (MarkerLayer layer : new MarkerLayer[]{this.mapLayer, this.threatLayer, this.edgeLayer}) {
             for (int i = 0; i < layer.active; i++) {
                 if (!layer.visible[i] || layer.path[i] == null) continue;
                 byte[] icon = DynamicAssetPublisher.markerBytes(this.uuid, layer.path[i]);
@@ -513,6 +522,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
     /** Force the next marker update to rebind client asset paths after teleportation. */
     public void invalidateMarkerSlots() {
         this.mapLayer.forget();
+        this.threatLayer.forget();
         this.edgeLayer.forget();
     }
 
@@ -525,28 +535,41 @@ public final class DynamicMinimapHud extends CustomUIHud {
         if (!this.built) return;
         // Scratch arrays reused on every update (world thread only), cleared at the end.
         Slot[] map = this.scratchMap;
+        Slot[] threat = this.scratchThreat;
         Slot[] edge = this.scratchEdge;
-        int mapCount = 0, edgeCount = 0;
+        int mapCount = 0, threatCount = 0, edgeCount = 0;
         if (slots != null) {
             for (Slot slot : slots) {
                 if (slot == null || slot.path == null) continue;
                 if (slot.fixed) { if (edgeCount < edge.length) edge[edgeCount++] = slot; }
+                // Hostile/attacking creatures use the top layer while it has room.
+                else if (slot.threat && threatCount < threat.length) threat[threatCount++] = slot;
                 else if (mapCount < map.length) map[mapCount++] = slot;
             }
         }
-        Slot[] arranged = arrangeMapSlots(this.mapLayer, map, mapCount, this.scratchPlaced, this.scratchTaken);
-        int arrangedCount = 0;
-        for (int i = 0; i < arranged.length; i++) if (arranged[i] != null) arrangedCount = i + 1;
         UICommandBuilder builder = new AnchorCommandBuilder();
-        boolean changed = this.applyLayer(builder, this.mapLayer, arranged, arrangedCount);
+        boolean changed = this.applyArranged(builder, this.mapLayer, map, mapCount);
+        changed |= this.applyArranged(builder, this.threatLayer, threat, threatCount);
         changed |= this.applyLayer(builder, this.edgeLayer, edge, edgeCount);
         if (changed) this.update(false, builder);
         java.util.Arrays.fill(map, null);
+        java.util.Arrays.fill(threat, null);
         java.util.Arrays.fill(edge, null);
+    }
+
+    /** Arranges an in-map layer's markers onto its existing elements, then emits the changes. */
+    private boolean applyArranged(UICommandBuilder builder, MarkerLayer layer, Slot[] slots, int count) {
+        Slot[] arranged = arrangeMapSlots(layer, slots, count, this.scratchPlaced, this.scratchTaken);
+        int arrangedCount = 0;
+        int capacity = layer.path.length;
+        for (int i = 0; i < capacity; i++) if (arranged[i] != null) arrangedCount = i + 1;
+        boolean changed = this.applyLayer(builder, layer, arranged, arrangedCount);
         java.util.Arrays.fill(arranged, null);
+        return changed;
     }
 
     private final Slot[] scratchMap = new Slot[MAP_MARKER_SLOTS];
+    private final Slot[] scratchThreat = new Slot[THREAT_MARKER_SLOTS];
     private final Slot[] scratchEdge = new Slot[EDGE_MARKER_SLOTS];
     private final Slot[] scratchPlaced = new Slot[MAP_MARKER_SLOTS];
     private final boolean[] scratchTaken = new boolean[MAP_MARKER_SLOTS];
@@ -585,11 +608,11 @@ public final class DynamicMinimapHud extends CustomUIHud {
             }
             if (best >= 0 && bestDistance <= 2 * slots[j].size) { placed[best] = slots[j]; taken[j] = true; }
         }
-        int free = 0;
+        int free = 0, capacity = layer.path.length; // placed[] is sized for the largest layer.
         for (int j = 0; j < count; j++) {
             if (taken[j]) continue;
-            while (free < placed.length && placed[free] != null) free++;
-            if (free == placed.length) break;
+            while (free < capacity && placed[free] != null) free++;
+            if (free == capacity) break;
             placed[free++] = slots[j];
         }
         return placed;
@@ -759,6 +782,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
 
             this.invalidateMarkerSlots();
             this.mapLayer.active = 0;
+            this.threatLayer.active = 0;
             this.edgeLayer.active = 0;
         }
     }
@@ -1027,6 +1051,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
                 .append(", Height: ").append(displayBuffer).append("); ");
 
         appendMarkerLayer(out, this.mapLayer);
+        appendMarkerLayer(out, this.threatLayer); // After the map layer: hostiles draw on top.
         out.append("} "); // Markers
         out.append("} "); // Pan
         out.append("} "); // Clip
@@ -1425,17 +1450,24 @@ public final class DynamicMinimapHud extends CustomUIHud {
         public final int top;
         public final int size;
         public final boolean fixed;
+        /** Hostile or attacking creature: placed in the top marker layer. */
+        public final boolean threat;
 
         public Slot(String path, int left, int top, int size) {
-            this(path, left, top, size, false);
+            this(path, left, top, size, false, false);
         }
 
         public Slot(String path, int left, int top, int size, boolean fixed) {
+            this(path, left, top, size, fixed, false);
+        }
+
+        public Slot(String path, int left, int top, int size, boolean fixed, boolean threat) {
             this.path = path;
             this.left = left;
             this.top = top;
             this.size = size;
             this.fixed = fixed;
+            this.threat = threat;
         }
     }
 }

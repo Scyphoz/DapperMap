@@ -33,7 +33,36 @@ public class DapperMapSessionManager {
 
     public void setDataDirectory(Path dataDirectory) {
         this.settingsStore = new DynamicMinimapSettingsStore(dataDirectory);
-        this.adminSettingsStore = new DynamicMinimapSettingsStore(dataDirectory.resolve("admin-defaults"));
+        // Server defaults live in one file in the mod's data folder.
+        Path adminFile = dataDirectory.resolve(ADMIN_DEFAULTS_FILE);
+        migrateAdminDefaultsFile(dataDirectory, adminFile);
+        this.adminSettingsStore = DynamicMinimapSettingsStore.forFile(adminFile);
+    }
+
+    /** Server defaults file, in the mod's data folder. */
+    private static final String ADMIN_DEFAULTS_FILE = "admin-defaults.json";
+
+    /**
+     * Before 3.1.0 the server defaults were saved as admin-defaults/players/&lt;fixed id&gt;.json.
+     * Moves that file to admin-defaults.json (once, at startup) and removes the emptied folders.
+     * An existing admin-defaults.json always wins; anything that cannot be moved is left in place.
+     */
+    private static void migrateAdminDefaultsFile(Path dataDirectory, Path target) {
+        Path legacyDir = dataDirectory.resolve("admin-defaults");
+        Path legacyPlayers = legacyDir.resolve("players");
+        Path legacyFile = legacyPlayers.resolve(ADMIN_DEFAULTS_ID + ".json");
+        try {
+            if (!java.nio.file.Files.exists(legacyDir)) return; // Nothing to migrate (the usual case).
+            if (java.nio.file.Files.exists(legacyFile) && !java.nio.file.Files.exists(target)) {
+                java.nio.file.Files.createDirectories(dataDirectory);
+                java.nio.file.Files.move(legacyFile, target);
+            }
+            // Only removes the folders once they are empty (otherwise this throws and stops here).
+            java.nio.file.Files.deleteIfExists(legacyPlayers);
+            java.nio.file.Files.deleteIfExists(legacyDir);
+        } catch (java.io.IOException | RuntimeException ignored) {
+            // Left as it was; the defaults still load from admin-defaults.json when present.
+        }
     }
 
     public void showIfEnabledByDefault(Player player, PlayerRef playerRef, DapperMapConfig config) {
@@ -109,6 +138,10 @@ public class DapperMapSessionManager {
     public void setAdminDefaults(DynamicMinimapSetting settings) {
         settings.normalize();
         if (this.adminSettingsStore != null) {
+            // Load the admin file first (no-op once cached) so the store knows the mod defaults it
+            // inherits and saves only what the admin changed; mod default changes then still apply.
+            DapperMapConfig config = DapperMap.getConfig() == null ? null : DapperMap.getConfig().get();
+            if (config != null) this.getAdminDefaults(config);
             this.adminSettingsStore.put(ADMIN_DEFAULTS_ID, settings.copy());
         }
     }
@@ -221,7 +254,8 @@ public class DapperMapSessionManager {
         this.applySettings(playerRef, defaults);
         UUID uuid = playerRef.getUuid();
         this.customisedPlayers.remove(uuid);
-        if (this.settingsStore != null) this.settingsStore.delete(uuid);
+        // The player now inherits these defaults; later changes are saved relative to them.
+        if (this.settingsStore != null) this.settingsStore.delete(uuid, defaults);
         return defaults;
     }
 

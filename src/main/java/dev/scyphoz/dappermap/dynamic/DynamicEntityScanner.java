@@ -140,12 +140,14 @@ public final class DynamicEntityScanner {
                     // Hostile-only: skip neutral and friendly creatures (attacking ones always show).
                     if (hostileOnly && key != HOSTILE && key != HOSTILE_ACTIVE) continue;
                     Color colour = settings.colours.awt(key, 255);
+                    // Hostile and attacking creatures are drawn above other markers.
+                    boolean threat = key == HOSTILE || key == HOSTILE_ACTIVE;
                     // Icons mode: the same threat colour edges the creature's face icon
                     // (the icon key itself is a cached map read per creature).
                     markers.add(useIcons
                             ? DynamicMinimapMarker.creature(candidate.x(), candidate.z(),
-                            icons.key(candidate.ref(), npc, store), colour, iconSize)
-                            : DynamicMinimapMarker.dot(candidate.x(), candidate.z(), colour, 7));
+                            icons.key(candidate.ref(), npc, store), colour, iconSize, threat)
+                            : DynamicMinimapMarker.creatureDot(candidate.x(), candidate.z(), colour, 7, threat));
                     shown++;
                 } catch (RuntimeException ignored) { }
             }
@@ -356,8 +358,17 @@ public final class DynamicEntityScanner {
             int engagement = engagement(npc, playerRef, lockedTarget, executingAttack);
             Entry cached = this.current.get(npcRef);
             if (cached == null || cached.engagement() != engagement || now >= cached.expiresAt()) {
-                DynamicMinimapColours.Key key = colourFor(npcRef, npc, playerRef, accessor, lockedTarget, executingAttack);
-                long ttl = key == HOSTILE || key == HOSTILE_ACTIVE ? TTL_MS : passiveTtl;
+                NpcThreatProfile profile;
+                try { profile = NpcThreatClassifier.profileFor(npc.getRoleIndex()); }
+                catch (RuntimeException | LinkageError ignored) { profile = NpcThreatProfile.UNKNOWN; }
+                DynamicMinimapColours.Key key = colourFor(npcRef, npc, playerRef, accessor, lockedTarget,
+                        executingAttack, profile);
+                // Provisional result: a creature's first check (its attitude towards the player
+                // may not be set up yet) or one made while its species profile is still loading.
+                // It is checked again on the next scan instead of being kept for the full TTL,
+                // so a hostile creature shows as hostile almost as soon as it appears.
+                boolean provisional = cached == null || profile == NpcThreatProfile.LOADING;
+                long ttl = provisional ? 0L : key == HOSTILE || key == HOSTILE_ACTIVE ? TTL_MS : passiveTtl;
                 cached = new Entry(key, engagement, now + ttl);
             }
             this.next.put(npcRef, cached);
@@ -389,8 +400,11 @@ public final class DynamicEntityScanner {
     /** Full threat classification, reading the creature's locked target and attack state itself. */
     private static DynamicMinimapColours.Key colourFor(Ref<EntityStore> npcRef, NPCEntity npc,
                                                        Ref<EntityStore> playerRef, ComponentAccessor<EntityStore> commandBuffer) {
+        NpcThreatProfile profile;
+        try { profile = NpcThreatClassifier.profileFor(npc.getRoleIndex()); }
+        catch (RuntimeException | LinkageError ignored) { profile = NpcThreatProfile.UNKNOWN; }
         return colourFor(npcRef, npc, playerRef, commandBuffer,
-                getLockedTarget(npcRef, commandBuffer), isExecutingAttack(npcRef, commandBuffer));
+                getLockedTarget(npcRef, commandBuffer), isExecutingAttack(npcRef, commandBuffer), profile);
     }
 
     /** True while the creature is executing an attack (false when unknown). */
@@ -403,10 +417,11 @@ public final class DynamicEntityScanner {
         }
     }
 
-    /** Full threat classification with the locked target and attack state already read. */
+    /** Full threat classification with the locked target, attack state and role profile already read. */
     private static DynamicMinimapColours.Key colourFor(Ref<EntityStore> npcRef, NPCEntity npc,
                                                        Ref<EntityStore> playerRef, ComponentAccessor<EntityStore> commandBuffer,
-                                                       Ref<EntityStore> lockedTarget, boolean executingAttack) {
+                                                       Ref<EntityStore> lockedTarget, boolean executingAttack,
+                                                       NpcThreatProfile profile) {
         try {
             if (playerRef == null || !playerRef.isValid()) return NEUTRAL;
             WorldSupport worldSupport = WorldSupport.get(npcRef, commandBuffer);
@@ -427,7 +442,6 @@ public final class DynamicEntityScanner {
                 StateSupport support = StateSupport.get(npcRef, commandBuffer);
                 if (support != null) state = support.getStateName();
             } catch (RuntimeException ignored) { }
-            var profile = NpcThreatClassifier.profileFor(npc.getRoleIndex());
             var signals = NpcBehaviourSignals.capture(npc.getRole(), playerRef, lockedTarget, npcRef, commandBuffer);
             return NpcThreatClassifier.classify(profile, dynamicAttitude, defaultAttitude,
                     override, targetingPlayer, state, executingAttack, signals);
@@ -659,7 +673,8 @@ public final class DynamicEntityScanner {
                         PENDING.remove(roleIndex);
                     }
                 })) PENDING.remove(roleIndex); // Render pool busy: retry on a later scan.
-                return cached != null ? cached.profile : NpcThreatProfile.UNKNOWN;
+                // LOADING classifies exactly like UNKNOWN; it also tells the threat cache to re-check soon.
+                return cached != null ? cached.profile : NpcThreatProfile.LOADING;
             } catch (RuntimeException | LinkageError failure) {
                 return NpcThreatProfile.UNKNOWN;
             }
@@ -743,6 +758,8 @@ public final class DynamicEntityScanner {
         }
         enum Kind { UNKNOWN, FLEE_ONLY, EVASIVE, AGGRESSIVE, DEFENSIVE, STANDARD }
         static final NpcThreatProfile UNKNOWN = new NpcThreatProfile(Kind.UNKNOWN, false);
+        /** Same as UNKNOWN, returned (by identity) while the role's profile is still being read. */
+        static final NpcThreatProfile LOADING = new NpcThreatProfile(Kind.UNKNOWN, false);
 
         static NpcThreatProfile resolve(String roleName, Function<String, JsonObject> assets) {
             List<JsonObject> variants = new ArrayList<>();

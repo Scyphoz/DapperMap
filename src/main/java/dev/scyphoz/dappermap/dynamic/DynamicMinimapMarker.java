@@ -11,6 +11,8 @@ public final class DynamicMinimapMarker {
     public final Style style;
     public final String assetPath;
     public final boolean clampToEdge;
+    /** Hostile or attacking creature: drawn in the HUD's top marker layer, above other markers. */
+    public final boolean threat;
 
     private DynamicMinimapMarker(
             double x,
@@ -21,6 +23,19 @@ public final class DynamicMinimapMarker {
             String assetPath,
             boolean clampToEdge
     ) {
+        this(x, z, color, size, style, assetPath, clampToEdge, false);
+    }
+
+    private DynamicMinimapMarker(
+            double x,
+            double z,
+            Color color,
+            int size,
+            Style style,
+            String assetPath,
+            boolean clampToEdge,
+            boolean threat
+    ) {
         this.x = x;
         this.z = z;
         this.color = color;
@@ -28,18 +43,25 @@ public final class DynamicMinimapMarker {
         this.style = style;
         this.assetPath = assetPath;
         this.clampToEdge = clampToEdge;
+        this.threat = threat;
     }
 
     public static DynamicMinimapMarker dot(double x, double z, Color color, int size) {
         return new DynamicMinimapMarker(x, z, color, size, Style.DOT, null, false);
     }
 
+    /** Creature dot; {@code threat} marks hostile and attacking creatures (drawn on top). */
+    public static DynamicMinimapMarker creatureDot(double x, double z, Color color, int size, boolean threat) {
+        return new DynamicMinimapMarker(x, z, color, size, Style.DOT, null, false, threat);
+    }
+
     /**
      * Creature face icon; {@code iconKey} identifies the creature type (see DynamicCreatureIcons) and
      * {@code color} is its threat colour, used for the icon's outer edge.
      */
-    public static DynamicMinimapMarker creature(double x, double z, String iconKey, Color color, int size) {
-        return new DynamicMinimapMarker(x, z, color, size, Style.CREATURE, iconKey, false);
+    public static DynamicMinimapMarker creature(double x, double z, String iconKey, Color color, int size,
+                                                boolean threat) {
+        return new DynamicMinimapMarker(x, z, color, size, Style.CREATURE, iconKey, false, threat);
     }
 
     public static DynamicMinimapMarker betterMap(
@@ -68,6 +90,7 @@ public final class DynamicMinimapMarker {
         if (!(other instanceof DynamicMinimapMarker marker)) return false;
         return Double.compare(x, marker.x) == 0 && Double.compare(z, marker.z) == 0
                 && size == marker.size && style == marker.style && clampToEdge == marker.clampToEdge
+                && threat == marker.threat
                 && java.util.Objects.equals(color, marker.color)
                 && java.util.Objects.equals(assetPath, marker.assetPath);
     }
@@ -79,6 +102,7 @@ public final class DynamicMinimapMarker {
         hash = 31 * hash + size;
         hash = 31 * hash + java.util.Objects.hashCode(style);
         hash = 31 * hash + java.util.Objects.hashCode(assetPath);
+        hash = 31 * hash + Boolean.hashCode(threat);
         return 31 * hash + Boolean.hashCode(clampToEdge);
     }
 

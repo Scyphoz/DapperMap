@@ -335,12 +335,7 @@ public final class DynamicMinimapSession {
                     case NATIVE_WORLDMAP -> asset = NativeWorldMapIntegration.prepareIconAsset(
                             marker.assetPath, marker.color, this.slug);
                     // Creature face icons are built once per creature type and shared by all players.
-                    case CREATURE -> asset = DynamicCreatureIcons.prepareAsset(marker.assetPath, this.slug, rgb);
-                    default -> {
-                        byte[] png = DynamicMinimapRenderer.renderDot(rgb, palette);
-                        String path = "UI/DapperMap/mk-" + this.slug + "-" + DapperMapUtil.hex6(rgb) + ".png";
-                        asset = DynamicAssetPublisher.prepare(path, png);
-                    }
+                    default -> asset = this.prepareCreatureAsset(marker.style, marker.assetPath, rgb, palette);
                 }
                 if (!this.canRenderHud(targetHud) || generation != this.markerAssetGeneration
                         || sourceWorld != currentWorld()) return;
@@ -350,11 +345,53 @@ public final class DynamicMinimapSession {
                     this.failedMarkerAssets.put(key, System.currentTimeMillis());
                     return;
                 }
-                if (this.preparedMarkerAssets.size() >= 256) this.preparedMarkerAssets.clear();
-                this.preparedMarkerAssets.put(key, asset);
+                this.putPrepared(key, asset);
+                // Creature icons and dots: also prepare the threat colours now, so a creature
+                // turning hostile or attacking changes colour on the very next projection.
+                if (marker.style == Style.CREATURE || marker.style == Style.DOT)
+                    this.prepareThreatColours(marker, rgb, palette, generation);
             } finally { this.markerAssetsPending.remove(key); }
         })) this.markerAssetsPending.remove(key);
         return null;
+    }
+
+    /** Bound on prepared-but-unsent icons (several threat colours per creature type on screen). */
+    private static final int PREPARED_LIMIT = 512;
+
+    private void putPrepared(MarkerAssetKey key, DynamicAssetPublisher.PreparedAsset asset) {
+        if (this.preparedMarkerAssets.size() >= PREPARED_LIMIT) this.preparedMarkerAssets.clear();
+        this.preparedMarkerAssets.put(key, asset);
+    }
+
+    /** Creature face icon (CREATURE) or coloured dot (DOT) in {@code rgb}. Render pool only. */
+    private DynamicAssetPublisher.PreparedAsset prepareCreatureAsset(Style style, String iconKey, int rgb,
+                                                                     DynamicMinimapColours palette) {
+        if (style == Style.CREATURE) return DynamicCreatureIcons.prepareAsset(iconKey, this.slug, rgb);
+        byte[] png = DynamicMinimapRenderer.renderDot(rgb, palette);
+        return DynamicAssetPublisher.prepare("UI/DapperMap/mk-" + this.slug + "-" + DapperMapUtil.hex6(rgb) + ".png", png);
+    }
+
+    /**
+     * Prepares the hostile, attacking (and, for icons, attack-pulse) colours of a creature marker
+     * on the server only. Nothing is sent to the player unless the creature actually changes to
+     * that colour; then markerIcon delivers it immediately instead of waiting for a render.
+     * The base icon is already built at this point, so each colour is one small tint and encode,
+     * and creature icon colours are shared by every player. Render pool only.
+     */
+    private void prepareThreatColours(DynamicMinimapMarker marker, int shownRgb,
+                                      DynamicMinimapColours palette, long generation) {
+        int hostile = palette.rgb(DynamicMinimapColours.Key.HOSTILE);
+        int attacking = palette.rgb(DynamicMinimapColours.Key.HOSTILE_ACTIVE);
+        boolean icon = marker.style == Style.CREATURE;
+        int count = icon ? 3 : 2;
+        for (int i = 0; i < count; i++) {
+            int rgb = i == 0 ? hostile : i == 1 ? attacking : DynamicCreatureIcons.pulseColour(attacking);
+            if (rgb == shownRgb || generation != this.markerAssetGeneration) continue;
+            MarkerAssetKey key = new MarkerAssetKey(marker.style, marker.assetPath, rgb);
+            if (this.markerAssets.containsKey(key) || this.preparedMarkerAssets.containsKey(key)) continue;
+            DynamicAssetPublisher.PreparedAsset asset = this.prepareCreatureAsset(marker.style, marker.assetPath, rgb, palette);
+            if (asset != null && generation == this.markerAssetGeneration) this.putPrepared(key, asset);
+        }
     }
     private List<DynamicMinimapMarker> cachedWorldMapMarkers = new ArrayList<>();
     /** Integration switches used by the last world-map scan; a change forces a rescan. */
@@ -1556,12 +1593,13 @@ public final class DynamicMinimapSession {
             int top = (int)Math.round(markerZ) - size / 2;
 
             if (marker.clampToEdge) edgeFree--; else mapFree--;
+            // Hostile and attacking creatures go in the HUD's top layer, above other markers.
             slots[slot++] =
                     new DynamicMinimapHud.Slot(
                             path,
                             left,
                             top,
-                            size, marker.clampToEdge
+                            size, marker.clampToEdge, marker.threat
                     );
         }
 
