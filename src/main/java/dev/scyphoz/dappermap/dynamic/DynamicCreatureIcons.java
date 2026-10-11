@@ -145,6 +145,12 @@ public final class DynamicCreatureIcons {
             this.next = swap;
             this.next.clear();
         }
+
+        /** Forgets every creature (creatures hidden, or the player changed world). */
+        void clear() {
+            this.current.clear();
+            this.next.clear();
+        }
     }
 
     /** Describes a creature's appearance and returns its icon key. World thread; called rarely. */
@@ -176,6 +182,13 @@ public final class DynamicCreatureIcons {
      * Per-player asset for an icon key with its threat-colour edge, building the shared base
      * icon on first use and each colour variant only when that colour is needed. Render pool only.
      */
+    /**
+     * Returned by prepareAsset while another render thread is building this creature's base
+     * icon. Not a failure: callers retry later without a back-off. Never sent to a client.
+     */
+    public static final DynamicAssetPublisher.PreparedAsset BUSY =
+            DynamicAssetPublisher.prepare("UI/DapperMap/creature-busy.png", new byte[]{0});
+
     public static DynamicAssetPublisher.PreparedAsset prepareAsset(String key, String playerSlug, int rgb) {
         if (key == null || playerSlug == null) return null;
         String hex = DapperMapUtil.hex6(rgb);
@@ -185,28 +198,29 @@ public final class DynamicCreatureIcons {
             Base base = BASES.get(key);
             if (base == null) {
                 Source source = SOURCES.get(key); // Null when SOURCES was cleared (bounded).
-                // One render per creature type: a second request waits for the first, then reuses it.
-                Object lock = BUILDING.computeIfAbsent(key, ignored -> new Object());
+                // One render per creature type. A second request doesn't wait (which would park
+                // a shared render thread for the whole model render): it returns BUSY and the
+                // caller simply asks again on a later projection.
+                Object mine = new Object();
+                if (BUILDING.putIfAbsent(key, mine) != null) return BUSY;
                 try {
-                    synchronized (lock) {
-                        base = BASES.get(key);
+                    base = BASES.get(key);
+                    if (base == null) {
+                        if (source == null) return null;
+                        // Saved from an earlier server run with the same model/texture files?
+                        // Skips the 15-60 ms model render. The file name includes the assets'
+                        // content hashes, so an updated asset pack redraws the icon.
+                        String content = contentHash(source);
+                        base = loadCachedBase(key, content);
                         if (base == null) {
-                            if (source == null) return null;
-                            // Saved from an earlier server run with the same model/texture files?
-                            // Skips the 15-60 ms model render. The file name includes the assets'
-                            // content hashes, so an updated asset pack redraws the icon.
-                            String content = contentHash(source);
-                            base = loadCachedBase(key, content);
-                            if (base == null) {
-                                base = renderBase(source);
-                                if (base == null) return null;
-                                storeCachedBase(key, content, base);
-                            }
-                            BASES.put(key, base);
+                            base = renderBase(source);
+                            if (base == null) return null;
+                            storeCachedBase(key, content, base);
                         }
+                        BASES.put(key, base);
                     }
                 } finally {
-                    BUILDING.remove(key, lock);
+                    BUILDING.remove(key, mine);
                 }
             }
             shared = DynamicAssetPublisher.prepare("UI/DapperMap/creature-" + variant + ".png", colourise(base, rgb));
@@ -236,7 +250,7 @@ public final class DynamicCreatureIcons {
      */
     public static byte[] previewIcon(String key, int rgb) {
         DynamicAssetPublisher.PreparedAsset asset = prepareAsset(key, "preview", rgb);
-        return asset == null ? null : asset.data();
+        return asset == null || asset == BUSY ? null : asset.data();
     }
 
     // ---------------------------------------------------------------------------------

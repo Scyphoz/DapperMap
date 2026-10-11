@@ -445,9 +445,9 @@ public final class DynamicMinimapRenderer {
                                                  int panelHeight, int gap, double angle, boolean cachedOnly) {
         boolean side = settings.infoPanelPosition == DynamicMinimapSetting.INFO_LEFT
                 || settings.infoPanelPosition == DynamicMinimapSetting.INFO_RIGHT;
-        int width = !settings.infoPanelEnabled ? mapSize : side ? mapSize + gap + sidePanelWidth : Math.max(mapSize, sidePanelWidth);
-        int height = !settings.infoPanelEnabled ? mapSize : side ? Math.max(mapSize, panelHeight) : mapSize + gap + panelHeight;
-        int flags = (settings.infoPanelEnabled ? 16 : 0) | (settings.showCoordinates ? 1 : 0)
+        int width = !settings.infoPanelShown() ? mapSize : side ? mapSize + gap + sidePanelWidth : Math.max(mapSize, sidePanelWidth);
+        int height = !settings.infoPanelShown() ? mapSize : side ? Math.max(mapSize, panelHeight) : mapSize + gap + panelHeight;
+        int flags = (settings.infoPanelShown() ? 16 : 0) | (settings.showCoordinates ? 1 : 0)
                 | (settings.showCompass ? 2 : 0) | (settings.showClock ? 4 : 0) | (settings.showBiome ? 8 : 0);
         var key = new RowLayerKey(new OverlayLayout(mapSize, width, height, panelHeight, gap,
                 settings.shape, settings.infoPanelPosition, settings.infoPanelTextAlignment, flags, settings.colours), -2, "native");
@@ -481,7 +481,7 @@ public final class DynamicMinimapRenderer {
                                         boolean cachedOnly) {
         // Heading -1 marks the bezel, which is the same at every heading.
         var key = new FrameLayerKey(size, size, size, 0, 0, settings.textureResolution,
-                settings.shape, settings.infoPanelEnabled, bezel ? -1 : rotationBucket(angle), settings.colours.frameKey());
+                settings.shape, settings.infoPanelShown(), bezel ? -1 : rotationBucket(angle), settings.colours.frameKey());
         byte[] cached = OVERLAY_LAYERS.get(key);
         if (cached != null || cachedOnly) return cached;
         try {
@@ -490,7 +490,7 @@ public final class DynamicMinimapRenderer {
             BufferedImage decoded = renderFrameImage(settings, angle, bezel, !bezel);
             BufferedImage image = new BufferedImage(size, size, BufferedImage.TYPE_INT_ARGB);
             Graphics2D graphics = image.createGraphics();
-            if (!settings.infoPanelEnabled)
+            if (!settings.infoPanelShown())
                 graphics.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC);
             else {
                 graphics.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
@@ -522,7 +522,7 @@ public final class DynamicMinimapRenderer {
                                                        int sidePanelWidth, int panelHeight, int gap,
                                                        double frameAngle, String coords, String compass,
                                                        String clock, String biome, boolean includeFrame) {
-        if (!settings.infoPanelEnabled) {
+        if (!settings.infoPanelShown()) {
             try {
                 BufferedImage overlay = new BufferedImage(mapSize, mapSize, BufferedImage.TYPE_INT_ARGB);
                 // Frame artwork drawn directly (no PNG encode and decode of the texture-size frame).
@@ -613,9 +613,9 @@ public final class DynamicMinimapRenderer {
             g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
             boolean side = preview.infoPanelPosition == DynamicMinimapSetting.INFO_LEFT
                     || preview.infoPanelPosition == DynamicMinimapSetting.INFO_RIGHT;
-            int mapX = !preview.infoPanelEnabled ? 0 : (preview.infoPanelPosition == DynamicMinimapSetting.INFO_LEFT ? panelWidth + gap
+            int mapX = !preview.infoPanelShown() ? 0 : (preview.infoPanelPosition == DynamicMinimapSetting.INFO_LEFT ? panelWidth + gap
                     : (side ? 0 : Math.max(0, (hud.getWidth() - mapSize) / 2)));
-            int mapY = !preview.infoPanelEnabled ? 0 : (preview.infoPanelPosition == DynamicMinimapSetting.INFO_ABOVE ? panelHeight + gap
+            int mapY = !preview.infoPanelShown() ? 0 : (preview.infoPanelPosition == DynamicMinimapSetting.INFO_ABOVE ? panelHeight + gap
                     : (preview.infoPanelPosition == DynamicMinimapSetting.INFO_BELOW ? 0
                     : Math.max(0, (hud.getHeight() - mapSize) / 2)));
 
@@ -728,7 +728,7 @@ public final class DynamicMinimapRenderer {
             // For preview scaling only, reserve the footprint the enabled panel would have used.
             int scaleReferenceWidth = hud.getWidth();
             int scaleReferenceHeight = hud.getHeight();
-            if (!preview.infoPanelEnabled) {
+            if (!preview.infoPanelShown()) {
                 boolean referenceSide = preview.infoPanelPosition == DynamicMinimapSetting.INFO_LEFT
                         || preview.infoPanelPosition == DynamicMinimapSetting.INFO_RIGHT;
                 scaleReferenceWidth = referenceSide
@@ -771,6 +771,14 @@ public final class DynamicMinimapRenderer {
     /** A few recent bases (one per open settings page, typically), so slider moves skip the HUD render. */
     private static final java.util.ArrayDeque<CachedPositionBase> POSITION_BASES = new java.util.ArrayDeque<>();
     private static final int POSITION_BASE_LIMIT = 4;
+
+    /** Drops this (closed) page's cached preview bases; other players' open pages keep theirs. */
+    public static void forgetPreview(LiveSnapshot snapshot) {
+        if (snapshot == null) return;
+        synchronized (POSITION_BASES) {
+            POSITION_BASES.removeIf(cached -> cached.snapshot() == snapshot);
+        }
+    }
 
     /** Every public instance field of the settings, except the HUD position (the base does not depend on it). */
     private static final java.lang.reflect.Field[] PREVIEW_FIELDS = java.util.Arrays.stream(
@@ -842,11 +850,12 @@ public final class DynamicMinimapRenderer {
         int[] bounds = visibleBounds(hud);
         if (bounds != null) hud = hud.getSubimage(bounds[0], bounds[1], bounds[2] - bounds[0] + 1, bounds[3] - bounds[1] + 1);
         int scaleReference = Math.max(hud.getWidth(), hud.getHeight());
-        if (!settings.infoPanelEnabled) {
+        if (!settings.infoPanelShown()) {
             // The disabled-panel map is deliberately smaller so its scale matches the enabled
             // preview. Do not enlarge it again after trimming: scale by the enabled HUD footprint.
             DynamicMinimapSetting reference = settings.copy();
             reference.infoPanelEnabled = true;
+            if (!reference.infoPanelShown()) reference.showCoordinates = true; // A panel to measure.
             BufferedImage referenceHud = settingsPreviewImage(reference, snapshot);
             int[] referenceBounds = referenceHud == null ? null : visibleBounds(referenceHud);
             if (referenceBounds != null) {

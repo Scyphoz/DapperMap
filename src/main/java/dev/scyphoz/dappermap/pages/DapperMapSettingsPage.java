@@ -488,6 +488,7 @@ public final class DapperMapSettingsPage
     @Override public void onDismiss(Ref<EntityStore> ref, Store<EntityStore> store) {
         this.closed = true;
         ++this.previewRequest;
+        DynamicMinimapRenderer.forgetPreview(this.previewSnapshot); // Frees its preview images now.
         this.previewSnapshot = null;
         this.previewWorld = null;
         super.onDismiss(ref, store);

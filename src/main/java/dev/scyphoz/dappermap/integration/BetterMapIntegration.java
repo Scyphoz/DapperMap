@@ -333,7 +333,9 @@ public final class BetterMapIntegration {
                 synchronized (this) { --pending; entries.remove(key,placeholder); } // Identity: never a newer entry.
                 return null;
             }
-            future.whenComplete((value,error)-> {
+            // A build that never completes (e.g. a chunk load abandoned at world shutdown) would
+            // hold its pending slot forever; time out a copy so BetterMap's own future is untouched.
+            future.copy().orTimeout(30, java.util.concurrent.TimeUnit.SECONDS).whenComplete((value,error)-> {
                 synchronized(this) {
                     --pending;
                     placeholder.completedAt=clock.getAsLong();

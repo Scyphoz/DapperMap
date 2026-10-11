@@ -154,6 +154,10 @@ public final class DynamicEntityScanner {
             // Both caches keep only the creatures of this scan (the unused one empties itself).
             if (threats != null) threats.endScan();
             if (icons != null) icons.endScan();
+        } else {
+            // Creatures hidden: don't keep entity references (and old models) alive.
+            if (threats != null) threats.clear();
+            if (icons != null) icons.clear();
         }
 
         PlayerVisibility visibility = settings.showOtherPlayers ? PlayerVisibility.forViewer(store, playerRef) : null;
@@ -383,6 +387,12 @@ public final class DynamicEntityScanner {
             this.next.clear();
         }
 
+        /** Forgets every creature (creatures hidden, or the player changed world). */
+        void clear() {
+            this.current.clear();
+            this.next.clear();
+        }
+
         /** Bit 0: locked onto player; bit 1: executing an attack; bit 2: moving at player. */
         private static int engagement(NPCEntity npc, Ref<EntityStore> playerRef,
                                       Ref<EntityStore> lockedTarget, boolean executingAttack) {
@@ -442,7 +452,7 @@ public final class DynamicEntityScanner {
                 StateSupport support = StateSupport.get(npcRef, commandBuffer);
                 if (support != null) state = support.getStateName();
             } catch (RuntimeException ignored) { }
-            var signals = NpcBehaviourSignals.capture(npc.getRole(), playerRef, lockedTarget, npcRef, commandBuffer);
+            var signals = NpcBehaviourSignals.capture(npc.getRole(), npc.getRoleIndex(), playerRef, lockedTarget, npcRef, commandBuffer);
             return NpcThreatClassifier.classify(profile, dynamicAttitude, defaultAttitude,
                     override, targetingPlayer, state, executingAttack, signals);
         } catch (Exception ignored) {
@@ -488,11 +498,11 @@ public final class DynamicEntityScanner {
 
         private NpcBehaviourSignals() { }
 
-        static Signals capture(Role role, Ref<EntityStore> player, Ref<EntityStore> lockedTarget,
+        static Signals capture(Role role, int roleIndex, Ref<EntityStore> player, Ref<EntityStore> lockedTarget,
                                Ref<EntityStore> npcRef, ComponentAccessor<EntityStore> accessor) {
             if (role == null) return Signals.UNKNOWN;
             final Tree tree;
-            try { tree = tree(role); }
+            try { tree = tree(role, roleIndex); }
             catch (RuntimeException | LinkageError ignored) { return Signals.UNKNOWN; }
             boolean activeAttackPlayer = false;
             try {
@@ -553,13 +563,35 @@ public final class DynamicEntityScanner {
             return product > 1e-12 && dx * sx + dz * sz > 0.05 * Math.sqrt(product);
         }
 
-        private static Tree tree(Role role) {
+        /**
+         * Role indexes whose behaviour tree has no offensive node, with the classifier generation
+         * they were read in. Every NPC instance builds its own Role, so without this each newly
+         * spawned passive creature had its whole tree walked (up to 8192 nodes) on the world
+         * thread. Only NO_OFFENSE is shared: attack-capable roles still walk, since they need
+         * their own instance's attack actions.
+         */
+        private static final ConcurrentHashMap<Integer, Long> PASSIVE_ROLES = new ConcurrentHashMap<>();
+
+        private static Tree tree(Role role, int roleIndex) {
             Instruction root = role.getRootInstruction();
             Tree cached = TREES.get(role);
             if (cached != null && cached.root.get() == root) return cached;
-            List<WeakReference<ActionAttack>> attacks = new ArrayList<>();
-            Capability capability = inspect(root, attacks);
-            Tree tree = new Tree(new WeakReference<>(root), capability, List.copyOf(attacks));
+            long generation = NpcThreatClassifier.GENERATION.get();
+            Long passive = roleIndex < 0 ? null : PASSIVE_ROLES.get(roleIndex);
+            Tree tree;
+            if (passive != null && passive == generation) {
+                tree = new Tree(new WeakReference<>(root), Capability.NO_OFFENSE, List.of());
+            } else {
+                List<WeakReference<ActionAttack>> attacks = new ArrayList<>();
+                Capability capability = inspect(root, attacks);
+                tree = new Tree(new WeakReference<>(root), capability, List.copyOf(attacks));
+                if (roleIndex >= 0) {
+                    if (capability == Capability.NO_OFFENSE) {
+                        if (PASSIVE_ROLES.size() >= 4096) PASSIVE_ROLES.clear(); // Bounded.
+                        PASSIVE_ROLES.put(roleIndex, generation);
+                    } else PASSIVE_ROLES.remove(roleIndex);
+                }
+            }
             TREES.put(role, tree);
             return tree;
         }

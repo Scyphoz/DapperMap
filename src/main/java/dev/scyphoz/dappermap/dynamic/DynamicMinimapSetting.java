@@ -93,6 +93,15 @@ public final class DynamicMinimapSetting {
         return settings;
     }
 
+    /**
+     * True when the info panel is drawn: switched on with at least one row to show. With every
+     * row off the panel is left out entirely (no empty box with just the heading), while the
+     * player's panel switch itself is kept, so turning a row back on brings the panel back.
+     */
+    public boolean infoPanelShown() {
+        return this.infoPanelEnabled && (this.showCoordinates || this.showCompass || this.showClock || this.showBiome);
+    }
+
     public boolean isCircle() {
         return this.shape == 1;
     }

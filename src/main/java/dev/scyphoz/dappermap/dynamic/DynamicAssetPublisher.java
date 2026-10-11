@@ -36,11 +36,13 @@ public final class DynamicAssetPublisher {
      * sent on: a reconnect has a new PacketHandler, so records from the old connection (which a
      * late delivery on another thread could re-insert after a disconnect clear) are never trusted.
      */
-    private record Delivered(PacketHandler owner, ConcurrentMap<String, String> paths) { }
+    private record Delivered(PacketHandler owner, Map<String, String> paths) { }
+    /** Delivered records kept per connection; the least recently used are forgotten (and re-sent if needed). */
+    private static final int DELIVERED_LIMIT = 2048;
     private static final ConcurrentMap<UUID, Delivered> DELIVERED = new ConcurrentHashMap<>();
 
     /** This connection's delivered paths, or null (records from another connection don't count). */
-    private static ConcurrentMap<String, String> deliveredFor(UUID uuid, PacketHandler owner) {
+    private static Map<String, String> deliveredFor(UUID uuid, PacketHandler owner) {
         Delivered delivered = uuid == null ? null : DELIVERED.get(uuid);
         return delivered != null && delivered.owner() == owner ? delivered.paths() : null;
     }
@@ -199,11 +201,10 @@ public final class DynamicAssetPublisher {
 
                     if (uuid != null) {
                         // A record set from an older connection is replaced, never added to.
-                        ConcurrentMap<String, String> delivered = DELIVERED.compute(uuid, (ignored, old) ->
+                        Map<String, String> delivered = DELIVERED.compute(uuid, (ignored, old) ->
                                 old != null && old.owner() == packetHandler ? old
-                                        : new Delivered(packetHandler, new ConcurrentHashMap<>())).paths();
-                        if (delivered.size() >= 2048 && !delivered.containsKey(path)) delivered.clear();
-                        delivered.put(path, hash);
+                                        : new Delivered(packetHandler, newDeliveredStore())).paths();
+                        delivered.put(path, hash); // LRU: the oldest record drops out, not all of them.
                     }
 
                     return true;
@@ -214,6 +215,15 @@ public final class DynamicAssetPublisher {
         } else {
             return false;
         }
+    }
+
+    /** Access-ordered delivered-path records (bounded LRU, synchronized: read by admin stats too). */
+    private static Map<String, String> newDeliveredStore() {
+        return java.util.Collections.synchronizedMap(new LinkedHashMap<>(256, 0.75F, true) {
+            @Override protected boolean removeEldestEntry(Map.Entry<String, String> eldest) {
+                return size() > DELIVERED_LIMIT;
+            }
+        });
     }
 
     /** Marker images (including creature icons) are kept, by reference, for the settings preview. */
@@ -258,20 +268,26 @@ public final class DynamicAssetPublisher {
     /** World-thread bookkeeping for the bounded image paths already sent to this client. */
     static final class ImagePublicationCache {
         private String activePath;
+        /** False for caches whose paths end in a meaning-bearing number (compass heading buckets). */
+        private final boolean slotted;
+        ImagePublicationCache() { this(true); }
+        ImagePublicationCache(boolean slotted) { this.slotted = slotted; }
         private static final java.util.regex.Pattern SLOT = java.util.regex.Pattern.compile("(.*?)([0-9]+)(\\.png)$");
         private final Map<String, String> hashesByPath = new LinkedHashMap<>();
 
         String pathFor(String hash) {
             for (var entry : hashesByPath.entrySet())
-                if (entry.getValue().equals(hash)) {
-                    activePath = entry.getKey();
-                    return activePath;
-                }
+                if (entry.getValue().equals(hash)) return entry.getKey();
             return null;
         }
 
+        /**
+         * Marks the path the client now displays; nonActivePath never reuses it. Called after the
+         * AssetPath Set, so a delivery that aborts before it can't unprotect the shown image.
+         */
+        void shown(String path) { activePath = path; }
+
         void remember(String path, String hash) {
-            activePath = path;
             hashesByPath.remove(path); // Replacing a slot invalidates its previous content.
             hashesByPath.put(path, hash);
             if (hashesByPath.size() > 16) hashesByPath.remove(hashesByPath.keySet().iterator().next());
@@ -279,6 +295,10 @@ public final class DynamicAssetPublisher {
 
         String nonActivePath(String candidate) {
             if (!candidate.equals(activePath)) return candidate;
+            // Unslotted names alternate with a "-b" twin, so renumbering never lands on another heading.
+            if (!this.slotted) return candidate.endsWith("-b.png")
+                    ? candidate.substring(0, candidate.length() - 6) + ".png"
+                    : candidate.substring(0, candidate.length() - 4) + "-b.png";
             var match = SLOT.matcher(candidate);
             // Defensive: never throw on the world thread; give an unslotted path a slot suffix.
             if (!match.matches()) return candidate.substring(0, candidate.length() - 4) + "-1.png";

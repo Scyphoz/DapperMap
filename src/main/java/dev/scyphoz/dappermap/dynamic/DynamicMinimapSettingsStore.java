@@ -43,6 +43,13 @@ public final class DynamicMinimapSettingsStore {
     private final ConcurrentHashMap<UUID, DynamicMinimapSetting> bases = new ConcurrentHashMap<>();
     /** Whether each player has a file, remembered so the check doesn't touch the disk again. */
     private final ConcurrentHashMap<UUID, Boolean> hasFile = new ConcurrentHashMap<>();
+    /**
+     * File text read ahead on the settings I/O thread when a player connects (NO_FILE: none on
+     * disk), so their first load on the world thread needs no disk access. Used once; any write
+     * or delete drops it, so it is never older than the file.
+     */
+    private final ConcurrentHashMap<UUID, String> prefetched = new ConcurrentHashMap<>();
+    private static final String NO_FILE = new String("<no file>"); // Identity sentinel.
     /** A queued write: a settings snapshot and the base it is diffed against, or DELETE. */
     private record Pending(DynamicMinimapSetting settings, DynamicMinimapSetting base) {}
     private static final Pending DELETE = new Pending(null, null);
@@ -87,10 +94,36 @@ public final class DynamicMinimapSettingsStore {
         return this.cache.computeIfAbsent(uuid, (ignored) -> this.load(uuid, defaults));
     }
 
+    /**
+     * Reads a connecting player's file on the settings I/O thread (queued behind any pending
+     * write for them), ready for {@link #get}. Harmless if never used: load() reads as before.
+     */
+    public void prefetch(UUID uuid) {
+        if (uuid == null || this.singleFile != null || this.cache.containsKey(uuid)) return;
+        try {
+            this.writer.execute(() -> {
+                if (this.cache.containsKey(uuid) || this.pendingWrites.containsKey(uuid)) return;
+                synchronized (this.fileLock) {
+                    try {
+                        Path file = this.file(uuid);
+                        this.prefetched.put(uuid, Files.exists(file) ? Files.readString(file) : NO_FILE);
+                        if (this.prefetched.size() > 256) this.prefetched.clear(); // Bounded (never-joined connects).
+                    } catch (IOException | RuntimeException ignored) {
+                        this.prefetched.remove(uuid); // load() reads it itself.
+                    }
+                }
+            });
+        } catch (java.util.concurrent.RejectedExecutionException shutDown) {
+            // Shutting down: load() reads the file directly.
+        }
+    }
+
     /** True when this player has a settings file on disk, i.e. they are not a new player. */
     public boolean hasStoredSettings(UUID uuid) {
-        return uuid != null && this.hasFile.computeIfAbsent(uuid,
-                ignored -> Files.exists(this.file(uuid)));
+        if (uuid == null) return false;
+        String ready = this.prefetched.get(uuid);
+        if (ready != null && !this.hasFile.containsKey(uuid)) return ready != NO_FILE; // No disk check.
+        return this.hasFile.computeIfAbsent(uuid, ignored -> Files.exists(this.file(uuid)));
     }
 
     private Path file(UUID uuid) {
@@ -106,6 +139,7 @@ public final class DynamicMinimapSettingsStore {
             this.cache.remove(uuid);
             this.bases.remove(uuid);
             this.hasFile.remove(uuid);
+            this.prefetched.remove(uuid);
             // Keep the file's known text while the disconnect save is still queued, so an
             // unchanged save skips the disk; the writer drops it afterwards (flushOne).
             if (!this.pendingWrites.containsKey(uuid)) this.lastWritten.remove(uuid);
@@ -180,6 +214,7 @@ public final class DynamicMinimapSettingsStore {
     /** Deletes the file (caller holds fileLock). */
     private void deleteFile(UUID uuid) throws IOException {
         this.lastWritten.remove(uuid); // A later save must write again.
+        this.prefetched.remove(uuid);
         Files.deleteIfExists(this.file(uuid));
     }
 
@@ -206,6 +241,7 @@ public final class DynamicMinimapSettingsStore {
             this.hasFile.put(uuid, false);
             return;
         }
+        this.prefetched.remove(uuid); // The file is about to change (or is confirmed): read-ahead is stale.
         if (json.equals(this.lastWritten.get(uuid))) return; // File already holds exactly this.
         this.lastWritten.remove(uuid); // Unknown state if the write below fails.
         DapperMapUtil.writeAtomically(this.file(uuid), json.getBytes(java.nio.charset.StandardCharsets.UTF_8));
@@ -293,13 +329,15 @@ public final class DynamicMinimapSettingsStore {
             return settings;
         }
         Path file = this.file(uuid);
-        boolean exists = Files.exists(file);
+        // Read ahead at connect (settings I/O thread)? Then no disk access here (world thread).
+        String ready = this.prefetched.remove(uuid);
+        boolean exists = ready != null ? ready != NO_FILE : Files.exists(file);
         this.hasFile.put(uuid, exists);
         if (exists) {
             try {
                 String text;
                 synchronized (this.fileLock) { // Never between a write and its lastWritten update.
-                    text = Files.readString(file);
+                    text = ready != null ? ready : Files.readString(file);
                     this.lastWritten.put(uuid, text);
                 }
                 Map<String, String> json = fields(text);

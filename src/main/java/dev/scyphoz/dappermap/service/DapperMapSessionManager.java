@@ -265,6 +265,11 @@ public class DapperMapSessionManager {
         return defaults;
     }
 
+    /** Reads a connecting player's settings file ahead, off the world thread (see the store). */
+    public void onConnect(PlayerRef playerRef) {
+        if (playerRef != null && this.settingsStore != null) this.settingsStore.prefetch(playerRef.getUuid());
+    }
+
     public void onDisconnect(PlayerRef playerRef) {
         if (playerRef != null) {
             UUID uuid = playerRef.getUuid();
@@ -272,6 +277,7 @@ public class DapperMapSessionManager {
             this.stop(uuid, false);
             // Settings-page previews record delivered assets even with the minimap off; drop them.
             DynamicAssetPublisher.clear(uuid);
+            dev.scyphoz.dappermap.integration.NativeWorldMapIntegration.forgetPlayer(uuid);
             // Drop every cached copy so the next join re-reads from disk, or re-derives from
             // the admin defaults as they stand at that moment.
             this.settingsByPlayer.remove(uuid);

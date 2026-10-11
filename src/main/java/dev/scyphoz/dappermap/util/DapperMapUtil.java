@@ -338,11 +338,36 @@ public final class DapperMapUtil {
         }
     }
 
+    // ------------------------------------------------------------------------------------
+    // Rate-limited failure logging (the per-tick paths catch everything to keep running)
+    // ------------------------------------------------------------------------------------
+
+    private static final com.hypixel.hytale.logger.HytaleLogger LOGGER = com.hypixel.hytale.logger.HytaleLogger.get("DapperMap");
+    private static final java.util.concurrent.ConcurrentHashMap<String, Long> FAILURES_LOGGED = new java.util.concurrent.ConcurrentHashMap<>();
+    private static final java.util.concurrent.atomic.AtomicLong FAILURES = new java.util.concurrent.atomic.AtomicLong();
+
     /**
-     * Bytes of a Hytale common asset (including mod-pack assets), or null when absent, empty or
-     * not loaded in time. Asset blobs are only weakly cached and may reload asynchronously, so
-     * this waits up to {@code timeoutMs}: render pool only, never on a world thread.
+     * Logs an unexpected failure caught in a hot path, with its stack, at most once a minute per
+     * place and exception type (a bug that throws every tick would otherwise flood the log, or
+     * silently freeze the minimap). A stopped world's rejection is expected and not logged.
      */
+    public static void logFailure(String where, Throwable failure) {
+        if (failure == null || failure instanceof IllegalThreadStateException
+                || failure.getCause() instanceof IllegalThreadStateException) return;
+        FAILURES.incrementAndGet();
+        String key = where + ":" + failure.getClass().getName();
+        long now = System.currentTimeMillis();
+        Long last = FAILURES_LOGGED.get(key);
+        if (last != null && now - last < 60_000L) return;
+        if (FAILURES_LOGGED.size() >= 256) FAILURES_LOGGED.clear(); // Bounded; only affects muting.
+        FAILURES_LOGGED.put(key, now);
+        LOGGER.at(java.util.logging.Level.WARNING).withCause(failure).log(
+                "DapperMap: %s failed (repeats of this error are muted for 60 s)", where);
+    }
+
+    /** Failures counted by {@link #logFailure} since startup (for /dappermap admin stats). */
+    public static long failureCount() { return FAILURES.get(); }
+
     /** Content hash of a common asset (kept by the registry; nothing is read), or null. */
     public static String commonAssetHash(String name) {
         if (name == null) return null;
@@ -354,6 +379,11 @@ public final class DapperMapUtil {
         }
     }
 
+    /**
+     * Bytes of a Hytale common asset (including mod-pack assets), or null when absent, empty or
+     * not loaded in time. Asset blobs are only weakly cached and may reload asynchronously, so
+     * this waits up to {@code timeoutMs}: render pool only, never on a world thread.
+     */
     public static byte[] commonAssetBytes(String name, long timeoutMs) {
         try {
             CommonAsset asset = CommonAssetRegistry.getByName(name);

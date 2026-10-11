@@ -60,6 +60,10 @@ public class DapperMap extends JavaPlugin {
         PlayerReadyListener readyListener = new PlayerReadyListener(this.sessions);
         this.getEventRegistry().registerGlobal(PlayerReadyEvent.class, readyListener::onPlayerReady);
         this.getEventRegistry().registerGlobal(PlayerDisconnectEvent.class, (event) -> this.sessions.onDisconnect(event.getPlayerRef()));
+        // Settings file read-ahead before the player is ready, so the join tick needs no disk access.
+        this.getEventRegistry().registerGlobal(
+                com.hypixel.hytale.server.core.event.events.player.PlayerConnectEvent.class,
+                event -> this.sessions.onConnect(event.getPlayerRef()));
     }
 
     @Override

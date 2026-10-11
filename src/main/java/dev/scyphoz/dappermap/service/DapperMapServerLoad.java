@@ -220,6 +220,8 @@ public final class DapperMapServerLoad {
                     + (config.getLoadSheddingPlayers() > 0 ? " or > " + config.getLoadSheddingPlayers() + " minimaps" : "") + "]");
         }
         lines.add("Caches: " + DynamicCreatureIcons.cacheSummary() + ", delivered-image records " + DynamicAssetPublisher.deliveredEntries());
+        long failures = dev.scyphoz.dappermap.util.DapperMapUtil.failureCount();
+        if (failures > 0) lines.add("Errors caught since start: " + failures + " (details in the server log)");
         return lines;
     }
 }

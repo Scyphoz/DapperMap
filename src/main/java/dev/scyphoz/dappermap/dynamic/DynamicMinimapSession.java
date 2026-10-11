@@ -80,7 +80,8 @@ public final class DynamicMinimapSession {
     }
 
     private final java.util.concurrent.ConcurrentMap<String, java.util.concurrent.atomic.AtomicBoolean> renderPending = new java.util.concurrent.ConcurrentHashMap<>();
-    private record WorldTask(World world, java.util.concurrent.atomic.AtomicBoolean pending) {}
+    /** One queued world task per kind and world; {@code next} holds the newest work for it. */
+    private record WorldTask(World world, java.util.concurrent.atomic.AtomicReference<Runnable> next) {}
     private final java.util.concurrent.ConcurrentMap<String, WorldTask> worldPending = new java.util.concurrent.ConcurrentHashMap<>();
 
     /**
@@ -161,20 +162,46 @@ public final class DynamicMinimapSession {
         });
     }
 
+    /** Marks a world task of this kind as running (its work was taken). */
+    private static final Runnable RUNNING = () -> { };
+
+    /**
+     * Queues work for the world thread, one task per kind. Latest wins: work arriving while a
+     * task of the same kind is still queued replaces the older work (it would only be rejected
+     * as stale), so a newer render is never discarded under world-thread lag. A delivery that
+     * arrives while one is running is queued after it; a tick then is dropped as before (ticks
+     * read live state, and stacking them would only add world-thread load under lag).
+     */
     private void executeWorld(World world, String kind, Runnable work) {
         var token = worldPending.compute(kind, (ignored, old) -> old != null && old.world() == world
-                ? old : new WorldTask(world, new java.util.concurrent.atomic.AtomicBoolean()));
-        var pending = token.pending();
-        if (!this.worldTaskAllowed(kind) || !world.isAlive() || !pending.compareAndSet(false, true)) return;
+                ? old : new WorldTask(world, new java.util.concurrent.atomic.AtomicReference<>()));
+        var next = token.next();
+        if (!this.worldTaskAllowed(kind) || !world.isAlive()) return;
+        if (kind.equals("tick")) {
+            if (!next.compareAndSet(null, work)) return; // One queued or running tick at a time.
+        } else if (next.getAndSet(work) != null) {
+            return; // A queued task will run this newer work (a running one re-queues for it).
+        }
+        this.queueWorldTask(world, kind, next);
+    }
+
+    private void queueWorldTask(World world, String kind, java.util.concurrent.atomic.AtomicReference<Runnable> next) {
         try {
             world.execute(labelled(kind, () -> {
+                Runnable latest = next.getAndSet(RUNNING);
                 try {
-                    if (this.worldTaskAllowed(kind) && currentWorld() == world
-                            && (kind.equals("tick") || world == lastObservedWorld)) work.run();
-                } finally { pending.set(false); }
+                    if (latest != null && latest != RUNNING && this.worldTaskAllowed(kind) && currentWorld() == world
+                            && (kind.equals("tick") || world == lastObservedWorld)) latest.run();
+                } finally {
+                    // Newer work arrived while this ran: run it in a fresh task (ticks are dropped).
+                    if (!next.compareAndSet(RUNNING, null)) {
+                        if (kind.equals("tick")) next.set(null);
+                        else this.queueWorldTask(world, kind, next);
+                    }
+                }
             }));
         } catch (RuntimeException failure) {
-            pending.set(false);
+            next.set(null);
             if (!isStoppedWorldException(failure)) throw failure;
         }
     }
@@ -259,7 +286,8 @@ public final class DynamicMinimapSession {
     private final DynamicCreatureIcons.KeyCache creatureIconKeys = new DynamicCreatureIcons.KeyCache();
     private final MarkerOrder markerOrder = new MarkerOrder();
     private record MarkerAssetKey(Style style, String source, int rgb) {}
-    private final java.util.concurrent.ConcurrentMap<MarkerAssetKey, String> markerAssets = new java.util.concurrent.ConcurrentHashMap<>();
+    /** Icons sent to this client: least recently used dropped beyond 256 (clearing all made every marker blink). */
+    private final java.util.Map<MarkerAssetKey, String> markerAssets = lru(256, true);
     private final java.util.concurrent.ConcurrentMap<MarkerAssetKey, DynamicAssetPublisher.PreparedAsset> preparedMarkerAssets = new java.util.concurrent.ConcurrentHashMap<>();
     private final java.util.concurrent.ConcurrentMap<MarkerAssetKey, Boolean> markerAssetsPending = new java.util.concurrent.ConcurrentHashMap<>();
     private volatile long markerAssetGeneration;
@@ -267,7 +295,16 @@ public final class DynamicMinimapSession {
     private final java.util.concurrent.ConcurrentMap<MarkerAssetKey, Long> failedMarkerAssets = new java.util.concurrent.ConcurrentHashMap<>();
     private static final long FAILED_ICON_RETRY_MS = 30000L;
     /** Last icon path shown per creature type, used while a new colour variant is prepared. */
-    private final java.util.Map<String, String> creatureIconFallback = new java.util.HashMap<>();
+    private final java.util.Map<String, String> creatureIconFallback = lru(256, false);
+
+    /** Access-ordered map dropping its least recently used entry beyond {@code limit}. */
+    private static <K, V> java.util.Map<K, V> lru(int limit, boolean synchronize) {
+        java.util.Map<K, V> map = new java.util.LinkedHashMap<>(64, 0.75F, true) {
+            @Override protected boolean removeEldestEntry(java.util.Map.Entry<K, V> eldest) { return size() > limit; }
+        };
+        // markerAssets is also read on the render pool (prepareThreatColours).
+        return synchronize ? java.util.Collections.synchronizedMap(map) : map;
+    }
     /** Attacking creature icons alternate between two edge colours at this interval (or slower). */
     private static final long PULSE_MS = 300L;
     private boolean pulseOn;
@@ -298,8 +335,6 @@ public final class DynamicMinimapSession {
         if (this.pulseOn && rgb == attackingRgb) path = this.markerIcon(marker, DynamicCreatureIcons.pulseColour(rgb));
         if (path == null) path = this.markerIcon(marker, rgb);
         if (path == null) return this.creatureIconFallback.get(marker.assetPath);
-        if (this.creatureIconFallback.size() >= 256 && !this.creatureIconFallback.containsKey(marker.assetPath))
-            this.creatureIconFallback.clear();
         this.creatureIconFallback.put(marker.assetPath, path);
         return path;
     }
@@ -315,7 +350,6 @@ public final class DynamicMinimapSession {
         DynamicAssetPublisher.PreparedAsset prepared = this.preparedMarkerAssets.get(key);
         if (prepared != null) {
             if (!DynamicAssetPublisher.deliver(this.playerRef, prepared)) return null;
-            if (this.markerAssets.size() >= 256) this.markerAssets.clear();
             this.markerAssets.put(key, prepared.path());
             this.preparedMarkerAssets.remove(key, prepared);
             return prepared.path();
@@ -348,6 +382,9 @@ public final class DynamicMinimapSession {
                 }
                 if (!this.canRenderHud(targetHud) || generation != this.markerAssetGeneration
                         || sourceWorld != currentWorld()) return;
+                // Another player's request is building this creature's icon: retry on a later
+                // projection (pending is cleared below), without the failure back-off.
+                if (asset == DynamicCreatureIcons.BUSY) return;
                 if (asset == null) {
                     // Remember the failure for this generation instead of re-queuing it each tick.
                     if (this.failedMarkerAssets.size() >= 256) this.failedMarkerAssets.clear();
@@ -399,7 +436,8 @@ public final class DynamicMinimapSession {
             MarkerAssetKey key = new MarkerAssetKey(marker.style, marker.assetPath, rgb);
             if (this.markerAssets.containsKey(key) || this.preparedMarkerAssets.containsKey(key)) continue;
             DynamicAssetPublisher.PreparedAsset asset = this.prepareCreatureAsset(marker.style, marker.assetPath, rgb, palette);
-            if (asset != null && generation == this.markerAssetGeneration) this.putPrepared(key, asset);
+            if (asset != null && asset != DynamicCreatureIcons.BUSY && generation == this.markerAssetGeneration)
+                this.putPrepared(key, asset);
         }
     }
     private List<DynamicMinimapMarker> cachedWorldMapMarkers = new ArrayList<>();
@@ -407,6 +445,8 @@ public final class DynamicMinimapSession {
     private boolean scannedNative, scannedBetterMap, scannedDeaths;
     private int emptyWorldMapScans = 0;
     private long lastWorldMapScanMs = 0L;
+    /** Consecutive world-map scans that found nothing new; after 3 the scan slows from 2 s to 4 s. */
+    private int stableWorldMapScans = 0;
     private long lastTerrainMs = 0L;
     private boolean bufferComplete = false;
     private long warmupUntilMs = 0L;
@@ -470,6 +510,11 @@ public final class DynamicMinimapSession {
     public boolean isRunning() {
         return this.running;
     }
+
+    /** A custom page was open on the last tick, so the map's work was paused (world thread). */
+    private boolean pausedForPage;
+    /** The world the player just joined while its PlayerReady is still to come (world thread). */
+    private World awaitingReadyWorld;
 
     /**
      * The client is (re)joining a world (PlayerReadyEvent fires on every world join, and after
@@ -607,8 +652,9 @@ public final class DynamicMinimapSession {
                 this.lastDispatchedZ = pz;
                 this.tick();
             }
-        } catch (Throwable ignored) {
+        } catch (Throwable failure) {
             // Never let one bad tick stop the heartbeat; the next tick retries.
+            DapperMapUtil.logFailure("minimap heartbeat", failure);
         } finally {
             // stop() clears running first, so a stopped session never reschedules itself.
             this.scheduleNextTick(Math.min(this.settings.panIntervalMs(), this.rotationPollIntervalMs()));
@@ -664,7 +710,15 @@ public final class DynamicMinimapSession {
             // PlayerReady on a live session (world join / resetPlayer): rebuild the client HUD in place.
             boolean resync = this.clientResyncPending;
             this.clientResyncPending = false;
-            boolean worldChanged = (lastObservedWorld != null && lastObservedWorld != world) || resync;
+            boolean worldSwitch = lastObservedWorld != null && lastObservedWorld != world;
+            // The PlayerReady that belongs to a world join (it can arrive a tick before or after
+            // the tick that sees the new world) keeps the client's images. Any other PlayerReady
+            // is Universe.resetPlayer, which can wipe them: that one still resets everything.
+            boolean joinReady = resync && (worldSwitch || world == this.awaitingReadyWorld);
+            if (resync) this.awaitingReadyWorld = null;
+            else if (worldSwitch) this.awaitingReadyWorld = world;
+            boolean clientWiped = resync && !joinReady;
+            boolean worldChanged = worldSwitch || resync;
             boolean teleported = lastObservedWorld != null
                     && (worldChanged
                     || (x - lastObservedX) * (x - lastObservedX) + (z - lastObservedZ) * (z - lastObservedZ)
@@ -681,18 +735,25 @@ public final class DynamicMinimapSession {
                 this.deliveredSequence = this.renderSequence.incrementAndGet();
                 this.rotationSequence.incrementAndGet();
                 if (worldChanged) {
-                    // A world change (or PlayerReady resync) may drop the client's dynamic images:
-                    // re-send marker icons, overlay, frames and locator, and rebind every HUD slot.
-                    // A same-world teleport only sends ClientTeleport (verified in 0.6.8 and 0.7.0),
-                    // so the client keeps its images and none of this is needed (~100-150 KB saved).
-                    this.invalidateMarkerAssets();
+                    // The HUD is rebuilt for the new world (or after a resync). A same-world
+                    // teleport keeps the client's images (verified in 0.6.8 and 0.7.0), and a
+                    // world change is treated the same way: images already sent (masks, frames,
+                    // locator, marker and creature icons) are not sent again, saving ~100-250 KB
+                    // and a common-asset rebuild per world change. Only Universe.resetPlayer
+                    // (a PlayerReady without a world join) forgets them and re-sends everything.
+                    if (clientWiped) {
+                        this.invalidateMarkerAssets();
+                        DynamicAssetPublisher.clear(this.uuid);
+                        java.util.Arrays.fill(this.selfArrowDelivered, false);
+                        this.selfArrowsComplete = false;
+                    }
                     this.terrainPublications.clear();
                     if (this.hud != null) this.hud.invalidateVisualAssets();
-                    DynamicAssetPublisher.clear(this.uuid);
-                    java.util.Arrays.fill(this.selfArrowDelivered, false);
-                    this.selfArrowsComplete = false;
                     this.lastSelfBucket = -1;
                     if (this.hud != null) this.hud.invalidateMarkerSlots();
+                    // Creature references from the old world would keep its entity store alive.
+                    this.threatCache.clear();
+                    this.creatureIconKeys.clear();
                     // The BetterMap cave-image cache is shared by every player: leave it (it is
                     // bounded, expires, and dead worlds are pruned) instead of flushing it here.
                     this.worldPending.clear();
@@ -711,6 +772,7 @@ public final class DynamicMinimapSession {
                 }
                 this.lastMarkerMs = 0L;
                 this.lastWorldMapScanMs = 0L;
+                this.stableWorldMapScans = 0; // Teleports (incl. respawn) bring new markers: scan fast again.
             }
             // Use the head (camera) yaw, as Hytale's compass and world map do. The body yaw
             // only follows once the view turns ~45° past it, which made the locator start
@@ -852,6 +914,24 @@ public final class DynamicMinimapSession {
             }
 
 
+            // The client hides every custom HUD while a page is open (DapperMap's settings,
+            // other mods' pages and Hytale's own were all checked). Pause the map's work then:
+            // no creature scan, marker projection, terrain or rotation render, pan or readouts.
+            // Settings changes above still apply, so closing a page shows them straight away.
+            if (player != null && player.getPageManager().getCustomPage() != null) {
+                this.pausedForPage = true;
+                this.rotationCatchUp = false;
+                this.hud.flushPendingVisuals(this.settings.updateSpeed);
+                return;
+            }
+            if (this.pausedForPage) {
+                // Page closed: refresh markers, terrain check and heading at once.
+                this.pausedForPage = false;
+                this.lastMarkerMs = 0L;
+                this.lastSignatureMs = 0L;
+                this.lastRotationRequestMs = 0L;
+            }
+
             if (this.settings.rotationMode != this.builtRotationMode) {
                 this.builtRotationMode = this.settings.rotationMode;
                 // Changing mode also changes raster quality. Force new terrain;
@@ -938,7 +1018,7 @@ public final class DynamicMinimapSession {
                 this.projectCachedMarkers(pixelsPerBlock, bufferPixels, yaw);
             }
 
-            boolean panel = this.settings.infoPanelEnabled;
+            boolean panel = this.settings.infoPanelShown();
             String coords = panel && this.settings.showCoordinates ? this.readouts.coords(x, y, z) : "";
             String compass = panel && this.settings.showCompass ? this.readouts.compass(yaw) : "";
             String clock = panel && this.settings.showClock ? clockText(world, this.settings.clock24Hour, this.readouts) : "";
@@ -949,8 +1029,9 @@ public final class DynamicMinimapSession {
             this.rotationCatchUp = this.settings.rotationMode == 1
                     && (mapRotationBucket != this.lastMapRotationBucket || this.displayedRotationReduced
                     || this.renderBusy("rotation"));
-        } catch (Throwable ignored) {
+        } catch (Throwable failure) {
             // A failed tick only skips this update; the next tick starts afresh.
+            DapperMapUtil.logFailure("minimap tick", failure);
         }
     }
 
@@ -983,7 +1064,7 @@ public final class DynamicMinimapSession {
     private String headingFramePath(DynamicMinimapSetting settings, int rotationBucket) {
         return "UI/DapperMap/compass-" + this.slug + "-" + (settings.isCircle() ? "c" : "s")
                 + settings.sizePixels + "-r" + settings.textureResolution
-                + (settings.infoPanelEnabled ? "p" : "n") + "-" + settings.colours.frameKey()
+                + (settings.infoPanelShown() ? "p" : "n") + "-" + settings.colours.frameKey()
                 + "-" + rotationBucket + ".png";
     }
 
@@ -1054,12 +1135,14 @@ public final class DynamicMinimapSession {
                         this.overlayPrepareQueued.set(false);
                         this.overlayPrepareFellBack = true;
                     } else {
-                        this.overlayPrepareAttempted = true;
-                        if (!renderAsync(() -> {
+                        // Only an accepted job counts as the attempt: a saturated pool is retried
+                        // next tick instead of falling back to drawing on the world thread.
+                        if (renderAsync(() -> {
                             try { DynamicMinimapHud.prepareInitialOverlay(snap); }
                             catch (RuntimeException ignored) { }
                             finally { this.overlayPrepareQueued.set(false); }
-                        })) this.overlayPrepareQueued.set(false);
+                        })) this.overlayPrepareAttempted = true;
+                        else this.overlayPrepareQueued.set(false);
                         return;
                     }
                 } else {
@@ -1169,7 +1252,8 @@ public final class DynamicMinimapSession {
             try {
                 signature = DynamicMinimapRenderer.terrainSignature(
                         world.getWorldMapManager(), centerX, centerZ, probeSettings, caveView);
-            } catch (Throwable ignored) {
+            } catch (Throwable failure) {
+                DapperMapUtil.logFailure("terrain change check", failure);
                 signature = 0L;
             }
             if (!this.canRenderHud(probeHud)) return;
@@ -1254,6 +1338,7 @@ public final class DynamicMinimapSession {
                         || this.settings.rotationMode != renderSettings.rotationMode
                         || this.settings.sizePixels != renderSettings.sizePixels
                         || this.settings.shape != renderSettings.shape
+                        || this.settings.infoPanelShown() != renderSettings.infoPanelShown() // Picks the frame variant.
                         || !this.settings.colours.equals(renderSettings.colours)) {
                     return;
                 }
@@ -1295,6 +1380,7 @@ public final class DynamicMinimapSession {
                 );
                 // Player-up frames are cropped around the buffer centre; the HUD sizes the terrain to match.
                 this.hud.setTerrain(path, pan[0], pan[1], DynamicMinimapRenderer.terrainImagePixels(renderSettings));
+                this.terrainPublications.shown(path);
 
                 // Keep marker projection in the exact same accepted orientation
                 // as the terrain/frame that was just delivered.
@@ -1377,6 +1463,7 @@ public final class DynamicMinimapSession {
                         || this.settings.sizePixels != renderSettings.sizePixels
                         || this.settings.shape != renderSettings.shape
                         || this.settings.textureResolution != renderSettings.textureResolution
+                        || this.settings.infoPanelShown() != renderSettings.infoPanelShown() // Picks the frame variant.
                         || !this.settings.colours.equals(renderSettings.colours)) {
                     return;
                 }
@@ -1410,6 +1497,7 @@ public final class DynamicMinimapSession {
                 );
                 // Player-up frames are cropped around the buffer centre; the HUD sizes the terrain to match.
                 this.hud.setTerrain(path, pan[0], pan[1], DynamicMinimapRenderer.terrainImagePixels(renderSettings));
+                this.terrainPublications.shown(path);
 
                 // Rotation-only updates do not rescan entities. Re-project the
                 // cached world-space markers immediately against the accepted
@@ -1486,7 +1574,8 @@ public final class DynamicMinimapSession {
                     this.threatCache,
                     this.creatureIconKeys
             );
-        } catch (Throwable ignored) {
+        } catch (Throwable failure) {
+            DapperMapUtil.logFailure("creature scan", failure);
             markers = new ArrayList<>();
         }
 
@@ -1504,11 +1593,15 @@ public final class DynamicMinimapSession {
                 this.scannedBetterMap = betterMapWaypoints;
                 this.scannedDeaths = includeDeaths;
                 this.lastWorldMapScanMs = 0L;
+                this.stableWorldMapScans = 0;
                 this.emptyWorldMapScans = 3; // Accept the new switch state's result immediately.
             }
             // The tick's own Player component and world: no second component lookup per scan.
             long now = System.currentTimeMillis();
-            if (player != null && now - this.lastWorldMapScanMs >= 2000L) {
+            // Each pass runs every marker provider on the world thread: back off while the
+            // markers stay the same (a teleport or switch change still rescans at once).
+            long interval = this.stableWorldMapScans >= 3 ? 4000L : 2000L;
+            if (player != null && now - this.lastWorldMapScanMs >= interval) {
                 this.lastWorldMapScanMs = now;
                 try {
                     List<DynamicMinimapMarker> current = NativeWorldMapIntegration.getMarkers(
@@ -1518,10 +1611,13 @@ public final class DynamicMinimapSession {
                             && ++this.emptyWorldMapScans < 3) {
                         // A provider can briefly return no markers during a map refresh.
                     } else {
-                        if (!current.equals(this.cachedWorldMapMarkers)) this.cachedWorldMapMarkers = current;
+                        if (!current.equals(this.cachedWorldMapMarkers)) {
+                            this.cachedWorldMapMarkers = current;
+                            this.stableWorldMapScans = 0; // Something changed: keep the fast cadence.
+                        } else this.stableWorldMapScans++;
                         this.emptyWorldMapScans = 0;
                     }
-                } catch (Throwable ignored) { }
+                } catch (Throwable failure) { DapperMapUtil.logFailure("world-map marker scan", failure); }
             }
         } else {
             this.cachedWorldMapMarkers = List.of();

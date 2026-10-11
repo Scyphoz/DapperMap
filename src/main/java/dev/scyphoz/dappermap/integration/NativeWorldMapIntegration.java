@@ -192,6 +192,11 @@ public final class NativeWorldMapIntegration {
     }
 
     /** Drops spawn lookups for a removed world (and the world reference they hold). */
+    /** Drops a departed player's spawn lookup (and its World reference). */
+    public static void forgetPlayer(java.util.UUID uuid) {
+        if (uuid != null) SPAWN_LOOKUPS.remove(uuid);
+    }
+
     public static void clearWorld(World world) {
         SPAWN_LOOKUPS.values().removeIf(lookup -> lookup.world() == world);
     }
