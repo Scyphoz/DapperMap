@@ -6,26 +6,29 @@ import com.hypixel.hytale.server.core.event.events.player.PlayerReadyEvent;
 import com.hypixel.hytale.server.core.plugin.JavaPlugin;
 import com.hypixel.hytale.server.core.plugin.JavaPluginInit;
 import com.hypixel.hytale.server.core.util.Config;
-import dev.scyphoz.dappermap.commands.MinimapCommand;
-import dev.scyphoz.dappermap.config.MinimapConfig;
+import dev.scyphoz.dappermap.commands.DapperMapCommand;
+import dev.scyphoz.dappermap.config.DapperMapConfig;
+import dev.scyphoz.dappermap.dynamic.DynamicCreatureIcons;
 import dev.scyphoz.dappermap.events.PlayerReadyListener;
 import dev.scyphoz.dappermap.permissions.DapperMapPermissions;
-import dev.scyphoz.dappermap.service.MinimapSessionManager;
+import dev.scyphoz.dappermap.service.DapperMapServerLoad;
+import dev.scyphoz.dappermap.service.DapperMapSessionManager;
+
 import javax.annotation.Nonnull;
 
 /**
  * Plugin entry point. It owns configuration, permission/command registration and the
- * player-session lifecycle; rendering work is delegated to {@link MinimapSessionManager}.
+ * player-session lifecycle; rendering work is delegated to {@link DapperMapSessionManager}.
  */
 public class DapperMap extends JavaPlugin {
-    private static Config<MinimapConfig> config = null;
-    private final MinimapSessionManager sessions;
+    private static Config<DapperMapConfig> config = null;
+    private final DapperMapSessionManager sessions;
     private java.util.concurrent.ScheduledFuture<?> imageCleanup;
 
     public DapperMap(@Nonnull JavaPluginInit init) {
         super(init);
-        config = this.withConfig("dappermap_minimap", MinimapConfig.CODEC);
-        this.sessions = new MinimapSessionManager();
+        config = this.withConfig("dappermap_minimap", DapperMapConfig.CODEC);
+        this.sessions = new DapperMapSessionManager();
     }
 
     @Override
@@ -42,12 +45,12 @@ public class DapperMap extends JavaPlugin {
                 5L, 5L, java.util.concurrent.TimeUnit.SECONDS);
         this.sessions.setDataDirectory(this.getDataDirectory());
         // Creature face icons saved between restarts (render pool I/O only; size-capped).
-        dev.scyphoz.dappermap.dynamic.CreatureIcons.configureDiskCache(
+        DynamicCreatureIcons.configureDiskCache(
                 this.getDataDirectory().resolve("icon-cache"),
                 config.get().isCreatureIconDiskCache(), config.get().getCreatureIconDiskCacheBytes());
         // Once-a-second load sampler for /dappermap admin stats and optional load shedding.
-        dev.scyphoz.dappermap.service.ServerLoad.start(this.sessions);
-        this.getCommandRegistry().registerCommand(new MinimapCommand("dappermap", "Configure DapperMap", this.sessions));
+        DapperMapServerLoad.start(this.sessions);
+        this.getCommandRegistry().registerCommand(new DapperMapCommand("dappermap", "Configure DapperMap", this.sessions));
         this.getEventRegistry().registerGlobal(
                 com.hypixel.hytale.server.core.universe.world.events.RemoveWorldEvent.class,
                 event -> dev.scyphoz.dappermap.integration.BetterMapIntegration.clearWorld(event.getWorld()));
@@ -59,13 +62,13 @@ public class DapperMap extends JavaPlugin {
     @Override
     protected void shutdown() {
         if (this.imageCleanup != null) this.imageCleanup.cancel(false);
-        dev.scyphoz.dappermap.service.ServerLoad.stop();
+        DapperMapServerLoad.stop();
         this.sessions.stopAll();
         dev.scyphoz.dappermap.integration.BetterMapIntegration.clearImages();
         dev.scyphoz.dappermap.dynamic.DynamicMinimapSession.shutdownRendering();
     }
 
-    public static Config<MinimapConfig> getConfig() {
+    public static Config<DapperMapConfig> getConfig() {
         return config;
     }
 

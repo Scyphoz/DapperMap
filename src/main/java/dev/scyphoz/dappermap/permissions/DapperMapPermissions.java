@@ -39,7 +39,7 @@ public final class DapperMapPermissions {
     /**
      * Grants access to the admin settings UI and to every {@code /dappermap admin ...}
      * sub-command. Required explicitly on the admin command and on each of its
-     * sub-commands (see {@code MinimapCommand}) rather than left to the framework's
+     * sub-commands (see {@code DapperMapCommand}) rather than left to the framework's
      * per-node auto-generation, so no player-command wildcard can reach it and no
      * single ungated node is left as a hole.
      */

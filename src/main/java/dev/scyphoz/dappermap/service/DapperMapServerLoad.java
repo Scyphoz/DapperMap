@@ -2,8 +2,8 @@ package dev.scyphoz.dappermap.service;
 
 import com.hypixel.hytale.logger.HytaleLogger;
 import dev.scyphoz.dappermap.DapperMap;
-import dev.scyphoz.dappermap.config.MinimapConfig;
-import dev.scyphoz.dappermap.dynamic.CreatureIcons;
+import dev.scyphoz.dappermap.config.DapperMapConfig;
+import dev.scyphoz.dappermap.dynamic.DynamicCreatureIcons;
 import dev.scyphoz.dappermap.dynamic.DynamicAssetPublisher;
 import dev.scyphoz.dappermap.dynamic.DynamicMinimapSession;
 import java.util.ArrayList;
@@ -24,7 +24,7 @@ import java.util.logging.Level;
  * which is also where the load-shedding decision is made, so there is no extra thread and no
  * per-tick allocation.
  */
-public final class ServerLoad {
+public final class DapperMapServerLoad {
     private static final HytaleLogger LOGGER = HytaleLogger.get("DapperMap");
     private static final int WINDOW = 60;
     /** Load must stay below the thresholds this long before full speed is restored. */
@@ -56,9 +56,9 @@ public final class ServerLoad {
     private static long lastBusyMs;
     private static String sheddingReason = "";
     private static ScheduledFuture<?> ticker;
-    private static MinimapSessionManager sessions;
+    private static DapperMapSessionManager sessions;
 
-    private ServerLoad() { }
+    private DapperMapServerLoad() { }
 
     // ------------------------------------------------------------------------------------
     // Hot-path recording (cheap, lock-free)
@@ -101,11 +101,11 @@ public final class ServerLoad {
     // ------------------------------------------------------------------------------------
 
     /** Starts the once-a-second sampler on DapperMap's heartbeat thread. */
-    public static synchronized void start(MinimapSessionManager manager) {
+    public static synchronized void start(DapperMapSessionManager manager) {
         sessions = manager;
         startedMs = System.currentTimeMillis();
         if (ticker == null) ticker = DynamicMinimapSession.heartbeat().scheduleAtFixedRate(
-                ServerLoad::tickSafe, 1L, 1L, TimeUnit.SECONDS);
+                DapperMapServerLoad::tickSafe, 1L, 1L, TimeUnit.SECONDS);
     }
 
     public static synchronized void stop() {
@@ -123,7 +123,7 @@ public final class ServerLoad {
         long now = System.currentTimeMillis();
         int rejectedLastMinute;
         int liveMaps;
-        synchronized (ServerLoad.class) {
+        synchronized (DapperMapServerLoad.class) {
             slot = (slot + 1) % WINDOW;
             JOBS[slot] = RENDER_JOBS.sumThenReset();
             NANOS[slot] = RENDER_NANOS.sumThenReset();
@@ -137,10 +137,10 @@ public final class ServerLoad {
             TERRAIN_SIZE[slot] = TERRAIN_BYTES.sumThenReset();
             rejectedLastMinute = (int) Math.min(Integer.MAX_VALUE, sum(REJECTED));
         }
-        MinimapSessionManager manager = sessions;
+        DapperMapSessionManager manager = sessions;
         liveMaps = manager == null ? 0 : manager.liveSessionCount();
 
-        MinimapConfig config = DapperMap.getConfig() == null ? null : DapperMap.getConfig().get();
+        DapperMapConfig config = DapperMap.getConfig() == null ? null : DapperMap.getConfig().get();
         int level = 0;
         String reason = "";
         if (config != null && config.isLoadShedding()) {
@@ -182,9 +182,9 @@ public final class ServerLoad {
     // ------------------------------------------------------------------------------------
 
     /** Lines for {@code /dappermap admin stats}. Work is done only when the command runs. */
-    public static List<String> report(MinimapSessionManager manager, MinimapConfig config) {
+    public static List<String> report(DapperMapSessionManager manager, DapperMapConfig config) {
         long jobs, nanos, peak, rejected, bytes, assets, terrain, terrainPalette, terrainReduced, terrainBytes;
-        synchronized (ServerLoad.class) {
+        synchronized (DapperMapServerLoad.class) {
             jobs = sum(JOBS);
             nanos = sum(NANOS);
             peak = max(PEAKS);
@@ -219,7 +219,7 @@ public final class ServerLoad {
                     + " [trigger: " + config.getLoadSheddingRejectionsPerMinute() + " refused/min"
                     + (config.getLoadSheddingPlayers() > 0 ? " or > " + config.getLoadSheddingPlayers() + " minimaps" : "") + "]");
         }
-        lines.add("Caches: " + CreatureIcons.cacheSummary() + ", delivered-image records " + DynamicAssetPublisher.deliveredEntries());
+        lines.add("Caches: " + DynamicCreatureIcons.cacheSummary() + ", delivered-image records " + DynamicAssetPublisher.deliveredEntries());
         return lines;
     }
 }

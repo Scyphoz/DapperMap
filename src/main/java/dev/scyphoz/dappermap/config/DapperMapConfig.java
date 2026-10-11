@@ -14,9 +14,9 @@ import static dev.scyphoz.dappermap.util.DapperMapUtil.clamp;
  * <p>Every key is optional, so configuration files written by older versions load with the
  * defaults below (which impose no limits) and gain the new keys on the next save.
  */
-public class MinimapConfig {
+public class DapperMapConfig {
 
-    public static final BuilderCodec<MinimapConfig> CODEC;
+    public static final BuilderCodec<DapperMapConfig> CODEC;
 
     /** Update speed indexes, fastest first (matches DynamicMinimapSetting.updateSpeed). */
     public static final String[] SPEED_NAMES = {"very-fast", "fast", "normal", "slow"};
@@ -50,7 +50,7 @@ public class MinimapConfig {
     /** Colours kept in full-colour terrain images (32..256); 0 sends full colour. */
     private int terrainColours = 256;
 
-    private MinimapConfig() {
+    private DapperMapConfig() {
     }
 
     public boolean isEnabledByDefault() {
@@ -152,7 +152,7 @@ public class MinimapConfig {
 
     // Map external configuration keys to the private Java fields above.
     static {
-        CODEC = BuilderCodec.builder(MinimapConfig.class, MinimapConfig::new)
+        CODEC = BuilderCodec.builder(DapperMapConfig.class, DapperMapConfig::new)
                 .append(
                         new KeyedCodec<>("EnabledByDefault", Codec.BOOLEAN),
                         (config, value, extraInfo) -> config.enabledByDefault = value,

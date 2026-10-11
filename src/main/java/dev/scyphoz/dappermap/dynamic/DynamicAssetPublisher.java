@@ -8,7 +8,7 @@ import com.hypixel.hytale.protocol.packets.setup.AssetPart;
 import com.hypixel.hytale.protocol.packets.setup.RequestCommonAssetsRebuild;
 import com.hypixel.hytale.server.core.io.PacketHandler;
 import com.hypixel.hytale.server.core.universe.PlayerRef;
-import dev.scyphoz.dappermap.service.ServerLoad;
+import dev.scyphoz.dappermap.service.DapperMapServerLoad;
 import java.util.Map;
 import java.util.LinkedHashMap;
 import java.util.UUID;
@@ -177,7 +177,7 @@ public final class DynamicAssetPublisher {
                     for(Packet packet : packets) {
                         packetHandler.writeNoCache((ToClientPacket)packet);
                     }
-                    ServerLoad.recordAsset(data.length); // Counter only (admin stats).
+                    DapperMapServerLoad.recordAsset(data.length); // Counter only (admin stats).
 
                     rememberMarker(uuid, path, data);
 

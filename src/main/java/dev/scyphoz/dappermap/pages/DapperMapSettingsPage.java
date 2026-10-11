@@ -22,15 +22,15 @@ import com.hypixel.hytale.server.core.universe.PlayerRef;
 import com.hypixel.hytale.server.core.universe.world.World;
 import com.hypixel.hytale.server.core.universe.world.storage.EntityStore;
 import dev.scyphoz.dappermap.DapperMap;
-import dev.scyphoz.dappermap.config.MinimapConfig;
+import dev.scyphoz.dappermap.config.DapperMapConfig;
 import dev.scyphoz.dappermap.dynamic.DynamicMinimapSetting;
 import dev.scyphoz.dappermap.dynamic.DynamicMinimapRenderer;
 import dev.scyphoz.dappermap.dynamic.DynamicMinimapSession;
 import dev.scyphoz.dappermap.dynamic.DynamicAssetPublisher;
-import dev.scyphoz.dappermap.dynamic.MinimapColours;
-import dev.scyphoz.dappermap.dynamic.MinimapColours.Key;
+import dev.scyphoz.dappermap.dynamic.DynamicMinimapColours;
+import dev.scyphoz.dappermap.dynamic.DynamicMinimapColours.Key;
 import dev.scyphoz.dappermap.integration.BetterMapIntegration;
-import dev.scyphoz.dappermap.service.MinimapSessionManager;
+import dev.scyphoz.dappermap.service.DapperMapSessionManager;
 
 import java.awt.Color;
 import java.util.ArrayList;
@@ -62,8 +62,8 @@ public final class DapperMapSettingsPage
     /** Ids of the player-setting dropdown rows (server-limit rows are handled separately). */
     private static final java.util.Set<String> DROPDOWN_IDS;
     private final PlayerRef playerRef;
-    private final MinimapSessionManager sessions;
-    private final MinimapConfig config;
+    private final DapperMapSessionManager sessions;
+    private final DapperMapConfig config;
     private final boolean adminMode;
     private Tab activeTab = Tab.DISPLAY;
     private Key selectedColour = Key.EDGE;
@@ -101,8 +101,8 @@ public final class DapperMapSettingsPage
 
     public DapperMapSettingsPage(
             PlayerRef playerRef,
-            MinimapSessionManager sessions,
-            MinimapConfig config
+            DapperMapSessionManager sessions,
+            DapperMapConfig config
     ) {
         super(
                 playerRef,
@@ -116,7 +116,7 @@ public final class DapperMapSettingsPage
         this.adminMode = false;
     }
 
-    public DapperMapSettingsPage(PlayerRef playerRef, MinimapSessionManager sessions, MinimapConfig config, boolean adminMode) {
+    public DapperMapSettingsPage(PlayerRef playerRef, DapperMapSessionManager sessions, DapperMapConfig config, boolean adminMode) {
         super(playerRef, CustomPageLifetime.CanDismiss, DapperMapSettingsPage.Ev.CODEC);
         this.playerRef = playerRef;
         this.sessions = sessions;
@@ -126,7 +126,7 @@ public final class DapperMapSettingsPage
 
     /** Opens the shared settings editor directly on the Colours tab. */
     public static DapperMapSettingsPage colours(PlayerRef playerRef,
-                                                MinimapSessionManager sessions, MinimapConfig config) {
+                                                DapperMapSessionManager sessions, DapperMapConfig config) {
         DapperMapSettingsPage page = new DapperMapSettingsPage(playerRef, sessions, config);
         page.activeTab = Tab.COLOURS;
         return page;
@@ -916,7 +916,7 @@ public final class DapperMapSettingsPage
         } else if ("colour_reset".equals(action)) {
             settings.colours = settings.colours.reset(this.selectedColour);
         } else if ("colour_reset_all".equals(action)) {
-            settings.colours = new MinimapColours();
+            settings.colours = new DynamicMinimapColours();
         } else if (action.startsWith("toggle_")) {
             rowId = action.substring("toggle_".length());
             disabledBefore = this.disabledRows(settings);

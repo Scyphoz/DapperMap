@@ -1,6 +1,6 @@
 package dev.scyphoz.dappermap.dynamic;
 
-import dev.scyphoz.dappermap.config.MinimapConfig;
+import dev.scyphoz.dappermap.config.DapperMapConfig;
 import static dev.scyphoz.dappermap.util.DapperMapUtil.clamp;
 
 /** Mutable per-player (or administrator-default) settings consumed by every minimap subsystem. */
@@ -22,7 +22,7 @@ public final class DynamicMinimapSetting {
     public static final int INFO_ALIGN_LEFT = 0;
     public static final int INFO_ALIGN_CENTER = 1;
     public static final int INFO_ALIGN_RIGHT = 2;
-    public volatile MinimapColours colours = MinimapColours.defaults();
+    public volatile DynamicMinimapColours colours = DynamicMinimapColours.defaults();
     public volatile boolean enabled = true;
     public int rotationMode = 0;
     public int zoomBlocks = 96;
@@ -84,7 +84,7 @@ public final class DynamicMinimapSetting {
     public DynamicMinimapSetting() {
     }
 
-    public static DynamicMinimapSetting fromConfig(MinimapConfig config) {
+    public static DynamicMinimapSetting fromConfig(DapperMapConfig config) {
         DynamicMinimapSetting settings = new DynamicMinimapSetting();
         settings.enabled = config.isEnabledByDefault();
         settings.zoomBlocks = Math.max(16, config.getDefaultRadiusBlocks());
@@ -97,7 +97,7 @@ public final class DynamicMinimapSetting {
         return this.shape == 1;
     }
 
-    /** Synchronized: live session settings are updated under this object's lock (MinimapSessionManager). */
+    /** Synchronized: live session settings are updated under this object's lock (DapperMapSessionManager). */
     public synchronized DynamicMinimapSetting copy() {
         DynamicMinimapSetting copy = new DynamicMinimapSetting();
         copy.copyFrom(this);
@@ -266,7 +266,7 @@ public final class DynamicMinimapSetting {
 
     /** "very-fast" | "fast" | "normal" | "slow" (the names used by commands and the config). */
     public String updateSpeedName() {
-        return MinimapConfig.SPEED_NAMES[clamp(this.updateSpeed, 0, MinimapConfig.SPEED_NAMES.length - 1)];
+        return DapperMapConfig.SPEED_NAMES[clamp(this.updateSpeed, 0, DapperMapConfig.SPEED_NAMES.length - 1)];
     }
 
 }

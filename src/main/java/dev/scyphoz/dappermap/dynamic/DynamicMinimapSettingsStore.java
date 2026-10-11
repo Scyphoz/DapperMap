@@ -220,7 +220,7 @@ public final class DynamicMinimapSettingsStore {
                         this.lastWritten.put(uuid, text);
                     }
                     java.util.Map<String, String> json = fields(text);
-                    for (MinimapColours.Key key : MinimapColours.Key.values()) {
+                    for (DynamicMinimapColours.Key key : DynamicMinimapColours.Key.values()) {
                         Integer rgb = extractColour(json, "colour_" + key.id);
                         if (rgb != null) settings.colours = settings.colours.with(key, rgb);
                     }
@@ -384,9 +384,9 @@ public final class DynamicMinimapSettingsStore {
         }
     }
 
-    private static String colourFields(MinimapColours colours) {
+    private static String colourFields(DynamicMinimapColours colours) {
         StringBuilder out = new StringBuilder();
-        for (MinimapColours.Key key : MinimapColours.Key.values())
+        for (DynamicMinimapColours.Key key : DynamicMinimapColours.Key.values())
             out.append(",\n  \"colour_").append(key.id).append("\": ").append(colours.rgb(key));
         return out.toString();
     }

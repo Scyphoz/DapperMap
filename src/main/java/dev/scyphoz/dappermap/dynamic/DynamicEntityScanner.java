@@ -42,7 +42,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
 import org.joml.Vector3d;
-import static dev.scyphoz.dappermap.dynamic.MinimapColours.Key.*;
+import static dev.scyphoz.dappermap.dynamic.DynamicMinimapColours.Key.*;
 import static dev.scyphoz.dappermap.util.DapperMapUtil.jsonDisabled;
 import static dev.scyphoz.dappermap.util.DapperMapUtil.jsonObject;
 import static dev.scyphoz.dappermap.util.DapperMapUtil.jsonString;
@@ -60,7 +60,7 @@ public final class DynamicEntityScanner {
      */
     public static List<DynamicMinimapMarker> scan(Store<EntityStore> store, Ref<EntityStore> playerRef, Vector3d playerPosition,
                                                   double radius, DynamicMinimapSetting settings, ThreatCache threats,
-                                                  CreatureIcons.KeyCache icons) {
+                                                  DynamicCreatureIcons.KeyCache icons) {
         ArrayList<DynamicMinimapMarker> markers = new ArrayList<>();
         double radiusSq = radius * radius;
         double playerX = playerPosition.x();
@@ -125,7 +125,7 @@ public final class DynamicEntityScanner {
         if (creatures != null) {
             long now = System.currentTimeMillis();
             boolean useIcons = settings.creatureIcons && icons != null;
-            int iconSize = CreatureIcons.markerSize(settings); // Grows with map size (20-32 units).
+            int iconSize = DynamicCreatureIcons.markerSize(settings); // Grows with map size (20-32 units).
             int shown = 0;
             for (NearestNpcs.Candidate candidate : creatures.sorted()) {
                 if (shown >= creatures.shown) break; // Marker limit reached (nearest first).
@@ -133,7 +133,7 @@ public final class DynamicEntityScanner {
                     if (!candidate.ref().isValid()) continue;
                     NPCEntity npc = candidate.npc(); // Read during selection; no second lookup.
                     if (npc == null) continue;
-                    MinimapColours.Key key = threats == null
+                    DynamicMinimapColours.Key key = threats == null
                             ? colourFor(candidate.ref(), npc, playerRef, store)
                             : threats.classify(candidate.ref(), npc, playerRef, store, now,
                             hostileOnly ? ThreatCache.HIDDEN_TTL_MS : ThreatCache.TTL_MS);
@@ -344,19 +344,19 @@ public final class DynamicEntityScanner {
          * A creature turning on the player still changes its engagement and shows at once.
          */
         static final long HIDDEN_TTL_MS = 2000L;
-        private record Entry(MinimapColours.Key key, int engagement, long expiresAt) { }
+        private record Entry(DynamicMinimapColours.Key key, int engagement, long expiresAt) { }
         private java.util.Map<Ref<EntityStore>, Entry> current = new java.util.HashMap<>();
         private java.util.Map<Ref<EntityStore>, Entry> next = new java.util.HashMap<>();
 
-        MinimapColours.Key classify(Ref<EntityStore> npcRef, NPCEntity npc, Ref<EntityStore> playerRef,
-                                    ComponentAccessor<EntityStore> accessor, long now, long passiveTtl) {
+        DynamicMinimapColours.Key classify(Ref<EntityStore> npcRef, NPCEntity npc, Ref<EntityStore> playerRef,
+                                           ComponentAccessor<EntityStore> accessor, long now, long passiveTtl) {
             // Read once and shared with a full reclassification (previously read twice each).
             Ref<EntityStore> lockedTarget = getLockedTarget(npcRef, accessor);
             boolean executingAttack = isExecutingAttack(npcRef, accessor);
             int engagement = engagement(npc, playerRef, lockedTarget, executingAttack);
             Entry cached = this.current.get(npcRef);
             if (cached == null || cached.engagement() != engagement || now >= cached.expiresAt()) {
-                MinimapColours.Key key = colourFor(npcRef, npc, playerRef, accessor, lockedTarget, executingAttack);
+                DynamicMinimapColours.Key key = colourFor(npcRef, npc, playerRef, accessor, lockedTarget, executingAttack);
                 long ttl = key == HOSTILE || key == HOSTILE_ACTIVE ? TTL_MS : passiveTtl;
                 cached = new Entry(key, engagement, now + ttl);
             }
@@ -387,8 +387,8 @@ public final class DynamicEntityScanner {
     }
 
     /** Full threat classification, reading the creature's locked target and attack state itself. */
-    private static MinimapColours.Key colourFor(Ref<EntityStore> npcRef, NPCEntity npc,
-                                                Ref<EntityStore> playerRef, ComponentAccessor<EntityStore> commandBuffer) {
+    private static DynamicMinimapColours.Key colourFor(Ref<EntityStore> npcRef, NPCEntity npc,
+                                                       Ref<EntityStore> playerRef, ComponentAccessor<EntityStore> commandBuffer) {
         return colourFor(npcRef, npc, playerRef, commandBuffer,
                 getLockedTarget(npcRef, commandBuffer), isExecutingAttack(npcRef, commandBuffer));
     }
@@ -404,9 +404,9 @@ public final class DynamicEntityScanner {
     }
 
     /** Full threat classification with the locked target and attack state already read. */
-    private static MinimapColours.Key colourFor(Ref<EntityStore> npcRef, NPCEntity npc,
-                                                Ref<EntityStore> playerRef, ComponentAccessor<EntityStore> commandBuffer,
-                                                Ref<EntityStore> lockedTarget, boolean executingAttack) {
+    private static DynamicMinimapColours.Key colourFor(Ref<EntityStore> npcRef, NPCEntity npc,
+                                                       Ref<EntityStore> playerRef, ComponentAccessor<EntityStore> commandBuffer,
+                                                       Ref<EntityStore> lockedTarget, boolean executingAttack) {
         try {
             if (playerRef == null || !playerRef.isValid()) return NEUTRAL;
             WorldSupport worldSupport = WorldSupport.get(npcRef, commandBuffer);
@@ -687,9 +687,9 @@ public final class DynamicEntityScanner {
             }
         }
 
-        static MinimapColours.Key classify(NpcThreatProfile profile, Attitude attitude,
-                                           Attitude defaultAttitude, Attitude override, boolean targetingPlayer,
-                                           String state, boolean executingAttack, NpcBehaviourSignals.Signals signals) {
+        static DynamicMinimapColours.Key classify(NpcThreatProfile profile, Attitude attitude,
+                                                  Attitude defaultAttitude, Attitude override, boolean targetingPlayer,
+                                                  String state, boolean executingAttack, NpcBehaviourSignals.Signals signals) {
             var capability = signals.capability();
             boolean towards = signals.intent() == NpcBehaviourSignals.Intent.TOWARDS_PLAYER
                     || signals.intent() == NpcBehaviourSignals.Intent.CHARGE_PLAYER;

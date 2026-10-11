@@ -1,6 +1,6 @@
 package dev.scyphoz.dappermap.dynamic;
 
-import static dev.scyphoz.dappermap.dynamic.MinimapColours.Key.*;
+import static dev.scyphoz.dappermap.dynamic.DynamicMinimapColours.Key.*;
 
 import com.hypixel.hytale.server.core.entity.entities.player.hud.CustomUIHud;
 import com.hypixel.hytale.server.core.ui.Anchor;
@@ -89,7 +89,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
 
     private record InitialOverlayKey(int size, int shape, int resolution, boolean panel, int position,
                                      int alignment, boolean coords, boolean compass, boolean clock,
-                                     boolean biome, MinimapColours colours) {}
+                                     boolean biome, DynamicMinimapColours colours) {}
     private static final java.util.concurrent.ConcurrentMap<InitialOverlayKey, DynamicMinimapRenderer.NativeHudParts> INITIAL_OVERLAYS
             = new java.util.concurrent.ConcurrentHashMap<>();
 
@@ -645,7 +645,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
         return anchorChanged || imageChanged || visibilityChanged;
     }
 
-    public void setColours(MinimapColours colours) {
+    public void setColours(DynamicMinimapColours colours) {
         this.settings.colours = colours;
         if (this.built) {
             this.overlayRevision++;
@@ -961,7 +961,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
         int panelY = position == DynamicMinimapSetting.INFO_BELOW ? this.logicalUiSize + this.readoutGap()
                 : position == DynamicMinimapSetting.INFO_ABOVE ? 0 : Math.max(0, (this.logicalUiSize - this.readoutHeight()) / 2);
         String[] values = {this.coordsText, this.compassText, this.clockText, this.biomeText};
-        MinimapColours.Key[] colours = {COORDS_TEXT, COMPASS_TEXT, CLOCK_TEXT, BIOME_TEXT};
+        DynamicMinimapColours.Key[] colours = {COORDS_TEXT, COMPASS_TEXT, CLOCK_TEXT, BIOME_TEXT};
         String alignment = switch (this.settings.infoPanelTextAlignment) { case 1 -> "Center"; case 2 -> "End"; default -> "Start"; };
         int cursor = panelY + 30;
         for (int i = 0; i < 4; i++) {

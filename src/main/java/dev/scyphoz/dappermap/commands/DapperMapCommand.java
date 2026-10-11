@@ -13,16 +13,16 @@ import com.hypixel.hytale.server.core.universe.PlayerRef;
 import com.hypixel.hytale.server.core.universe.world.World;
 import com.hypixel.hytale.server.core.universe.world.storage.EntityStore;
 import dev.scyphoz.dappermap.DapperMap;
-import dev.scyphoz.dappermap.config.MinimapConfig;
+import dev.scyphoz.dappermap.config.DapperMapConfig;
 import dev.scyphoz.dappermap.dynamic.DynamicMinimapSetting;
-import dev.scyphoz.dappermap.dynamic.MinimapColours;
-import dev.scyphoz.dappermap.dynamic.MinimapColours.Key;
+import dev.scyphoz.dappermap.dynamic.DynamicMinimapColours;
+import dev.scyphoz.dappermap.dynamic.DynamicMinimapColours.Key;
 import dev.scyphoz.dappermap.integration.BetterMapIntegration;
 import dev.scyphoz.dappermap.pages.DapperMapSettingsPage;
 import dev.scyphoz.dappermap.permissions.DapperMapPermissions;
 import dev.scyphoz.dappermap.permissions.SettingPermissions;
-import dev.scyphoz.dappermap.service.MinimapSessionManager;
-import dev.scyphoz.dappermap.service.ServerLoad;
+import dev.scyphoz.dappermap.service.DapperMapSessionManager;
+import dev.scyphoz.dappermap.service.DapperMapServerLoad;
 import javax.annotation.Nonnull;
 import java.util.Arrays;
 import java.util.stream.Collectors;
@@ -31,10 +31,10 @@ import java.util.stream.Collectors;
  * Builds the player and administrator command trees and routes both trees through the
  * same setting parsers while keeping their permission scopes and persistence targets separate.
  */
-public class MinimapCommand extends AbstractPlayerCommand {
-    private final MinimapSessionManager sessions;
+public class DapperMapCommand extends AbstractPlayerCommand {
+    private final DapperMapSessionManager sessions;
 
-    public MinimapCommand(String name, String description, MinimapSessionManager sessions) {
+    public DapperMapCommand(String name, String description, DapperMapSessionManager sessions) {
         super(name, description);
         this.sessions = sessions;
         this.addAliases("minimap", "mm", "dm");
@@ -108,7 +108,7 @@ public class MinimapCommand extends AbstractPlayerCommand {
 
     private void dispatch(@Nonnull CommandContext context, @Nonnull Store<EntityStore> store, @Nonnull Ref<EntityStore> ref,
                           @Nonnull PlayerRef playerRef, @Nonnull World world, String args) {
-        MinimapConfig config = DapperMap.getConfig().get();
+        DapperMapConfig config = DapperMap.getConfig().get();
         Player player = store.getComponent(ref, Player.getComponentType());
         args = args.trim();
         if (!args.isEmpty() && !args.equalsIgnoreCase("toggle")) {
@@ -385,7 +385,7 @@ public class MinimapCommand extends AbstractPlayerCommand {
             context.sendMessage(Message.raw("You do not have permission to manage DapperMap server defaults."));
             return;
         }
-        MinimapConfig config = DapperMap.getConfig().get();
+        DapperMapConfig config = DapperMap.getConfig().get();
         Player player = store.getComponent(ref, Player.getComponentType());
         String args = arguments == null ? "" : arguments.trim();
         if (args.isEmpty() || args.equalsIgnoreCase("settings") || args.equalsIgnoreCase("menu") || args.equalsIgnoreCase("gui")) {
@@ -408,7 +408,7 @@ public class MinimapCommand extends AbstractPlayerCommand {
                 context.sendMessage(Message.raw("Server: /mm admin limit [speed|resolution|zoom|creatures <value|none>] | /mm admin stats | /mm admin load-shedding on|off")); return; }
             // Server controls. The rest of the line is passed on unchanged.
             case "limit", "limits" -> { context.sendMessage(Message.raw(this.adminLimit(args.substring(parts[0].length()).trim()))); return; }
-            case "stats" -> { for (String line : ServerLoad.report(this.sessions, config)) context.sendMessage(Message.raw(line)); return; }
+            case "stats" -> { for (String line : DapperMapServerLoad.report(this.sessions, config)) context.sendMessage(Message.raw(line)); return; }
             case "load-shedding", "loadshedding" -> { context.sendMessage(Message.raw(this.adminLoadShedding(value))); return; }
             case "panel-alignment" -> { changed=setPanelAlignment(settings,value); usage="admin panel-alignment left|centre|right"; }
             case "creature-limit" -> { changed=setCreatureLimit(settings,value); usage="admin creature-limit 16|32|64"; }
@@ -463,7 +463,7 @@ public class MinimapCommand extends AbstractPlayerCommand {
      * config and re-applies the limits to every live minimap; players' saved settings are kept.
      */
     private String adminLimit(String arguments) {
-        MinimapConfig config = DapperMap.getConfig().get();
+        DapperMapConfig config = DapperMap.getConfig().get();
         String usage = "Usage: /dappermap admin limit speed very-fast|fast|normal|slow|none"
                 + " | resolution <256..1024>|none | zoom <16..256>|none | creatures 16|32|64|none";
         if (arguments.isBlank()) return "DapperMap server limits: " + (config.hasLimits() ? config.describeLimits() : "none") + ".";
@@ -501,12 +501,12 @@ public class MinimapCommand extends AbstractPlayerCommand {
 
     /** {@code /dappermap admin load-shedding on|off}; no value shows the current state. */
     private String adminLoadShedding(String value) {
-        MinimapConfig config = DapperMap.getConfig().get();
+        DapperMapConfig config = DapperMap.getConfig().get();
         Boolean enabled = parseOnOff(value);
         if (enabled == null) {
             return value.isEmpty()
                     ? "DapperMap load shedding is " + (config.isLoadShedding() ? "on" : "off")
-                    + (ServerLoad.sheddingLevel() > 0 ? " and currently active." : ".")
+                    + (DapperMapServerLoad.sheddingLevel() > 0 ? " and currently active." : ".")
                     + " Thresholds are set in dappermap_minimap.json (LoadSheddingRejectionsPerMinute, LoadSheddingPlayers)."
                     : "Usage: /dappermap admin load-shedding on|off";
         }
@@ -536,7 +536,7 @@ public class MinimapCommand extends AbstractPlayerCommand {
         if (target.equalsIgnoreCase("reset")) {
             String name = parts.length > 1 ? parts[1].trim() : "";
             if (name.equalsIgnoreCase("all")) {
-                settings.colours = new MinimapColours();
+                settings.colours = new DynamicMinimapColours();
                 return new ColourCommandResult(true, "DapperMap colours reset to defaults.");
             }
 
@@ -557,7 +557,7 @@ public class MinimapCommand extends AbstractPlayerCommand {
         }
 
         try {
-            int rgb = MinimapColours.parse(parts[1]);
+            int rgb = DynamicMinimapColours.parse(parts[1]);
             settings.colours = settings.colours.with(key, rgb);
             return new ColourCommandResult(true, key.label + ": " + settings.colours.hex(key));
         } catch (IllegalArgumentException e) {
@@ -974,7 +974,7 @@ public class MinimapCommand extends AbstractPlayerCommand {
     private enum Kind { NONE, STRING, INTEGER, TWO_INTEGERS, TWO_STRINGS }
 
     private static class DispatchCommand extends AbstractPlayerCommand {
-        private final MinimapCommand root;
+        private final DapperMapCommand root;
         private final Scope scope;
         private final Kind kind;
         private final RequiredArg<String> firstString;
@@ -982,7 +982,7 @@ public class MinimapCommand extends AbstractPlayerCommand {
         private final RequiredArg<Integer> firstInt;
         private final RequiredArg<Integer> secondInt;
 
-        DispatchCommand(String name, String description, MinimapCommand root, Scope scope, Kind kind,
+        DispatchCommand(String name, String description, DapperMapCommand root, Scope scope, Kind kind,
                         String[] suggestions, String... aliases) {
             super(name, description);
             this.root = root;
@@ -1050,9 +1050,9 @@ public class MinimapCommand extends AbstractPlayerCommand {
      * this any player could reach the admin tree.
      */
     private static final class AdminDispatchCommand extends AbstractPlayerCommand {
-        private final MinimapCommand root;
+        private final DapperMapCommand root;
 
-        AdminDispatchCommand(MinimapCommand root) {
+        AdminDispatchCommand(DapperMapCommand root) {
             super("admin", "Configure server defaults for new DapperMap players");
             this.root = root;
             this.requirePermission(DapperMapPermissions.ADMIN);
@@ -1071,9 +1071,9 @@ public class MinimapCommand extends AbstractPlayerCommand {
 
     /** Admin-only server tools (limit, stats, load-shedding); hands the line to dispatchAdmin. */
     private static final class AdminToolCommand extends AbstractPlayerCommand {
-        private final MinimapCommand root;
+        private final DapperMapCommand root;
 
-        AdminToolCommand(String name, String description, MinimapCommand root, String... aliases) {
+        AdminToolCommand(String name, String description, DapperMapCommand root, String... aliases) {
             super(name, description);
             this.root = root;
             this.addAliases(aliases);
@@ -1108,10 +1108,10 @@ public class MinimapCommand extends AbstractPlayerCommand {
 
     /** Accepts integration, feature, and state in one command for both scopes. */
     private static final class IntegrationDispatchCommand extends AbstractPlayerCommand {
-        private final MinimapCommand root;
+        private final DapperMapCommand root;
         private final Scope scope;
 
-        IntegrationDispatchCommand(String name, String description, MinimapCommand root, Scope scope, String... aliases) {
+        IntegrationDispatchCommand(String name, String description, DapperMapCommand root, Scope scope, String... aliases) {
             super(name, description);
             this.root = root;
             this.scope = scope;
@@ -1131,10 +1131,10 @@ public class MinimapCommand extends AbstractPlayerCommand {
     }
 
     private static final class ColourDispatchCommand extends AbstractPlayerCommand {
-        private final MinimapCommand root;
+        private final DapperMapCommand root;
         private final Scope scope;
 
-        ColourDispatchCommand(String name, String description, MinimapCommand root, Scope scope, String... aliases) {
+        ColourDispatchCommand(String name, String description, DapperMapCommand root, Scope scope, String... aliases) {
             super(name, description);
             this.root = root;
             this.scope = scope;

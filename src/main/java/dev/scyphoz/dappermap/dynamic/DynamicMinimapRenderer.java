@@ -6,7 +6,7 @@ import com.hypixel.hytale.server.core.universe.world.chunk.palette.BitFieldArr;
 import com.hypixel.hytale.server.core.universe.world.worldmap.WorldMapManager;
 import java.awt.BasicStroke;
 import java.awt.Color;
-import static dev.scyphoz.dappermap.dynamic.MinimapColours.Key.*;
+import static dev.scyphoz.dappermap.dynamic.DynamicMinimapColours.Key.*;
 import java.awt.Font;
 import java.awt.FontMetrics;
 import java.awt.Graphics2D;
@@ -25,6 +25,8 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.BiFunction;
 import javax.imageio.ImageIO;
+
+import dev.scyphoz.dappermap.service.DapperMapServerLoad;
 import dev.scyphoz.dappermap.util.DapperMapUtil;
 
 /** Pure rendering utilities for terrain, HUD chrome, previews and marker PNG assets. */
@@ -308,7 +310,7 @@ public final class DynamicMinimapRenderer {
 
     /** The frame artwork at texture resolution (bezel fixed, compass markings at mapAngle's bucket). */
     private static BufferedImage renderFrameImage(DynamicMinimapSetting settings, double mapAngle) {
-        MinimapColours colours = settings.colours;
+        DynamicMinimapColours colours = settings.colours;
         int bucket = rotationBucket(mapAngle);
         int logicalSize = STATIC_ASSET_LOGICAL_SIZE;
         int textureSize = Math.max(1, settings.textureResolution);
@@ -381,7 +383,7 @@ public final class DynamicMinimapRenderer {
     }
 
     private record OverlayLayout(int mapSize, int width, int height, int panelHeight, int gap,
-                                 int shape, int position, int alignment, int flags, MinimapColours colours) {}
+                                 int shape, int position, int alignment, int flags, DynamicMinimapColours colours) {}
     private record RowLayerKey(OverlayLayout layout, int row, String value) {}
     private record FrameLayerKey(int mapSize, int width, int height, int mapX, int mapY,
                                  int resolution, int shape, boolean panel, int angle, String colours) {}
@@ -610,7 +612,7 @@ public final class DynamicMinimapRenderer {
                 // Keep only four spaced creature examples; the rest of the live
                 // creature pool is intentionally absent from this small preview.
                 if (preview.showEntities) {
-                    MinimapColours.Key[] kinds = {
+                    DynamicMinimapColours.Key[] kinds = {
                             HOSTILE_ACTIVE, HOSTILE, NEUTRAL, FRIENDLY
                     };
                     double[][] positions = {
@@ -1078,7 +1080,7 @@ public final class DynamicMinimapRenderer {
     /** Dot PNGs by colour: identical for every player, so each colour is drawn and encoded once. */
     private static final PngCache DOT_CACHE = new PngCache(64, 512 * 1024);
 
-    public static byte[] renderDot(int rgb, MinimapColours colours) {
+    public static byte[] renderDot(int rgb, DynamicMinimapColours colours) {
         byte[] cached = DOT_CACHE.get(rgb);
         if (cached != null) return cached;
         byte[] png = drawDot(rgb);
@@ -1100,8 +1102,8 @@ public final class DynamicMinimapRenderer {
         return toPng(image);
     }
 
-    public static byte[] renderSelfArrow(double angle, MinimapColours colours) {
-        ArrowKey key = new ArrowKey(Double.doubleToLongBits(angle), colours.rgb(MinimapColours.Key.SELF));
+    public static byte[] renderSelfArrow(double angle, DynamicMinimapColours colours) {
+        ArrowKey key = new ArrowKey(Double.doubleToLongBits(angle), colours.rgb(DynamicMinimapColours.Key.SELF));
         byte[] cached = ARROW_CACHE.get(key);
         if (cached != null) return cached;
         BufferedImage image = new BufferedImage(40, 40, 2);
@@ -1120,7 +1122,7 @@ public final class DynamicMinimapRenderer {
             graphics.rotate(angle);
         }
 
-        graphics.setColor(colours.awt(MinimapColours.Key.SELF, 255));
+        graphics.setColor(colours.awt(DynamicMinimapColours.Key.SELF, 255));
         graphics.fill(arrow);
         graphics.setColor(withAlpha(FIXED_MARKER_OUTLINE, 220));
         graphics.setStroke(new BasicStroke(1.5F));
@@ -1140,13 +1142,13 @@ public final class DynamicMinimapRenderer {
     private static final Map<Integer, byte[][]> ARROW_SETS = new ConcurrentHashMap<>();
 
     /** Non-blocking lookup of a ready locator set, or null if it has not been rendered yet. */
-    public static byte[][] cachedSelfArrows(MinimapColours colours) {
-        return ARROW_SETS.get(colours.rgb(MinimapColours.Key.SELF));
+    public static byte[][] cachedSelfArrows(DynamicMinimapColours colours) {
+        return ARROW_SETS.get(colours.rgb(DynamicMinimapColours.Key.SELF));
     }
 
     /** Renders (once per colour) every locator heading. Render pool only. */
-    public static byte[][] selfArrows(MinimapColours colours) {
-        int rgb = colours.rgb(MinimapColours.Key.SELF);
+    public static byte[][] selfArrows(DynamicMinimapColours colours) {
+        int rgb = colours.rgb(DynamicMinimapColours.Key.SELF);
         byte[][] ready = ARROW_SETS.get(rgb);
         if (ready != null) return ready;
         byte[][] set = new byte[SELF_ARROW_BUCKETS][];
@@ -1471,15 +1473,15 @@ public final class DynamicMinimapRenderer {
     }
 
     /** Logo-style bevel and emissive trim; fixed bezel, independently moving compass. */
-    private static void drawApertureCircleFrame(Graphics2D graphics, int size, MinimapColours colours) {
+    private static void drawApertureCircleFrame(Graphics2D graphics, int size, DynamicMinimapColours colours) {
         drawTexturedBezel(graphics, size, true, colours);
     }
 
-    private static void drawApertureSquareFrame(Graphics2D graphics, int size, MinimapColours colours) {
+    private static void drawApertureSquareFrame(Graphics2D graphics, int size, DynamicMinimapColours colours) {
         drawTexturedBezel(graphics, size, false, colours);
     }
 
-    private static void drawTexturedBezel(Graphics2D g, int size, boolean circle, MinimapColours colours) {
+    private static void drawTexturedBezel(Graphics2D g, int size, boolean circle, DynamicMinimapColours colours) {
         Shape rim = circle ? new Ellipse2D.Double(11, 11, size - 22, size - 22)
                 : new RoundRectangle2D.Double(11, 11, size - 22, size - 22, 15, 15);
         g.setStroke(new BasicStroke(18, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
@@ -1495,7 +1497,7 @@ public final class DynamicMinimapRenderer {
         }
     }
 
-    private static void drawTexturedCompass(Graphics2D g, int size, boolean circle, double angle, MinimapColours colours) {
+    private static void drawTexturedCompass(Graphics2D g, int size, boolean circle, double angle, DynamicMinimapColours colours) {
         double center = size / 2.0D;
         // Minor divisions sit on the inner rim; major bars project beyond the outer hairline.
         int divisions = circle ? 32 : 24;
@@ -1557,7 +1559,7 @@ public final class DynamicMinimapRenderer {
         graphics.drawLine(x1, y1, x2, y2);
     }
 
-    private static void drawCardinal(Graphics2D graphics, String label, int centerX, int centerY, MinimapColours colours) {
+    private static void drawCardinal(Graphics2D graphics, String label, int centerX, int centerY, DynamicMinimapColours colours) {
         FontMetrics metrics = graphics.getFontMetrics();
         int left = centerX - metrics.stringWidth(label) / 2;
         int baseline = centerY + metrics.getAscent() / 2 - 1;
@@ -1591,7 +1593,7 @@ public final class DynamicMinimapRenderer {
             if (reduced != null) encoded = reduced;
         }
         byte[] png = DapperMapUtil.encodePng(encoded, Math.min(32768, image.getWidth() * image.getHeight()));
-        if (png != null) dev.scyphoz.dappermap.service.ServerLoad.recordTerrainImage(png.length, kind);
+        if (png != null) DapperMapServerLoad.recordTerrainImage(png.length, kind);
         return png;
     }
 

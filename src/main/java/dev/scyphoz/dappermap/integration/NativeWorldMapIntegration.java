@@ -9,7 +9,7 @@ import com.hypixel.hytale.server.core.universe.PlayerRef;
 import com.hypixel.hytale.server.core.universe.world.World;
 import com.hypixel.hytale.server.core.universe.world.worldmap.markers.MarkersCollector;
 import dev.scyphoz.dappermap.dynamic.DynamicMinimapMarker;
-import dev.scyphoz.dappermap.dynamic.MinimapColours;
+import dev.scyphoz.dappermap.dynamic.DynamicMinimapColours;
 import dev.scyphoz.dappermap.dynamic.DynamicAssetPublisher;
 import dev.scyphoz.dappermap.util.DapperMapUtil;
 import java.util.ArrayList;
@@ -66,7 +66,7 @@ public final class NativeWorldMapIntegration {
      * @param includeDeaths       Death Marker switch: Hytale's (or BetterMap's) death markers,
      *                            independent of includeNative and tinted with the Death colour.
      */
-    public static List<DynamicMinimapMarker> getMarkers(World world, Player player, MinimapColours colours,
+    public static List<DynamicMinimapMarker> getMarkers(World world, Player player, DynamicMinimapColours colours,
                                                         boolean includeNative, boolean betterMapWaypoints,
                                                         boolean includeDeaths) {
         List<DynamicMinimapMarker> result = new ArrayList<>();
@@ -75,7 +75,7 @@ public final class NativeWorldMapIntegration {
             String image = markerImage(marker.markerImage);
             if (image == null) {
                 result.add(DynamicMinimapMarker.dot(
-                        mx, mz, colours.awt(MinimapColours.Key.NEUTRAL, 255), 9));
+                        mx, mz, colours.awt(DynamicMinimapColours.Key.NEUTRAL, 255), 9));
                 return;
             }
             result.add(DynamicMinimapMarker.nativeWorldMap(mx, mz, image, markerTint(marker), MARKER_SIZE));
@@ -86,7 +86,7 @@ public final class NativeWorldMapIntegration {
             result.add(DynamicMinimapMarker.betterMap(marker.transform.position.x,
                     marker.transform.position.z, image, markerTint(marker), BETTERMAP_MARKER_SIZE));
         });
-        java.awt.Color deathTint = colours.awt(MinimapColours.Key.DEATH, 255);
+        java.awt.Color deathTint = colours.awt(DynamicMinimapColours.Key.DEATH, 255);
         MarkersCollector deathCollector = collector(marker -> {
             String image = markerImage(marker.markerImage);
             if (image == null) return;

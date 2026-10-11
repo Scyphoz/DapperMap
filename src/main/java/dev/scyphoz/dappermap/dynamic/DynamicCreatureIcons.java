@@ -52,7 +52,7 @@ import static dev.scyphoz.dappermap.util.DapperMapUtil.jsonString;
  * The world thread only derives a short key per creature (cached per entity until its model
  * changes); all asset loading and drawing happens on the render pool.
  */
-public final class CreatureIcons {
+public final class DynamicCreatureIcons {
     /** Logical HUD size of a creature icon on the default 220 px map (scaled with map size). */
     public static final int MARKER_SIZE = 20;
     /**
@@ -111,7 +111,7 @@ public final class CreatureIcons {
         });
     }
 
-    private CreatureIcons() { }
+    private DynamicCreatureIcons() { }
 
     /**
      * Per-viewer cache of creature icon keys. A key is re-derived only when the entity's

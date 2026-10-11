@@ -3,7 +3,7 @@ package dev.scyphoz.dappermap.service;
 import com.hypixel.hytale.server.core.entity.entities.Player;
 import com.hypixel.hytale.server.core.universe.PlayerRef;
 import dev.scyphoz.dappermap.DapperMap;
-import dev.scyphoz.dappermap.config.MinimapConfig;
+import dev.scyphoz.dappermap.config.DapperMapConfig;
 import dev.scyphoz.dappermap.dynamic.DynamicAssetPublisher;
 import dev.scyphoz.dappermap.dynamic.DynamicMinimapSession;
 import dev.scyphoz.dappermap.dynamic.DynamicMinimapSetting;
@@ -15,7 +15,7 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 /** Owns active player sessions and mediates inheritance/persistence of player and admin settings. */
-public class MinimapSessionManager {
+public class DapperMapSessionManager {
 
     private final Map<UUID, DynamicMinimapSetting> settingsByPlayer = new ConcurrentHashMap<>();
     private final Map<UUID, DynamicMinimapSession> sessionsByPlayer = new ConcurrentHashMap<>();
@@ -36,7 +36,7 @@ public class MinimapSessionManager {
         this.adminSettingsStore = new DynamicMinimapSettingsStore(dataDirectory.resolve("admin-defaults"));
     }
 
-    public void showIfEnabledByDefault(Player player, PlayerRef playerRef, MinimapConfig config) {
+    public void showIfEnabledByDefault(Player player, PlayerRef playerRef, DapperMapConfig config) {
         DynamicMinimapSetting settings = this.getSettings(playerRef.getUuid(), config);
         if (settings.enabled) {
             // PlayerReadyEvent fires on every world join (and after Universe.resetPlayer). A running
@@ -52,7 +52,7 @@ public class MinimapSessionManager {
 
     }
 
-    public boolean toggle(Player player, PlayerRef playerRef, MinimapConfig config) {
+    public boolean toggle(Player player, PlayerRef playerRef, DapperMapConfig config) {
         DynamicMinimapSetting settings = this.getSettings(playerRef.getUuid(), config);
         settings.enabled = !settings.enabled;
         if (settings.enabled) {
@@ -71,7 +71,7 @@ public class MinimapSessionManager {
      * player has no saved file. Reading settings never creates a file, so a player who has
      * never customised anything keeps inheriting admin defaults on every join.
      */
-    public DynamicMinimapSetting getSettings(UUID playerUuid, MinimapConfig config) {
+    public DynamicMinimapSetting getSettings(UUID playerUuid, DapperMapConfig config) {
         return this.settingsByPlayer.computeIfAbsent(playerUuid, (ignored) -> {
             DynamicMinimapSetting defaults = this.getAdminDefaults(config).copy();
             return this.settingsStore == null ? defaults : this.settingsStore.get(playerUuid, defaults);
@@ -99,7 +99,7 @@ public class MinimapSessionManager {
      * {@link #setAdminDefaults} to change them, so nothing can mutate the cached
      * instance without the change also reaching disk.
      */
-    public DynamicMinimapSetting getAdminDefaults(MinimapConfig config) {
+    public DynamicMinimapSetting getAdminDefaults(DapperMapConfig config) {
         DynamicMinimapSetting modDefaults = DynamicMinimapSetting.fromConfig(config);
         return this.adminSettingsStore == null
                 ? modDefaults
@@ -113,7 +113,7 @@ public class MinimapSessionManager {
         }
     }
 
-    public DynamicMinimapSetting resetAdminDefaults(MinimapConfig config) {
+    public DynamicMinimapSetting resetAdminDefaults(DapperMapConfig config) {
         DynamicMinimapSetting settings = DynamicMinimapSetting.fromConfig(config);
         this.setAdminDefaults(settings);
         return settings;
@@ -143,9 +143,9 @@ public class MinimapSessionManager {
      */
     public static DynamicMinimapSetting liveSettings(DynamicMinimapSetting settings) {
         DynamicMinimapSetting live = settings.copy();
-        MinimapConfig config = DapperMap.getConfig() == null ? null : DapperMap.getConfig().get();
+        DapperMapConfig config = DapperMap.getConfig() == null ? null : DapperMap.getConfig().get();
         if (config != null) config.applyLimits(live);
-        live.updateSpeed = Math.min(3, live.updateSpeed + ServerLoad.sheddingLevel());
+        live.updateSpeed = Math.min(3, live.updateSpeed + DapperMapServerLoad.sheddingLevel());
         live.normalize();
         return live;
     }
@@ -190,7 +190,7 @@ public class MinimapSessionManager {
 
     /** Players with a running minimap whose own settings exceed at least one admin limit. */
     public int limitedPlayerCount() {
-        MinimapConfig config = DapperMap.getConfig() == null ? null : DapperMap.getConfig().get();
+        DapperMapConfig config = DapperMap.getConfig() == null ? null : DapperMap.getConfig().get();
         if (config == null || !config.hasLimits()) return 0;
         int count = 0;
         for (UUID uuid : this.sessionsByPlayer.keySet()) {
@@ -216,7 +216,7 @@ public class MinimapSessionManager {
      * Restores the current server defaults without leaving a player override
      * behind. This keeps future admin-default changes inheritable as expected.
      */
-    public DynamicMinimapSetting resetSettings(PlayerRef playerRef, MinimapConfig config) {
+    public DynamicMinimapSetting resetSettings(PlayerRef playerRef, DapperMapConfig config) {
         DynamicMinimapSetting defaults = this.getAdminDefaults(config).copy();
         this.applySettings(playerRef, defaults);
         UUID uuid = playerRef.getUuid();

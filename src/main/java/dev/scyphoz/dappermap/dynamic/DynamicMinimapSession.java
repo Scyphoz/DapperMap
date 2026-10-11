@@ -3,7 +3,6 @@ package dev.scyphoz.dappermap.dynamic;
 import com.hypixel.hytale.component.Ref;
 import com.hypixel.hytale.component.Store;
 import com.hypixel.hytale.math.vector.Rotation3f;
-import com.hypixel.hytale.server.core.HytaleServer;
 import com.hypixel.hytale.server.core.entity.entities.Player;
 import com.hypixel.hytale.server.core.modules.entity.component.HeadRotation;
 import com.hypixel.hytale.server.core.modules.entity.component.TransformComponent;
@@ -27,6 +26,8 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+
+import dev.scyphoz.dappermap.service.DapperMapServerLoad;
 import org.joml.Vector3d;
 import dev.scyphoz.dappermap.util.DapperMapUtil;
 
@@ -58,7 +59,7 @@ public final class DynamicMinimapSession {
     public static boolean renderAsync(Runnable work) {
         try { RENDER_POOL.execute(timed(work)); return true; }
         catch (java.util.concurrent.RejectedExecutionException rejected) {
-            dev.scyphoz.dappermap.service.ServerLoad.recordRejection(); // Admin stats / load shedding.
+            DapperMapServerLoad.recordRejection(); // Admin stats / load shedding.
             return false;
         }
     }
@@ -68,7 +69,7 @@ public final class DynamicMinimapSession {
         return () -> {
             long start = System.nanoTime();
             try { work.run(); }
-            finally { dev.scyphoz.dappermap.service.ServerLoad.recordRender(System.nanoTime() - start); }
+            finally { DapperMapServerLoad.recordRender(System.nanoTime() - start); }
         };
     }
 
@@ -240,13 +241,13 @@ public final class DynamicMinimapSession {
     private long lastCaveCheckMs = 0L;
     private static final long CAVE_CHECK_MS = 500L;
     private long lastMarkerMs = 0L;
-    private MinimapColours renderedColours;
+    private DynamicMinimapColours renderedColours;
     private List<DynamicMinimapMarker> cachedMarkers = new ArrayList<>();
     private final EdgeTracker edgeTracker = new EdgeTracker();
     /** Creature threat colours for this player's view (see DynamicEntityScanner.ThreatCache). */
     private final DynamicEntityScanner.ThreatCache threatCache = new DynamicEntityScanner.ThreatCache();
     /** Creature icon keys for this player's view (Creature Markers: Icons). */
-    private final CreatureIcons.KeyCache creatureIconKeys = new CreatureIcons.KeyCache();
+    private final DynamicCreatureIcons.KeyCache creatureIconKeys = new DynamicCreatureIcons.KeyCache();
     private final MarkerOrder markerOrder = new MarkerOrder();
     private record MarkerAssetKey(Style style, String source, int rgb) {}
     private final java.util.concurrent.ConcurrentMap<MarkerAssetKey, String> markerAssets = new java.util.concurrent.ConcurrentHashMap<>();
@@ -285,7 +286,7 @@ public final class DynamicMinimapSession {
     private String creatureIcon(DynamicMinimapMarker marker, int attackingRgb) {
         int rgb = marker.color == null ? 0xFFFFFF : marker.color.getRGB() & 0xFFFFFF;
         String path = null;
-        if (this.pulseOn && rgb == attackingRgb) path = this.markerIcon(marker, CreatureIcons.pulseColour(rgb));
+        if (this.pulseOn && rgb == attackingRgb) path = this.markerIcon(marker, DynamicCreatureIcons.pulseColour(rgb));
         if (path == null) path = this.markerIcon(marker, rgb);
         if (path == null) return this.creatureIconFallback.get(marker.assetPath);
         if (this.creatureIconFallback.size() >= 256 && !this.creatureIconFallback.containsKey(marker.assetPath))
@@ -298,7 +299,7 @@ public final class DynamicMinimapSession {
     private String markerIcon(DynamicMinimapMarker marker, int rgb) {
         if (!this.canRenderHud(this.hud)) return null;
         if (marker.style == Style.DOT && marker.color == null) return null;
-        MinimapColours palette = this.settings.colours;
+        DynamicMinimapColours palette = this.settings.colours;
         MarkerAssetKey key = new MarkerAssetKey(marker.style, marker.assetPath, rgb);
         String ready = this.markerAssets.get(key);
         if (ready != null) return ready;
@@ -334,7 +335,7 @@ public final class DynamicMinimapSession {
                     case NATIVE_WORLDMAP -> asset = NativeWorldMapIntegration.prepareIconAsset(
                             marker.assetPath, marker.color, this.slug);
                     // Creature face icons are built once per creature type and shared by all players.
-                    case CREATURE -> asset = CreatureIcons.prepareAsset(marker.assetPath, this.slug, rgb);
+                    case CREATURE -> asset = DynamicCreatureIcons.prepareAsset(marker.assetPath, this.slug, rgb);
                     default -> {
                         byte[] png = DynamicMinimapRenderer.renderDot(rgb, palette);
                         String path = "UI/DapperMap/mk-" + this.slug + "-" + DapperMapUtil.hex6(rgb) + ".png";
@@ -1050,7 +1051,7 @@ public final class DynamicMinimapSession {
             return;
         }
         this.lastHeadingChangeMs = System.currentTimeMillis();
-        MinimapColours colours = this.settings.colours;
+        DynamicMinimapColours colours = this.settings.colours;
         byte[][] arrows = DynamicMinimapRenderer.cachedSelfArrows(colours);
         if (arrows == null) {
             // First use of this colour: build the set off-thread; a later tick applies it.
@@ -1069,7 +1070,7 @@ public final class DynamicMinimapSession {
     /** Sends up to {@code budget} not-yet-delivered locator images for the current colour. */
     private void presendSelfArrows(int budget) {
         if (this.selfArrowsComplete) return;
-        MinimapColours colours = this.settings.colours;
+        DynamicMinimapColours colours = this.settings.colours;
         byte[][] arrows = DynamicMinimapRenderer.cachedSelfArrows(colours);
         if (arrows == null) return;
         for (int bucket = 0; bucket < SELF_BUCKETS && budget > 0; bucket++) {
@@ -1494,7 +1495,7 @@ public final class DynamicMinimapSession {
             this.pulseOn = !this.pulseOn;
             this.lastPulseToggleMs = projectionTime;
         }
-        int attackingRgb = this.settings.colours.rgb(MinimapColours.Key.HOSTILE_ACTIVE);
+        int attackingRgb = this.settings.colours.rgb(DynamicMinimapColours.Key.HOSTILE_ACTIVE);
 
         // The native POI provider returns world-wide markers from a map with no
         // useful display order. Select nearby markers before the fixed HUD slots

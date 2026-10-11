@@ -4,7 +4,7 @@ import java.awt.Color;
 import java.util.Arrays;
 
 /** Immutable per-player RGB palette. Existing opacity and terrain colours are retained. */
-public final class MinimapColours {
+public final class DynamicMinimapColours {
     public enum Key {
         EDGE("edge", "Frame", "Aperture Edge", "The main edge of the DapperMap aperture.", 0x7B6CFF),
         TICKS("ticks", "Frame", "Survey Marks", "The fine marks around the map aperture.", 0x57D8D0),
@@ -35,8 +35,8 @@ public final class MinimapColours {
             return null;
         }
     }
-    private static final MinimapColours DEFAULT = new MinimapColours();
-    public static MinimapColours defaults() { return DEFAULT; }
+    private static final DynamicMinimapColours DEFAULT = new DynamicMinimapColours();
+    public static DynamicMinimapColours defaults() { return DEFAULT; }
 
     private final int[] values;
     private final String[] hexValues;
@@ -44,11 +44,11 @@ public final class MinimapColours {
     private final String frameKey;
     private final String arrowKey;
 
-    public MinimapColours() {
+    public DynamicMinimapColours() {
         this(Arrays.stream(Key.values()).mapToInt(key -> key.defaultRgb).toArray());
     }
 
-    private MinimapColours(int[] values) {
+    private DynamicMinimapColours(int[] values) {
         this.values = values;
         this.hexValues = new String[values.length];
         this.opaqueColours = new Color[values.length];
@@ -67,12 +67,12 @@ public final class MinimapColours {
     public Color awt(Key key, int alpha) {
         return alpha == 255 ? opaqueColours[key.ordinal()] : new Color((alpha << 24) | rgb(key), true);
     }
-    public MinimapColours with(Key key, int rgb) {
+    public DynamicMinimapColours with(Key key, int rgb) {
         if (key == null || rgb < 0 || rgb > 0xffffff) throw new IllegalArgumentException("Invalid RGB colour");
         if (rgb(key) == rgb) return this;
-        int[] next = values.clone(); next[key.ordinal()] = rgb; return new MinimapColours(next);
+        int[] next = values.clone(); next[key.ordinal()] = rgb; return new DynamicMinimapColours(next);
     }
-    public MinimapColours reset(Key key) { return with(key, key.defaultRgb); }
+    public DynamicMinimapColours reset(Key key) { return with(key, key.defaultRgb); }
     public String frameKey() { return frameKey; }
     public String arrowKey() { return arrowKey; }
     /** Accept #RRGGBB, RRGGBB, or three decimal channels separated by spaces/commas. */
@@ -93,6 +93,6 @@ public final class MinimapColours {
         } catch (NumberFormatException e) { throw new IllegalArgumentException("Invalid RGB colour"); }
         return rgb;
     }
-    @Override public boolean equals(Object other) { return other instanceof MinimapColours p && Arrays.equals(values, p.values); }
+    @Override public boolean equals(Object other) { return other instanceof DynamicMinimapColours p && Arrays.equals(values, p.values); }
     @Override public int hashCode() { return Arrays.hashCode(values); }
 }
