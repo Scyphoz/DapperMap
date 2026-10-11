@@ -19,8 +19,8 @@ public final class MinimapColours {
         SELF("self", "Markers", "Your Locator", "The locator marking your position.", 0xF4C76B),
         PLAYERS("players", "Markers", "Other Players", "Nearby player markers.", 0x74A7FF),
         DEATH("death", "Markers", "Death Markers", "Tint for Hytale's death markers (white keeps the original look).", 0xF2F0FF),
-        HOSTILE_ACTIVE("hostile-active", "Markers", "Attacking Creatures", "Hostiles currently targeting you.", 0xFF526B),
-        HOSTILE("hostile", "Markers", "Hostile Creatures", "Nearby hostile creatures.", 0xFF9566),
+        HOSTILE_ACTIVE("hostile-active", "Markers", "Attacking Creatures", "Hostiles currently targeting you.", 0xFF9566),
+        HOSTILE("hostile", "Markers", "Hostile Creatures", "Nearby hostile creatures.", 0xFD3E5A),
         NEUTRAL("neutral", "Markers", "Neutral Creatures", "Neutral or retreating creatures.", 0xE9CA68),
         FRIENDLY("friendly", "Markers", "Friendly Creatures", "Nearby friendly creatures.", 0x69D69A);
         public final String id, group, label, description;
