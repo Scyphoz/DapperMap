@@ -1003,6 +1003,8 @@ public class DapperMapCommand extends AbstractPlayerCommand {
                 // method's javadoc for why setPermissionGroups was dropped here.
                 // Creature options share the existing "markers" node (no new node to grant).
                 this.requirePermission(DapperMapPermissions.player(switch (name.toLowerCase(java.util.Locale.ROOT)) {
+                    // on/off change the same setting as toggle: one node, as on the settings page.
+                    case "on", "off" -> "toggle";
                     case "panel-alignment" -> "panel";
                     case "creature-limit", "creature-markers", "creature-filter" -> "markers";
                     default -> name.toLowerCase(java.util.Locale.ROOT);

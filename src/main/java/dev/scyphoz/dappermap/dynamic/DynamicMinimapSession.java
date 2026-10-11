@@ -148,11 +148,16 @@ public final class DynamicMinimapSession {
                 || this.canRenderHud(this.hud));
     }
 
-    /** Runs a delivery, then asks the heartbeat to dispatch a tick soon so its queued HUD commands are flushed. */
+    /**
+     * Runs a delivery and sends its queued HUD commands immediately (they follow their asset on
+     * the same channel). Waiting for the next tick to flush them added ~45 ms of display latency
+     * and an extra world task per delivery.
+     */
     private void executeDelivery(World world, String kind, Runnable work) {
         executeWorld(world, kind, () -> {
             work.run();
-            this.flushSoon = true;
+            DynamicMinimapHud current = this.hud;
+            if (current != null) current.flushPendingCommands();
         });
     }
 
@@ -197,6 +202,10 @@ public final class DynamicMinimapSession {
             finally { this.staticAssetsQueued.set(false); }
         })) this.staticAssetsQueued.set(false);
     }
+    // Initial overlay pre-render state (world thread reads/writes the plain flags).
+    private final java.util.concurrent.atomic.AtomicBoolean overlayPrepareQueued = new java.util.concurrent.atomic.AtomicBoolean();
+    private boolean overlayPrepareAttempted;
+    private boolean overlayPrepareFellBack;
     private volatile DynamicMinimapHud hud;
     private int builtSize = -1;
     private int builtShape = -1;
@@ -528,7 +537,9 @@ public final class DynamicMinimapSession {
         this.edgeTracker.clear();
         this.worldPending.clear();
         this.invalidateMarkerAssets();
-        DynamicAssetPublisher.clear(this.uuid);
+        // Delivered-image records are kept: the client still holds those images on this
+        // connection, so turning the minimap off and on again re-sends nothing. They are cleared
+        // on disconnect and world join (DapperMapSessionManager) and on teleport (renderTick).
         java.util.Arrays.fill(this.selfArrowDelivered, false);
         this.selfArrowsComplete = false;
     }
@@ -662,24 +673,26 @@ public final class DynamicMinimapSession {
             lastObservedX = x;
             lastObservedZ = z;
             if (teleported) {
+                // Any teleport: the map recentres on the new spot (fresh terrain, edge positions
+                // and marker scan). Renders still in flight for the old spot are discarded.
                 this.edgeTracker.clear();
-                // A teleport can reset the client's dynamic assets without ending
-                // the DapperMap session. Re-send integration icons and force HUD
-                // slot paths to be rebound rather than relying on cached values.
-                this.invalidateMarkerAssets();
-                this.terrainPublications.clear();
                 this.forceTerrainRender();
                 this.lastSignatureMs = 0L;
                 this.deliveredSequence = this.renderSequence.incrementAndGet();
                 this.rotationSequence.incrementAndGet();
-                if (this.hud != null) this.hud.invalidateVisualAssets();
-                DynamicAssetPublisher.clear(this.uuid);
-                // The client may have dropped dynamic assets: resend the locator too.
-                java.util.Arrays.fill(this.selfArrowDelivered, false);
-                this.selfArrowsComplete = false;
-                this.lastSelfBucket = -1;
-                if (this.hud != null) this.hud.invalidateMarkerSlots();
                 if (worldChanged) {
+                    // A world change (or PlayerReady resync) may drop the client's dynamic images:
+                    // re-send marker icons, overlay, frames and locator, and rebind every HUD slot.
+                    // A same-world teleport only sends ClientTeleport (verified in 0.6.8 and 0.7.0),
+                    // so the client keeps its images and none of this is needed (~100-150 KB saved).
+                    this.invalidateMarkerAssets();
+                    this.terrainPublications.clear();
+                    if (this.hud != null) this.hud.invalidateVisualAssets();
+                    DynamicAssetPublisher.clear(this.uuid);
+                    java.util.Arrays.fill(this.selfArrowDelivered, false);
+                    this.selfArrowsComplete = false;
+                    this.lastSelfBucket = -1;
+                    if (this.hud != null) this.hud.invalidateMarkerSlots();
                     // The BetterMap cave-image cache is shared by every player: leave it (it is
                     // bounded, expires, and dead worlds are pruned) instead of flushing it here.
                     this.worldPending.clear();
@@ -1032,6 +1045,29 @@ public final class DynamicMinimapSession {
             // One consistent snapshot builds the HUD and records what it was built with, so a
             // settings refresh landing mid-build is picked up on the next tick, never lost.
             DynamicMinimapSetting snap = this.settings.copy();
+            // Render the frame/bezel overlay on the render pool first, so building the HUD
+            // never rasterises it on the world thread. One failed/rejected attempt falls
+            // through to the inline render in deliverStaticAssets rather than blocking forever.
+            if (!this.overlayPrepareFellBack && !DynamicMinimapHud.initialOverlayReady(snap)) {
+                if (this.overlayPrepareQueued.compareAndSet(false, true)) {
+                    if (this.overlayPrepareAttempted) {
+                        this.overlayPrepareQueued.set(false);
+                        this.overlayPrepareFellBack = true;
+                    } else {
+                        this.overlayPrepareAttempted = true;
+                        if (!renderAsync(() -> {
+                            try { DynamicMinimapHud.prepareInitialOverlay(snap); }
+                            catch (RuntimeException ignored) { }
+                            finally { this.overlayPrepareQueued.set(false); }
+                        })) this.overlayPrepareQueued.set(false);
+                        return;
+                    }
+                } else {
+                    return;
+                }
+            }
+            this.overlayPrepareAttempted = false;
+            this.overlayPrepareFellBack = false;
             this.hud = new DynamicMinimapHud(this.playerRef, snap, work -> executeDelivery(world, "overlay delivery", work),
                     () -> this.running && this.settings.enabled);
             this.builtSize = snap.sizePixels;

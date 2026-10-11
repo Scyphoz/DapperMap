@@ -67,6 +67,12 @@ public class DapperMapSessionManager {
 
     public void showIfEnabledByDefault(Player player, PlayerRef playerRef, DapperMapConfig config) {
         DynamicMinimapSetting settings = this.getSettings(playerRef.getUuid(), config);
+        // A world join may drop the client's dynamic images. A running session handles that
+        // itself (resyncClient); otherwise forget the records so the next start re-sends them.
+        DynamicMinimapSession running = this.sessionsByPlayer.get(playerRef.getUuid());
+        if (running == null || !running.isRunning() || running.playerRef() != playerRef) {
+            DynamicAssetPublisher.clear(playerRef.getUuid());
+        }
         if (settings.enabled) {
             // PlayerReadyEvent fires on every world join (and after Universe.resetPlayer). A running
             // session for the same PlayerRef follows the player across worlds itself, so rebuild its

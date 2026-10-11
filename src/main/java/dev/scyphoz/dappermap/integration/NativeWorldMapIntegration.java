@@ -111,6 +111,13 @@ public final class NativeWorldMapIntegration {
                     : waypoints && betterMapWaypoints ? betterMapCollector
                     : includeNative ? nativeCollector : null;
             if (target == null) return;
+            // Hytale 0.7.0's spawn provider blocks (join, up to 10 s) on a lookup that can need the
+            // world thread itself: draw the spawn marker from a non-blocking lookup instead.
+            if (SPAWN_ASYNC != null && target == nativeCollector
+                    && provider instanceof com.hypixel.hytale.server.core.universe.world.worldmap.markers.providers.SpawnMarkerProvider) {
+                addSpawnMarker(world, player, result);
+                return;
+            }
             try {
                 provider.update(world, player, target);
             } catch (RuntimeException | LinkageError ignored) {
@@ -118,6 +125,75 @@ public final class NativeWorldMapIntegration {
             }
         });
         return result;
+    }
+
+    // ---------------------------------------------------------------------------------
+    // Spawn marker without blocking the world thread (Hytale 0.7.0+)
+    // ---------------------------------------------------------------------------------
+
+    /**
+     * ISpawnProvider.getSpawnPointAsync(World, UUID), added in 0.7.0 (null on 0.6.x, where the
+     * spawn provider is called normally: its lookup there is synchronous and doesn't block).
+     */
+    private static final java.lang.reflect.Method SPAWN_ASYNC = spawnAsyncMethod();
+    /** How often a player's spawn point is looked up again (it rarely changes). */
+    private static final long SPAWN_REFRESH_MS = 30_000L;
+    /** Per player: the world, the lookup in flight, when it started, and the last known x/z. */
+    private record SpawnLookup(World world, java.util.concurrent.CompletableFuture<?> future,
+                               long startedMs, double[] lastXZ) { }
+    private static final Map<java.util.UUID, SpawnLookup> SPAWN_LOOKUPS = new ConcurrentHashMap<>();
+
+    private static java.lang.reflect.Method spawnAsyncMethod() {
+        try {
+            return com.hypixel.hytale.server.core.universe.world.spawn.ISpawnProvider.class
+                    .getMethod("getSpawnPointAsync", World.class, java.util.UUID.class);
+        } catch (NoSuchMethodException | RuntimeException absent) {
+            return null;
+        }
+    }
+
+    /**
+     * Adds the world's spawn marker for this player, as Hytale's provider would, from a lookup
+     * that is started here and only read once it has finished (never joined). The last known
+     * position stays drawn while a refresh is in flight. World thread only.
+     */
+    private static void addSpawnMarker(World world, Player player, List<DynamicMinimapMarker> result) {
+        try {
+            if (!world.getGameplayConfig().getWorldMapConfig().isDisplaySpawn()) return;
+            java.util.UUID uuid = player.getUuid();
+            if (uuid == null) return;
+            long now = System.currentTimeMillis();
+            SpawnLookup lookup = SPAWN_LOOKUPS.get(uuid);
+            if (lookup != null && lookup.world() != world) lookup = null; // Another world: start afresh.
+            double[] lastXZ = lookup == null ? null : lookup.lastXZ();
+            if (lookup != null && lookup.future().isDone()) {
+                // A finished lookup: remember its position (a failed one keeps the last known).
+                if (!lookup.future().isCompletedExceptionally()
+                        && lookup.future().getNow(null) instanceof com.hypixel.hytale.math.vector.Transform spawn
+                        && spawn.getPosition() != null) {
+                    lastXZ = new double[]{spawn.getPosition().x(), spawn.getPosition().z()};
+                }
+            }
+            if (lookup == null || (lookup.future().isDone() && now - lookup.startedMs() >= SPAWN_REFRESH_MS)) {
+                var spawnProvider = world.getWorldConfig().getSpawnProvider();
+                Object future = spawnProvider == null ? null : SPAWN_ASYNC.invoke(spawnProvider, world, uuid);
+                if (future instanceof java.util.concurrent.CompletableFuture<?> started) {
+                    if (SPAWN_LOOKUPS.size() >= 512 && !SPAWN_LOOKUPS.containsKey(uuid)) SPAWN_LOOKUPS.clear();
+                    SPAWN_LOOKUPS.put(uuid, new SpawnLookup(world, started, now, lastXZ));
+                }
+            } else if (lastXZ != lookup.lastXZ()) {
+                SPAWN_LOOKUPS.put(uuid, new SpawnLookup(world, lookup.future(), lookup.startedMs(), lastXZ));
+            }
+            if (lastXZ != null) result.add(DynamicMinimapMarker.nativeWorldMap(lastXZ[0], lastXZ[1],
+                    "Spawn.png", java.awt.Color.WHITE, MARKER_SIZE));
+        } catch (ReflectiveOperationException | RuntimeException | LinkageError ignored) {
+            // No spawn marker this scan; the other providers are unaffected.
+        }
+    }
+
+    /** Drops spawn lookups for a removed world (and the world reference they hold). */
+    public static void clearWorld(World world) {
+        SPAWN_LOOKUPS.values().removeIf(lookup -> lookup.world() == world);
     }
 
     /** True when Hytale 0.7.0+ flags the marker as Major. Always false on 0.6.x. */

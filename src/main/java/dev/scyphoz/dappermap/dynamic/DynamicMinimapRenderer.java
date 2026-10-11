@@ -310,6 +310,16 @@ public final class DynamicMinimapRenderer {
 
     /** The frame artwork at texture resolution (bezel fixed, compass markings at mapAngle's bucket). */
     private static BufferedImage renderFrameImage(DynamicMinimapSetting settings, double mapAngle) {
+        return renderFrameImage(settings, mapAngle, true, true);
+    }
+
+    /**
+     * The frame artwork with either layer optional. The live HUD sends the fixed bezel once and
+     * the compass ring per heading (about 9 KB instead of 33 KB per player-up heading); the
+     * settings preview draws both together.
+     */
+    private static BufferedImage renderFrameImage(DynamicMinimapSetting settings, double mapAngle,
+                                                  boolean bezel, boolean compass) {
         DynamicMinimapColours colours = settings.colours;
         int bucket = rotationBucket(mapAngle);
         int logicalSize = STATIC_ASSET_LOGICAL_SIZE;
@@ -324,13 +334,15 @@ public final class DynamicMinimapRenderer {
         );
         graphics.scale(scale, scale);
 
-        if (settings.isCircle()) {
-            drawApertureCircleFrame(graphics, logicalSize, colours);
-        } else {
-            drawApertureSquareFrame(graphics, logicalSize, colours);
+        if (bezel) {
+            if (settings.isCircle()) {
+                drawApertureCircleFrame(graphics, logicalSize, colours);
+            } else {
+                drawApertureSquareFrame(graphics, logicalSize, colours);
+            }
         }
 
-        drawTexturedCompass(graphics, logicalSize, settings.isCircle(), bucketAngle(bucket), colours);
+        if (compass) drawTexturedCompass(graphics, logicalSize, settings.isCircle(), bucketAngle(bucket), colours);
         graphics.dispose();
         return image;
     }
@@ -410,11 +422,27 @@ public final class DynamicMinimapRenderer {
     }
 
 
-    public record NativeHudParts(byte[] frame, byte[] readout) {}
+    /** HUD layers: compass ring (per heading), info panel, and the fixed bezel under the ring. */
+    public record NativeHudParts(byte[] frame, byte[] readout, byte[] bezel) {}
 
     /** Native value labels make the panel independent of changing telemetry. */
     public static NativeHudParts renderNativeHudParts(DynamicMinimapSetting settings, int mapSize,
                                                       int sidePanelWidth, int panelHeight, int gap, double angle) {
+        return nativeHudParts(settings, mapSize, sidePanelWidth, panelHeight, gap, angle, false);
+    }
+
+    /**
+     * The HUD parts only if every one is already cached, else null; never renders. Lets the
+     * world thread publish a layout change at once when possible and hand a cache miss
+     * (25-80 ms of drawing) to the render pool instead of stalling the world tick.
+     */
+    public static NativeHudParts cachedNativeHudParts(DynamicMinimapSetting settings, int mapSize,
+                                                      int sidePanelWidth, int panelHeight, int gap, double angle) {
+        return nativeHudParts(settings, mapSize, sidePanelWidth, panelHeight, gap, angle, true);
+    }
+
+    private static NativeHudParts nativeHudParts(DynamicMinimapSetting settings, int mapSize, int sidePanelWidth,
+                                                 int panelHeight, int gap, double angle, boolean cachedOnly) {
         boolean side = settings.infoPanelPosition == DynamicMinimapSetting.INFO_LEFT
                 || settings.infoPanelPosition == DynamicMinimapSetting.INFO_RIGHT;
         int width = !settings.infoPanelEnabled ? mapSize : side ? mapSize + gap + sidePanelWidth : Math.max(mapSize, sidePanelWidth);
@@ -425,27 +453,41 @@ public final class DynamicMinimapRenderer {
                 settings.shape, settings.infoPanelPosition, settings.infoPanelTextAlignment, flags, settings.colours), -2, "native");
         byte[] panel = OVERLAY_LAYERS.get(key);
         if (panel == null) {
+            if (cachedOnly) return null;
             BufferedImage image = renderHudOverlayImage(settings, mapSize, sidePanelWidth, panelHeight, gap,
                     0, "", "", "", "", false);
             if (image == null) return null;
             panel = toPng(image);
             OVERLAY_LAYERS.put(key, panel);
         }
-        byte[] frame = renderNativeHudFrame(settings, mapSize, angle);
-        if (panel == null || frame == null) return null;
-        return new NativeHudParts(frame, panel);
+        byte[] frame = frameLayerPng(settings, mapSize, angle, false, cachedOnly);
+        byte[] bezel = frameLayerPng(settings, mapSize, 0.0D, true, cachedOnly);
+        if (panel == null || frame == null || bezel == null) return null;
+        return new NativeHudParts(frame, panel, bezel);
+    }
+
+    /** The compass ring for one heading (no bezel), cropped to the map. Cached per heading. */
+    public static byte[] renderNativeHudFrame(DynamicMinimapSetting settings, int size, double angle) {
+        return frameLayerPng(settings, size, angle, false, false);
+    }
+
+    /** The fixed bezel (no compass ring), cropped to the map. One per shape/size/resolution/colours. */
+    public static byte[] renderNativeHudBezel(DynamicMinimapSetting settings, int size) {
+        return frameLayerPng(settings, size, 0.0D, true, false);
     }
 
     /** Crop to the map and retain the previous logical-size frame pixels. */
-    public static byte[] renderNativeHudFrame(DynamicMinimapSetting settings, int size, double angle) {
+    private static byte[] frameLayerPng(DynamicMinimapSetting settings, int size, double angle, boolean bezel,
+                                        boolean cachedOnly) {
+        // Heading -1 marks the bezel, which is the same at every heading.
         var key = new FrameLayerKey(size, size, size, 0, 0, settings.textureResolution,
-                settings.shape, settings.infoPanelEnabled, rotationBucket(angle), settings.colours.frameKey());
+                settings.shape, settings.infoPanelEnabled, bezel ? -1 : rotationBucket(angle), settings.colours.frameKey());
         byte[] cached = OVERLAY_LAYERS.get(key);
-        if (cached != null) return cached;
+        if (cached != null || cachedOnly) return cached;
         try {
             // Draw from the frame image directly: encoding it as a PNG at texture resolution and
             // decoding it again (identical pixels) was the most expensive part of a new heading.
-            BufferedImage decoded = renderFrameImage(settings, angle);
+            BufferedImage decoded = renderFrameImage(settings, angle, bezel, !bezel);
             BufferedImage image = new BufferedImage(size, size, BufferedImage.TYPE_INT_ARGB);
             Graphics2D graphics = image.createGraphics();
             if (!settings.infoPanelEnabled)

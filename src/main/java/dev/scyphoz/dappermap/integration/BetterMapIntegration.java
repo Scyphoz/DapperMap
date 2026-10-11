@@ -27,18 +27,16 @@ import java.util.function.BiFunction;
 /**
  * Optional BetterMap compatibility layer.
  *
- * DapperMap deliberately does not link against BetterMap at compile time. The
- * marker accessor is resolved reflectively through BetterMap's own plugin class
- * loader, keeping DapperMap usable as a standalone mod.
+ * DapperMap deliberately does not link against BetterMap at compile time. Cave mode and
+ * BetterMap's icons are reached reflectively through its own plugin class loader, and its
+ * waypoints arrive through its world-map provider, keeping DapperMap usable as a standalone mod.
  */
 public final class BetterMapIntegration {
     private static final PluginIdentifier BETTERMAP_ID =
             new PluginIdentifier("dev.ninesliced", "BetterMap");
-    private static final String WAYPOINT_MANAGER = "dev.ninesliced.managers.WaypointManager";
     private static final String ICON_RESOURCE_PREFIX = "Common/UI/Custom/Common/";
 
     private static volatile ClassLoader resolvedLoader;
-    private static volatile Method getUserMarkers;
     private static final Map<String, byte[]> ICON_BYTES = new ConcurrentHashMap<>();
 
     private BetterMapIntegration() {
@@ -50,7 +48,7 @@ public final class BetterMapIntegration {
     private static volatile long availabilityCheckedMs; // 0: the first call always looks BetterMap up.
 
     /**
-     * Returns true only when an enabled BetterMap instance and its waypoint API are available.
+     * Returns true only when an enabled BetterMap instance is installed.
      * Called on every marker scan and cave check for every player, so the answer is reused for
      * up to a second: {@code PluginManager.getPlugin} takes a server-wide read lock on each call.
      */
@@ -100,39 +98,28 @@ public final class BetterMapIntegration {
         }
     }
 
-    private static Method resolve() {
+    /**
+     * BetterMap's class loader when an enabled BetterMap is installed, else null. Only the plugin
+     * itself is required: DapperMap reads waypoints through BetterMap's world-map provider and
+     * resolves the cave-mode methods separately, so a change to an unrelated BetterMap class
+     * (previously WaypointManager.getUserMarkers, never called) can no longer switch the whole
+     * integration off.
+     */
+    private static ClassLoader resolve() {
         try {
             PluginManager pluginManager = PluginManager.get();
-            if (pluginManager == null) {
-                clearResolved();
-                return null;
-            }
-
-            PluginBase plugin = pluginManager.getPlugin(BETTERMAP_ID);
+            PluginBase plugin = pluginManager == null ? null : pluginManager.getPlugin(BETTERMAP_ID);
             if (plugin == null || !plugin.isEnabled()) {
                 clearResolved();
                 return null;
             }
-
             ClassLoader loader = plugin.getClass().getClassLoader();
-            Method cached = getUserMarkers;
-            if (cached != null && loader == resolvedLoader) {
-                return cached;
-            }
-
-            synchronized (BetterMapIntegration.class) {
-                cached = getUserMarkers;
-                if (cached != null && loader == resolvedLoader) {
-                    return cached;
-                }
-
-                Class<?> manager = Class.forName(WAYPOINT_MANAGER, false, loader);
-                Method resolved = manager.getMethod("getUserMarkers", Player.class);
+            if (loader != resolvedLoader) {
+                ICON_BYTES.clear(); // A reloaded BetterMap may ship different icons.
                 resolvedLoader = loader;
-                getUserMarkers = resolved;
-                return resolved;
             }
-        } catch (ClassNotFoundException | NoSuchMethodException | RuntimeException | LinkageError ignored) {
+            return loader;
+        } catch (RuntimeException | LinkageError ignored) {
             clearResolved();
             return null;
         }
@@ -143,7 +130,6 @@ public final class BetterMapIntegration {
             ICON_BYTES.clear();
         }
         resolvedLoader = null;
-        getUserMarkers = null;
     }
 
     /**

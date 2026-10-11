@@ -343,6 +343,17 @@ public final class DapperMapUtil {
      * not loaded in time. Asset blobs are only weakly cached and may reload asynchronously, so
      * this waits up to {@code timeoutMs}: render pool only, never on a world thread.
      */
+    /** Content hash of a common asset (kept by the registry; nothing is read), or null. */
+    public static String commonAssetHash(String name) {
+        if (name == null) return null;
+        try {
+            CommonAsset asset = CommonAssetRegistry.getByName(name);
+            return asset == null ? null : asset.getHash();
+        } catch (RuntimeException ignored) {
+            return null;
+        }
+    }
+
     public static byte[] commonAssetBytes(String name, long timeoutMs) {
         try {
             CommonAsset asset = CommonAssetRegistry.getByName(name);

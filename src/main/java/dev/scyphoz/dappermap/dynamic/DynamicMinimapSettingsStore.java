@@ -31,6 +31,9 @@ public final class DynamicMinimapSettingsStore {
             "hostile", 0xFF9566,
             "hostile-active", 0xFF526B);
 
+    /** Creature height range default before 3.1.0 (now 16), skipped in legacy files like the colours above. */
+    private static final int RETIRED_VERTICAL_RANGE_DEFAULT = 32;
+
     private final Path dataDir;
     private final ConcurrentHashMap<UUID, DynamicMinimapSetting> cache = new ConcurrentHashMap<>();
     /**
@@ -103,7 +106,9 @@ public final class DynamicMinimapSettingsStore {
             this.cache.remove(uuid);
             this.bases.remove(uuid);
             this.hasFile.remove(uuid);
-            this.lastWritten.remove(uuid);
+            // Keep the file's known text while the disconnect save is still queued, so an
+            // unchanged save skips the disk; the writer drops it afterwards (flushOne).
+            if (!this.pendingWrites.containsKey(uuid)) this.lastWritten.remove(uuid);
         }
     }
 
@@ -144,7 +149,9 @@ public final class DynamicMinimapSettingsStore {
     }
 
     private void flushOne(UUID uuid) {
-        Pending pending = this.pendingWrites.remove(uuid);
+        // The entry stays queued until its file is written, so a rejoin in between (load())
+        // reads these values instead of the old file.
+        Pending pending = this.pendingWrites.get(uuid);
         if (pending == null) return;
         try {
             synchronized (this.fileLock) {
@@ -156,6 +163,17 @@ public final class DynamicMinimapSettingsStore {
             }
         } catch (IOException | RuntimeException ignored) {
             // A failed write keeps the in-memory settings; the next change writes again.
+        }
+        if (this.pendingWrites.remove(uuid, pending)) {
+            // Player gone (evicted) and nothing newer queued: the file's text is no longer needed.
+            if (!this.cache.containsKey(uuid)) this.lastWritten.remove(uuid);
+        } else {
+            // A newer change arrived during this write (it scheduled no job of its own): write it too.
+            try {
+                this.writer.execute(() -> this.flushOne(uuid));
+            } catch (java.util.concurrent.RejectedExecutionException shutDown) {
+                this.flushOne(uuid);
+            }
         }
     }
 
@@ -261,6 +279,19 @@ public final class DynamicMinimapSettingsStore {
         DynamicMinimapSetting base = defaults.copy();
         base.normalize();
         this.bases.put(uuid, base);
+        // A quick rejoin can arrive before the disconnect save is written: use the queued values.
+        Pending pending = this.pendingWrites.get(uuid);
+        if (pending != null) {
+            boolean deleted = pending == DELETE;
+            this.hasFile.put(uuid, !deleted);
+            if (!deleted) {
+                settings.copyFrom(pending.settings());
+                // Diff later saves against the same inherited values that queued save used.
+                if (pending.base() != null) this.bases.put(uuid, pending.base());
+            }
+            settings.normalize();
+            return settings;
+        }
         Path file = this.file(uuid);
         boolean exists = Files.exists(file);
         this.hasFile.put(uuid, exists);
@@ -300,7 +331,9 @@ public final class DynamicMinimapSettingsStore {
                 // Files without this key (pre-v12) take the inherited default (icons, unless an admin changed it).
                 if ((bool = extractBool(json, "creatureIcons")) != null) settings.creatureIcons = bool;
                 if ((bool = extractBool(json, "hostileCreaturesOnly")) != null) settings.hostileCreaturesOnly = bool;
-                if ((number = extractInt(json, "mobVerticalRange")) != null) settings.mobVerticalRange = number;
+                // Legacy files hold the old 32-block default the player never chose: 16 applies instead.
+                if ((number = extractInt(json, "mobVerticalRange")) != null
+                        && !(legacy && number == RETIRED_VERTICAL_RANGE_DEFAULT)) settings.mobVerticalRange = number;
                 // Very old files only have the four-corner "position": convert it to X/Y, unless
                 // the file also has the newer X/Y keys (which then take precedence below).
                 Integer position = extractInt(json, "position");

@@ -208,7 +208,7 @@ public final class DapperMapSettingsPage
             case INTERFACE -> "Tune the information, compass and HUD presentation.";
             case POSITION -> "Place the minimap on-screen and fine-tune its position.";
             case COLOURS -> "Tune the DapperMap palette and preview every change live.";
-            case SERVER -> "Put limits on resource expensive settings. Changed player settings remain saved but ignored if over limit.";
+            case SERVER -> "Cap the most expensive settings for every player. Saved player choices are kept.";
         };
         builder.set("#PageSectionDescription.Text", sectionDescription);
     }
@@ -412,6 +412,39 @@ public final class DapperMapSettingsPage
         })) this.previewQueued.set(false);
     }
 
+    /**
+     * Brings the draft in line with what the page shows when Apply is pressed: the position
+     * sliders and the colour picker's current values. Uses the same permission and enabled
+     * checks as their own events, so nothing the player couldn't change is touched.
+     */
+    private void reconcileDraft(Ev event) {
+        DynamicMinimapSetting draft = this.draftSettings;
+        if (draft == null || !draft.enabled) return;
+        boolean changed = false;
+        if (this.hasSettingPermission("position")) {
+            if (event.posX != null && clampPercent(event.posX) != draft.hudPositionX) {
+                draft.hudPositionX = clampPercent(event.posX);
+                changed = true;
+            }
+            if (event.posY != null && clampPercent(event.posY) != draft.hudPositionY) {
+                draft.hudPositionY = clampPercent(event.posY);
+                changed = true;
+            }
+        }
+        if (event.colour != null && this.hasSettingPermission("colours")
+                && VISIBLE_COLOUR_KEYS.contains(this.selectedColour)) {
+            int rgb = (Byte.toUnsignedInt(event.colour.red) << 16)
+                    | (Byte.toUnsignedInt(event.colour.green) << 8)
+                    | Byte.toUnsignedInt(event.colour.blue);
+            if (draft.colours.rgb(this.selectedColour) != rgb) {
+                draft.colours = draft.colours.with(this.selectedColour, rgb);
+                changed = true;
+            }
+        }
+        // A corrected value is a change, so a pending "reset to defaults" no longer applies as-is.
+        if (changed) this.draftResetsPlayerOverride = false;
+    }
+
     private static String previewSlotPath(String slug, int slot) {
         return "UI/DapperMap/settings-preview-" + slug + "-" + slot + ".png";
     }
@@ -422,10 +455,9 @@ public final class DapperMapSettingsPage
      * changes are handled), otherwise sends it to the next slot. Returns the path, or null. World thread.
      */
     private String publishPreview(String slug, DynamicAssetPublisher.PreparedAsset prepared) {
-        java.util.UUID uuid = this.playerRef.getUuid();
         for (int slot = 0; slot < PREVIEW_SLOTS; slot++) {
             String candidate = previewSlotPath(slug, slot);
-            if (DynamicAssetPublisher.isDelivered(uuid, candidate, prepared.hash())) return candidate;
+            if (DynamicAssetPublisher.isDelivered(this.playerRef, candidate, prepared.hash())) return candidate;
         }
         var publication = prepared.withPath(previewSlotPath(slug, this.nextPreviewSlot));
         if (!DynamicAssetPublisher.deliver(this.playerRef, publication)) return null;
@@ -507,8 +539,13 @@ public final class DapperMapSettingsPage
         builder.set("#DapperMapApplyButtonLabel.TextSpans",
                 Message.raw("APPLY").color(this.adminMode ? GREEN : new Color(0xF0EDFF)));
         builder.set("#DapperMapApplyButtonSlot[0].TextSpans", Message.raw(""));
+        // Apply also carries the sliders' and colour picker's current values: a ValueChanged event
+        // dropped while a page update awaited acknowledgement is then still saved correctly.
         events.addEventBinding(CustomUIEventBindingType.Activating, "#DapperMapApplyButtonSlot[0]",
-                EventData.of("Action", "apply_settings"), false);
+                EventData.of("Action", "apply_settings")
+                        .append("@PosX", "#PositionFineTuneList[0] #ValueSlider.Value")
+                        .append("@PosY", "#PositionFineTuneList[1] #ValueSlider.Value")
+                        .append("@Colour", "#ColourPicker.Color"), false);
 
         if (!this.adminMode && this.playerRef.hasPermission(ADMIN_PERMISSION)) {
             builder.append("#DapperMapAdminButtonSlot", "Pages/BasicTextButton.ui");
@@ -764,6 +801,7 @@ public final class DapperMapSettingsPage
         if ("apply_settings".equals(action)) {
             if (this.draftSettings == null) return;
             this.closed = true;
+            this.reconcileDraft(event);
             this.draftSettings.normalize();
             if (this.adminMode) {
                 this.sessions.setAdminDefaults(this.draftSettings.copy());
@@ -948,8 +986,11 @@ public final class DapperMapSettingsPage
         UICommandBuilder builder = new UICommandBuilder();
         UIEventBuilder events = new UIEventBuilder();
 
-        if (action.startsWith("colour_")) {
-            this.refreshColourEditor(builder, settings, !"colour_value".equals(action));
+        if ("colour_value".equals(action)) {
+            // The picker already shows the new colour and the target is unchanged: hex only.
+            builder.set("#ColourHex.Text", settings.colours.hex(this.selectedColour));
+        } else if (action.startsWith("colour_")) {
+            this.refreshColourEditor(builder, settings, true);
         } else if (action.startsWith("position_slider_")) {
             this.updatePositionSlider(builder, settings, "position_slider_x".equals(action) ? 0 : 1, previousX, previousY);
         } else if (action.startsWith("position_")) {
@@ -965,7 +1006,11 @@ public final class DapperMapSettingsPage
         }
         this.updatePreview(builder, settings);
 
-        this.sendUpdate(builder, events, false);
+        // Every page update blocks the player's input until the client acknowledges it, so an
+        // empty one (e.g. a dropdown change with no knock-on effects) is not sent at all.
+        if (builder.getCommands().length > 0 || events.getEvents().length > 0) {
+            this.sendUpdate(builder, events, false);
+        }
     }
 
     /** Disabled state of every row on the current tab, matching renderList's rules. */
@@ -1537,6 +1582,8 @@ public final class DapperMapSettingsPage
         private String target = "";
         private int sliderValue = 0;
         private com.hypixel.hytale.protocol.Color colour;
+        /** Position slider values sent with Apply (null when absent). */
+        private Integer posX, posY;
 
         public Ev() {
         }
@@ -1571,6 +1618,8 @@ public final class DapperMapSettingsPage
                     .append(new KeyedCodec<>("@Colour", new ColorCodec(), true), (ev, value) -> ev.colour = value, ev -> ev.colour).add()
                     .append(new KeyedCodec<>("@SliderValue", Codec.INTEGER, true),
                             (ev, value) -> ev.sliderValue = value, ev -> ev.sliderValue).add()
+                    .append(new KeyedCodec<>("@PosX", Codec.INTEGER, true), (ev, value) -> ev.posX = value, ev -> ev.posX).add()
+                    .append(new KeyedCodec<>("@PosY", Codec.INTEGER, true), (ev, value) -> ev.posY = value, ev -> ev.posY).add()
                     .build();
         }
     }

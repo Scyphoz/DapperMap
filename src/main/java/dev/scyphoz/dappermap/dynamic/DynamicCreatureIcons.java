@@ -191,14 +191,16 @@ public final class DynamicCreatureIcons {
                     synchronized (lock) {
                         base = BASES.get(key);
                         if (base == null) {
-                            // Saved from an earlier server run? Skips the 15-60 ms model render.
-                            // The disk cache needs no Source, so it also covers a dropped source.
-                            base = loadCachedBase(key);
+                            if (source == null) return null;
+                            // Saved from an earlier server run with the same model/texture files?
+                            // Skips the 15-60 ms model render. The file name includes the assets'
+                            // content hashes, so an updated asset pack redraws the icon.
+                            String content = contentHash(source);
+                            base = loadCachedBase(key, content);
                             if (base == null) {
-                                if (source == null) return null;
                                 base = renderBase(source);
                                 if (base == null) return null;
-                                storeCachedBase(key, base);
+                                storeCachedBase(key, content, base);
                             }
                             BASES.put(key, base);
                         }
@@ -241,8 +243,11 @@ public final class DynamicCreatureIcons {
     // Disk cache of uncoloured base icons (survives server restarts)
     // ---------------------------------------------------------------------------------
 
-    /** Bump when the icon drawing changes, so icons saved by older versions are replaced. */
-    private static final String CACHE_VERSION = "v1";
+    /**
+     * Bump when the icon drawing changes, so icons saved by older versions are replaced.
+     * v2: names are "v2-<icon key>-<asset content hash>.png" (v1 files are pruned).
+     */
+    private static final String CACHE_VERSION = "v2";
     /** Largest file accepted from the cache (a base icon is ~10-15 KB). */
     private static final int CACHE_FILE_LIMIT = 512 * 1024;
     private static final byte[] PNG_SIGNATURE = {(byte) 0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n'};
@@ -269,20 +274,48 @@ public final class DynamicCreatureIcons {
                 : ", disk cache " + (disk < 0 ? "not yet used" : (disk / 1024) + " KB") + " (" + CACHE_HITS.get() + " loaded from disk)");
     }
 
-    /** File for an icon key; null when the cache is off or the key is not a plain hex string. */
-    private static java.nio.file.Path cacheFile(String key) {
-        java.nio.file.Path dir = cacheDir;
-        if (dir == null || key.isEmpty() || key.length() > 16) return null;
-        for (int i = 0; i < key.length(); i++) {
-            char c = key.charAt(i);
-            if ((c < '0' || c > '9') && (c < 'a' || c > 'f')) return null; // Never build paths from other text.
+    /**
+     * 64-bit FNV-1a of the content hashes of a creature's model, texture and attachment
+     * files (precomputed by the asset registry, so no file is read). Changes whenever an
+     * asset pack update changes any of them. Render pool only.
+     */
+    static String contentHash(Source source) {
+        long hash = 0xcbf29ce484222325L;
+        hash = fnv(hash, DapperMapUtil.commonAssetHash(commonName(source.model())));
+        hash = fnv(hash, DapperMapUtil.commonAssetHash(commonName(source.texture())));
+        for (Attachment part : source.attachments()) {
+            hash = fnv(hash, DapperMapUtil.commonAssetHash(commonName(part.model())));
+            hash = fnv(hash, DapperMapUtil.commonAssetHash(commonName(part.texture())));
         }
-        return dir.resolve(CACHE_VERSION + "-" + key + ".png");
+        return Long.toHexString(hash);
     }
 
-    /** Saved face icon for this creature type, or null. Render pool only. */
-    private static Base loadCachedBase(String key) {
-        java.nio.file.Path file = cacheFile(key);
+    private static long fnv(long hash, String text) {
+        String value = text == null ? "-" : text;
+        for (int i = 0; i < value.length(); i++) hash = (hash ^ value.charAt(i)) * 0x100000001b3L;
+        return (hash ^ '|') * 0x100000001b3L; // Separator: "ab"+"c" never equals "a"+"bc".
+    }
+
+    private static boolean plainHex(String text) {
+        if (text == null || text.isEmpty() || text.length() > 16) return false;
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if ((c < '0' || c > '9') && (c < 'a' || c > 'f')) return false;
+        }
+        return true;
+    }
+
+    /** File for an icon key and content hash; null when the cache is off or either isn't plain hex. */
+    private static java.nio.file.Path cacheFile(String key, String content) {
+        java.nio.file.Path dir = cacheDir;
+        // Never build paths from other text.
+        if (dir == null || !plainHex(key) || !plainHex(content)) return null;
+        return dir.resolve(CACHE_VERSION + "-" + key + "-" + content + ".png");
+    }
+
+    /** Saved face icon for this creature type and asset content, or null. Render pool only. */
+    private static Base loadCachedBase(String key, String content) {
+        java.nio.file.Path file = cacheFile(key, content);
         if (file == null) return null;
         try {
             if (!java.nio.file.Files.isRegularFile(file) || java.nio.file.Files.size(file) > CACHE_FILE_LIMIT) return null;
@@ -302,12 +335,20 @@ public final class DynamicCreatureIcons {
      * Saves a face icon. Initials badges are not saved: they can be the result of a model that
      * failed to load in time, and should get another chance after a restart. Render pool only.
      */
-    private static void storeCachedBase(String key, Base base) {
-        java.nio.file.Path file = cacheFile(key);
+    private static void storeCachedBase(String key, String content, Base base) {
+        java.nio.file.Path file = cacheFile(key, content);
         if (file == null || base == null || !base.sticker() || base.png().length > CACHE_FILE_LIMIT) return;
         try {
             // Atomic where the file system supports it, so a reader never sees half a file.
             DapperMapUtil.writeAtomically(file, base.png());
+            // Drop this creature's icons drawn from older asset versions (rare: only on a store).
+            try (var older = java.nio.file.Files.newDirectoryStream(file.getParent(), CACHE_VERSION + "-" + key + "-*.png")) {
+                for (java.nio.file.Path stale : older) {
+                    if (stale.equals(file)) continue;
+                    long size = java.nio.file.Files.size(stale);
+                    if (java.nio.file.Files.deleteIfExists(stale) && CACHE_BYTES.get() >= 0) CACHE_BYTES.addAndGet(-size);
+                }
+            }
             if (CACHE_BYTES.get() < 0) pruneCache(); // First write this run: measure the folder.
             else if (CACHE_BYTES.addAndGet(base.png().length) > cacheMaxBytes) pruneCache();
         } catch (java.io.IOException | RuntimeException ignored) {
@@ -987,12 +1028,18 @@ public final class DynamicCreatureIcons {
 
     /** Bytes of a Hytale common asset (including mod-pack assets). Bounded wait; render pool only. */
     static byte[] commonBytes(String path) {
+        String name = commonName(path);
+        return name == null ? null : DapperMapUtil.commonAssetBytes(name, LOAD_TIMEOUT_MS);
+    }
+
+    /** Common asset name for a model/texture path, or null for none or an unsafe path. */
+    static String commonName(String path) {
         if (path == null || path.isBlank() || path.contains("..")) return null;
         // Common asset names are relative to the Common folder; tolerate a leading "Common/".
         String name = path.replace('\\', '/');
         while (name.startsWith("/")) name = name.substring(1);
         if (name.startsWith("Common/")) name = name.substring("Common/".length());
-        return DapperMapUtil.commonAssetBytes(name, LOAD_TIMEOUT_MS);
+        return name;
     }
 
     static BufferedImage readImage(String path) {

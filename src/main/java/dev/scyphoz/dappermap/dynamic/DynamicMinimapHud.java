@@ -99,23 +99,44 @@ public final class DynamicMinimapHud extends CustomUIHud {
     private record InitialOverlayKey(int size, int shape, int resolution, boolean panel, int position,
                                      int alignment, boolean coords, boolean compass, boolean clock,
                                      boolean biome, DynamicMinimapColours colours) {}
-    private static final java.util.concurrent.ConcurrentMap<InitialOverlayKey, DynamicMinimapRenderer.NativeHudParts> INITIAL_OVERLAYS
-            = new java.util.concurrent.ConcurrentHashMap<>();
+    /** First overlay per HUD set-up; least recently used dropped beyond 32 (was cleared wholesale at 16). */
+    private static final java.util.Map<InitialOverlayKey, DynamicMinimapRenderer.NativeHudParts> INITIAL_OVERLAYS =
+            java.util.Collections.synchronizedMap(new java.util.LinkedHashMap<>(32, 0.75F, true) {
+                @Override protected boolean removeEldestEntry(java.util.Map.Entry<InitialOverlayKey, DynamicMinimapRenderer.NativeHudParts> eldest) {
+                    return size() > 32;
+                }
+            });
 
-    private static DynamicMinimapRenderer.NativeHudParts initialOverlay(DynamicMinimapSetting settings) {
-        InitialOverlayKey key = new InitialOverlayKey(settings.sizePixels, settings.shape,
+    private static InitialOverlayKey initialOverlayKey(DynamicMinimapSetting settings) {
+        return new InitialOverlayKey(settings.sizePixels, settings.shape,
                 settings.textureResolution, settings.infoPanelEnabled, settings.infoPanelPosition,
                 settings.infoPanelTextAlignment, settings.showCoordinates, settings.showCompass,
                 settings.showClock, settings.showBiome, settings.colours);
+    }
+
+    /** The first overlay for these settings, rendered on a miss. Render pool (or a rare fallback). */
+    private static DynamicMinimapRenderer.NativeHudParts initialOverlay(DynamicMinimapSetting settings) {
+        InitialOverlayKey key = initialOverlayKey(settings);
         var ready = INITIAL_OVERLAYS.get(key);
         if (ready != null) return ready;
         var png = DynamicMinimapRenderer.renderNativeHudParts(settings, settings.sizePixels,
                 READOUT_WIDTH, readoutHeight(settings), readoutGap(settings), 0.0D);
-        if (png != null) {
-            if (INITIAL_OVERLAYS.size() >= 16) INITIAL_OVERLAYS.clear();
-            INITIAL_OVERLAYS.put(key, png);
-        }
+        if (png != null) INITIAL_OVERLAYS.put(key, png);
         return png;
+    }
+
+    /** True when a new HUD with these settings can be shown without drawing on the world thread. */
+    public static boolean initialOverlayReady(DynamicMinimapSetting settings) {
+        DynamicMinimapSetting normalized = settings.copy();
+        normalized.normalize(); // Same key as prepareInitialOverlay and the HUD constructor use.
+        return INITIAL_OVERLAYS.containsKey(initialOverlayKey(normalized));
+    }
+
+    /** Renders the first overlay for these settings into the cache. Render pool only. */
+    public static void prepareInitialOverlay(DynamicMinimapSetting settings) {
+        DynamicMinimapSetting normalized = settings.copy();
+        normalized.normalize();
+        initialOverlay(normalized);
     }
 
     private final PlayerRef ownerRef;
@@ -128,9 +149,13 @@ public final class DynamicMinimapHud extends CustomUIHud {
     private String displayedOverlayPath;
     private String displayedFramePath;
     private String framePath;
+    /** Fixed bezel under the compass ring: sent once per shape/size/resolution/colours. */
+    private String bezelPath;
+    private String displayedBezelPath;
 
 
     private final DynamicAssetPublisher.ImagePublicationCache framePublications = new DynamicAssetPublisher.ImagePublicationCache();
+    private final DynamicAssetPublisher.ImagePublicationCache bezelPublications = new DynamicAssetPublisher.ImagePublicationCache();
     private final DynamicAssetPublisher.ImagePublicationCache overlayPublications = new DynamicAssetPublisher.ImagePublicationCache();
 
     private final HudCommandBatch pendingCommands = new HudCommandBatch();
@@ -185,9 +210,11 @@ public final class DynamicMinimapHud extends CustomUIHud {
         ++this.overlayGeneration;
         this.displayedOverlayPath = null;
         this.displayedFramePath = null;
+        this.displayedBezelPath = null;
         this.terrainShown = false;
         this.overlayPublications.clear();
         this.framePublications.clear();
+        this.bezelPublications.clear();
         this.lastOverlaySubmitMs = 0L;
         this.overlayDirty = true;
     }
@@ -322,7 +349,9 @@ public final class DynamicMinimapHud extends CustomUIHud {
             DynamicAssetPublisher.deliverShared(this.ownerRef, this.blankPath, blank);
         }
 
-        this.publishOverlayAsset(false);
+        // Before the HUD is shown its markup must name a valid overlay, so a (rare) cache miss
+        // is drawn here; the session prepares the initial overlay off-thread beforehand.
+        this.publishOverlayAsset(false, true);
 
         byte[] self = DynamicMinimapRenderer.renderSelfArrow(0.0D, this.settings.colours);
         if (self != null) {
@@ -489,14 +518,14 @@ public final class DynamicMinimapHud extends CustomUIHud {
         this.settings.normalize();
         this.updateStaticAssetPaths();
 
-        // The frame is a normal dynamic AssetImage, so it can be delivered and
-        // swapped without rebuilding the common UI asset registry.
-        this.publishOverlayAsset(false);
-
         if (!this.built) {
             return;
         }
 
+        // The frame is a normal dynamic AssetImage, so it can be delivered and swapped without
+        // rebuilding the common UI asset registry. Published with the layout by
+        // applyPendingLayout(), drawn off the world thread when not cached.
+        this.overlayPublishPending = true;
         this.rebuildPositionLayout();
     }
 
@@ -936,6 +965,12 @@ public final class DynamicMinimapHud extends CustomUIHud {
                 .append("); LayoutMode: Full; ");
 
         out.append(this.buildMapMarkup());
+        // Bezel first, then the compass ring over it (UI elements draw in markup order).
+        out.append("AssetImage #WayfinderMmBezel { Anchor: (Left: ").append(this.mapOriginX())
+                .append(", Top: ").append(this.mapOriginY()).append(", Width: ").append(this.displaySize(this.logicalUiSize))
+                .append(", Height: ").append(this.displaySize(this.logicalUiSize)).append("); AssetPath: \"")
+                .append(this.displayedBezelPath != null ? this.displayedBezelPath : this.bezelPath)
+                .append("\"; Visible: true; } ");
         out.append("AssetImage #WayfinderMmFrame { Anchor: (Left: ").append(this.mapOriginX())
                 .append(", Top: ").append(this.mapOriginY()).append(", Width: ").append(this.displaySize(this.logicalUiSize))
                 .append(", Height: ").append(this.displaySize(this.logicalUiSize)).append("); AssetPath: \"")
@@ -1122,13 +1157,31 @@ public final class DynamicMinimapHud extends CustomUIHud {
                 + this.settings.colours.hex(PANEL).substring(1)
                 + "-v" + (this.overlayRevision & 15) + ".png";
         this.framePath = this.overlayPath.replace("-v", "-frame-v");
+        this.bezelPath = this.overlayPath.replace("-v", "-bezel-v");
     }
 
     private void publishOverlayAsset(boolean updateClient) {
+        this.publishOverlayAsset(updateClient, false);
+    }
+
+    /** An off-thread render of overlay parts that weren't cached is queued or running. */
+    private volatile boolean overlayPrepareQueued;
+    /** The last off-thread overlay render produced nothing: draw inline once rather than loop. */
+    private volatile boolean overlayPrepareFailed;
+    /** Off-thread renders whose result was evicted before use; after 3 the next draw is inline. */
+    private int overlayPrepareMisses;
+
+    /**
+     * Publishes the overlay, compass ring and bezel for the current layout. Returns false when
+     * their images weren't cached: they are then drawn on the render pool and the caller retries
+     * on a later tick (applyPendingLayout keeps the layout change pending until then).
+     * {@code allowInlineRender} draws a miss immediately instead (only before the HUD is shown).
+     */
+    private boolean publishOverlayAsset(boolean updateClient, boolean allowInlineRender) {
         if (updateClient && this.built) {
             this.overlayDirty = true;
             this.queueOverlayRender();
-            return;
+            return true;
         }
 
         // Structural changes need a valid asset before the HUD subtree is rebuilt.
@@ -1139,16 +1192,52 @@ public final class DynamicMinimapHud extends CustomUIHud {
         boolean initial = this.frameAngle == 0.0D
                 && "X: ?  Y: ?  Z: ?".equals(this.coordsText) && "N 0 deg".equals(this.compassText)
                 && "Sun 06:00".equals(this.clockText) && "Biome: unknown".equals(this.biomeText);
-        var overlay = initial ? initialOverlay(this.settings) : DynamicMinimapRenderer.renderNativeHudParts(
-                this.settings, this.logicalUiSize, READOUT_WIDTH,
+        boolean inline = allowInlineRender || this.overlayPrepareFailed || this.overlayPrepareMisses >= 3;
+        var overlay = initial
+                ? (inline ? initialOverlay(this.settings) : INITIAL_OVERLAYS.get(initialOverlayKey(this.settings)))
+                : inline ? DynamicMinimapRenderer.renderNativeHudParts(this.settings, this.logicalUiSize, READOUT_WIDTH,
+                this.readoutHeight(), this.readoutGap(), this.frameAngle)
+                : DynamicMinimapRenderer.cachedNativeHudParts(this.settings, this.logicalUiSize, READOUT_WIDTH,
                 this.readoutHeight(), this.readoutGap(), this.frameAngle);
-        if (overlay == null) return;
+        this.overlayPrepareFailed = false;
+        if (overlay == null) {
+            if (!inline && !this.overlayPrepareQueued) {
+                this.overlayPrepareMisses++; // Counts render rounds, not ticks spent waiting.
+                this.queueOverlayPrepare(initial);
+            }
+            if (inline) this.overlayPrepareMisses = 0;
+            return inline; // An inline failure is not retried (as before); a miss is.
+        }
+        this.overlayPrepareMisses = 0;
         var readout = DynamicAssetPublisher.prepareShared(this.overlayPath, overlay.readout());
         var frame = DynamicAssetPublisher.prepareShared(this.framePath, overlay.frame());
+        var bezel = DynamicAssetPublisher.prepareShared(this.bezelPath, overlay.bezel());
         String readoutPath = publishPart(this.overlayPublications, readout);
         String framePath = publishPart(this.framePublications, frame);
+        // The same bezel content is never re-sent (publishPart matches it by hash).
+        String bezelPath = publishPart(this.bezelPublications, bezel);
         if (readoutPath != null) this.displayedOverlayPath = this.overlayPath = readoutPath;
         if (framePath != null) this.displayedFramePath = this.framePath = framePath;
+        if (bezelPath != null) this.displayedBezelPath = this.bezelPath = bezelPath;
+        return true;
+    }
+
+    /** Draws this layout's overlay parts on the render pool (one job at a time) to fill the caches. */
+    private void queueOverlayPrepare(boolean initial) {
+        if (this.overlayPrepareQueued) return;
+        this.overlayPrepareQueued = true;
+        DynamicMinimapSetting snapshot = this.settings.copy();
+        int mapSize = this.logicalUiSize, panelHeight = this.readoutHeight(), gap = this.readoutGap();
+        double angle = this.frameAngle;
+        if (!DynamicMinimapSession.renderAsync(() -> {
+            try {
+                var parts = initial ? initialOverlay(snapshot)
+                        : DynamicMinimapRenderer.renderNativeHudParts(snapshot, mapSize, READOUT_WIDTH, panelHeight, gap, angle);
+                if (parts == null) this.overlayPrepareFailed = true;
+            } finally {
+                this.overlayPrepareQueued = false; // The next tick's applyPendingLayout publishes it.
+            }
+        })) this.overlayPrepareQueued = false; // Render pool busy: retried on a later tick.
     }
 
     private String publishPart(DynamicAssetPublisher.ImagePublicationCache publications,
@@ -1173,6 +1262,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
         this.updateStaticAssetPaths();
         String path = this.overlayPath;
         String framePath = this.framePath;
+        String bezelPath = this.bezelPath;
         long generation = ++this.overlayGeneration;
         DynamicMinimapSetting snapshot = this.settings.copy();
         int mapSize = this.logicalUiSize;
@@ -1186,6 +1276,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
                         snapshot, mapSize, READOUT_WIDTH, panelHeight, gap, angle);
                 var prepared = image == null ? null : DynamicAssetPublisher.prepareShared(path, image.readout());
                 var preparedFrame = image == null ? null : DynamicAssetPublisher.prepareShared(framePath, image.frame());
+                var preparedBezel = image == null ? null : DynamicAssetPublisher.prepareShared(bezelPath, image.bezel());
                 if (!this.overlayWorkAllowed()) return;
                 this.worldExecute.accept(() -> {
                     this.overlayRenderQueued = false;
@@ -1195,8 +1286,17 @@ public final class DynamicMinimapHud extends CustomUIHud {
                     if (generation == this.overlayGeneration && prepared != null) {
                         String publishedPath = this.publishPart(this.overlayPublications, prepared);
                         String publishedFrame = this.publishPart(this.framePublications, preparedFrame);
+                        String publishedBezel = this.publishPart(this.bezelPublications, preparedBezel);
                         UICommandBuilder builder = new UICommandBuilder();
                         boolean changed = false;
+                        if (publishedBezel != null) {
+                            this.bezelPath = publishedBezel;
+                            if (!publishedBezel.equals(this.displayedBezelPath)) {
+                                builder.set("#WayfinderMmRoot #WayfinderMmBezel.AssetPath", publishedBezel);
+                                changed = true;
+                            }
+                            this.displayedBezelPath = publishedBezel;
+                        }
                         if (publishedPath != null) {
                             this.overlayPath = publishedPath;
                             if (!publishedPath.equals(this.displayedOverlayPath)) {
@@ -1290,8 +1390,10 @@ public final class DynamicMinimapHud extends CustomUIHud {
      */
     public void applyPendingLayout() {
         if (this.overlayPublishPending) {
+            // Not cached yet: it is being drawn off the world thread. Keep the publish and the
+            // layout rebuild pending so they still land together, on a later tick.
+            if (!this.publishOverlayAsset(false, false)) return;
             this.overlayPublishPending = false;
-            this.publishOverlayAsset(false);
         }
         if (this.layoutRebuildPending) {
             this.layoutRebuildPending = false;

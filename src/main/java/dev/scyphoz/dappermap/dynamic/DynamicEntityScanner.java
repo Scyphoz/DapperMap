@@ -512,7 +512,8 @@ public final class DynamicEntityScanner {
                 if (target == null) target = targetFromParents(motion);
                 Intent intent = Intent.OTHER;
                 if (motion instanceof BodyMotionFind && sameEntity(target, player)) intent = Intent.TOWARDS_PLAYER;
-                if (motion instanceof BodyMotionCharge && sameEntity(target, player)) intent = Intent.CHARGE_PLAYER;
+                if (motion instanceof BodyMotionCharge charge && sameEntity(target, player) && chargeEngaged(charge))
+                    intent = Intent.CHARGE_PLAYER;
                 if (motion instanceof BodyMotionMaintainDistance && sameEntity(target, player)) {
                     TransformComponent npcTransform = accessor.getComponent(npcRef, TransformComponent.getComponentType());
                     TransformComponent playerTransform = accessor.getComponent(player, TransformComponent.getComponentType());
@@ -527,6 +528,21 @@ public final class DynamicEntityScanner {
             } catch (RuntimeException | LinkageError ignored) {
                 return new Signals(tree.capability, Intent.OTHER, activeAttackPlayer, "unavailable");
             }
+        }
+
+        /**
+         * A charge counts as an attack while it is lining up, winding up or running at the
+         * player; one that has finished, lost its target or been blocked does not (the NPC then
+         * falls back to its other signals). Matched by name: 0.7.0 adds InStopRange, so the
+         * enum's ordinals differ between server versions. Unknown states keep the old behaviour.
+         */
+        static boolean chargeEngaged(BodyMotionCharge charge) {
+            Enum<?> state = charge.getState();
+            if (state == null) return true;
+            return switch (state.name()) {
+                case "Finished", "LostTarget", "Obstructed", "Knockback" -> false;
+                default -> true;
+            };
         }
 
         static boolean approaching(Steering steering, org.joml.Vector3dc npc, org.joml.Vector3dc player) {

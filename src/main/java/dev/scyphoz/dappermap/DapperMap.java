@@ -53,7 +53,10 @@ public class DapperMap extends JavaPlugin {
         this.getCommandRegistry().registerCommand(new DapperMapCommand("dappermap", "Configure DapperMap", this.sessions));
         this.getEventRegistry().registerGlobal(
                 com.hypixel.hytale.server.core.universe.world.events.RemoveWorldEvent.class,
-                event -> dev.scyphoz.dappermap.integration.BetterMapIntegration.clearWorld(event.getWorld()));
+                event -> {
+                    dev.scyphoz.dappermap.integration.BetterMapIntegration.clearWorld(event.getWorld());
+                    dev.scyphoz.dappermap.integration.NativeWorldMapIntegration.clearWorld(event.getWorld());
+                });
         PlayerReadyListener readyListener = new PlayerReadyListener(this.sessions);
         this.getEventRegistry().registerGlobal(PlayerReadyEvent.class, readyListener::onPlayerReady);
         this.getEventRegistry().registerGlobal(PlayerDisconnectEvent.class, (event) -> this.sessions.onDisconnect(event.getPlayerRef()));

@@ -47,7 +47,7 @@ public final class DynamicMinimapSetting {
     public boolean showDeathMarker = true;
     public boolean showWorldMapMarkers = true;
     public boolean limitMobHeight = true;
-    public int mobVerticalRange = 32;
+    public int mobVerticalRange = 16; // Blocks above/below the player; 16 hides most underground creatures.
 
     /**
      * Legacy four-corner setting retained for migration/backward compatibility.
