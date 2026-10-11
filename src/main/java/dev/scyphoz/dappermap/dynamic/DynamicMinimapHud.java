@@ -272,11 +272,16 @@ public final class DynamicMinimapHud extends CustomUIHud {
             for (int i = 0; i < layer.active; i++) {
                 if (!layer.visible[i] || layer.path[i] == null) continue;
                 byte[] icon = DynamicAssetPublisher.markerBytes(this.uuid, layer.path[i]);
+                if (icon == null) continue;
+                // Creature icons and creature dots (player dots are larger) are marked as creatures:
+                // the preview replaces them with a few colour samples instead of drawing them all.
+                String iconKey = DynamicCreatureIcons.keyFromPath(layer.path[i]);
+                boolean creature = iconKey != null || (layer.path[i].contains("/mk-") && layer.size[i] <= 9);
                 // Edge icons are positioned in viewport space; map dots move with the pan.
-                if (icon != null) markers.add(new DynamicMinimapRenderer.PreviewMarker(
+                markers.add(new DynamicMinimapRenderer.PreviewMarker(
                         icon, (layer.fixed ? 0 : this.panLeft) + layer.left[i],
                         (layer.fixed ? 0 : this.panTop) + layer.top[i],
-                        layer.size[i], layer.path[i].contains("/mk-") && layer.size[i] <= 9));
+                        layer.size[i], creature, iconKey));
             }
         }
         // The preview draws the terrain image into its own box (cropped player-up frames are inset).

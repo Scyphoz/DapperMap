@@ -41,6 +41,13 @@ public final class NativeWorldMapIntegration {
     private static final java.util.regex.Pattern ICON_PATH = java.util.regex.Pattern.compile("[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*\\.png");
     private static final String ICON_PREFIX = "UI/WorldMap/MapMarkers/";
     private static final int MARKER_SIZE = 18;
+    /** Markers Hytale flags as Major (0.7.0+, e.g. objective targets) are drawn a little larger. */
+    private static final int MAJOR_MARKER_SIZE = 24;
+    /**
+     * MapMarker.iconSize, added in Hytale 0.7.0 (null on 0.6.x, where every marker is Default).
+     * Read reflectively so one build runs on both versions; a public field, so no access tricks.
+     */
+    private static final java.lang.reflect.Field ICON_SIZE = markerField("iconSize");
     private static final int BETTERMAP_MARKER_SIZE = 20;
     private static final Map<String, byte[]> ICON_BYTES = new ConcurrentHashMap<>();
     private static final Map<String, byte[]> TINTED_ICON_BYTES = new ConcurrentHashMap<>();
@@ -70,6 +77,9 @@ public final class NativeWorldMapIntegration {
                                                         boolean includeNative, boolean betterMapWaypoints,
                                                         boolean includeDeaths) {
         List<DynamicMinimapMarker> result = new ArrayList<>();
+        // World marker overrides are not applied: WorldMapManager.getMarkerOverridesView() may
+        // only be called on the world map's own thread (it throws on the world thread), and the
+        // overrides map has no other public accessor in 0.6.8 or 0.7.0.
         MarkersCollector nativeCollector = collector(marker -> {
             double mx = marker.transform.position.x, mz = marker.transform.position.z;
             String image = markerImage(marker.markerImage);
@@ -78,7 +88,8 @@ public final class NativeWorldMapIntegration {
                         mx, mz, colours.awt(DynamicMinimapColours.Key.NEUTRAL, 255), 9));
                 return;
             }
-            result.add(DynamicMinimapMarker.nativeWorldMap(mx, mz, image, markerTint(marker), MARKER_SIZE));
+            result.add(DynamicMinimapMarker.nativeWorldMap(mx, mz, image, markerTint(marker),
+                    isMajor(marker) ? MAJOR_MARKER_SIZE : MARKER_SIZE));
         });
         MarkersCollector betterMapCollector = collector(marker -> {
             String image = markerImage(marker.markerImage);
@@ -107,6 +118,26 @@ public final class NativeWorldMapIntegration {
             }
         });
         return result;
+    }
+
+    /** True when Hytale 0.7.0+ flags the marker as Major. Always false on 0.6.x. */
+    private static boolean isMajor(MapMarker marker) {
+        if (ICON_SIZE == null) return false;
+        try {
+            Object size = ICON_SIZE.get(marker);
+            return size instanceof Enum<?> value && "Major".equals(value.name());
+        } catch (IllegalAccessException | RuntimeException unreadable) {
+            return false;
+        }
+    }
+
+    /** A public MapMarker field by name, or null when this server version doesn't have it. */
+    private static java.lang.reflect.Field markerField(String name) {
+        try {
+            return MapMarker.class.getField(name);
+        } catch (NoSuchFieldException | RuntimeException missing) {
+            return null;
+        }
     }
 
     /** View distance is ignored: the minimap edge-tracks distant markers itself. */

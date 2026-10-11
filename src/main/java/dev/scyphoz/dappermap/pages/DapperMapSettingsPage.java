@@ -208,7 +208,7 @@ public final class DapperMapSettingsPage
             case INTERFACE -> "Tune the information, compass and HUD presentation.";
             case POSITION -> "Place the minimap on-screen and fine-tune its position.";
             case COLOURS -> "Tune the DapperMap palette and preview every change live.";
-            case SERVER -> "Cap the most expensive settings for every player. Saved player choices are kept.";
+            case SERVER -> "Put limits on resource expensive settings. Changed player settings remain saved but ignored if over limit.";
         };
         builder.set("#PageSectionDescription.Text", sectionDescription);
     }
@@ -372,9 +372,6 @@ public final class DapperMapSettingsPage
         this.lastPreviewStartMs = System.currentTimeMillis();
         ++this.previewRevision;
         DynamicMinimapSetting draft = settings.copy();
-        // In Icons mode the live creature icons are drawn from the HUD snapshot itself, so the
-        // preview's sample threat-colour dots (shown only for showEntities) are skipped.
-        if (draft.creatureIcons) draft.showEntities = false;
         // Preview what will actually be shown: server limits apply here too (and keep this render cheap).
         this.config.applyLimits(draft);
         DynamicMinimapRenderer.LiveSnapshot snapshot = this.previewSnapshot;

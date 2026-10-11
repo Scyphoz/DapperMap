@@ -535,7 +535,8 @@ public final class DynamicMinimapRenderer {
 
 
     /** The player HUD's terrain, telemetry and visible marker assets frozen when settings open. */
-    public record PreviewMarker(byte[] image, int x, int y, int size, boolean creature) { }
+    /** {@code creature}: a creature icon or dot; {@code iconKey}: its creature type (icons only). */
+    public record PreviewMarker(byte[] image, int x, int y, int size, boolean creature, String iconKey) { }
     public record LiveSnapshot(byte[] terrain, int mapSize, int bufferSize, int panX, int panY,
                                double selfAngle, double frameAngle, String coords,
                                String compass, String clock, String biome,
@@ -592,11 +593,15 @@ public final class DynamicMinimapRenderer {
                         0, 0, terrain.getWidth(), terrain.getHeight(), null);
                 java.util.List<double[]> creatureCandidates = new java.util.ArrayList<>();
                 java.util.List<double[]> occupied = new java.util.ArrayList<>();
+                // Creature types seen around the player (Icons mode): the colour samples use their faces.
+                java.util.LinkedHashSet<String> creatureKeys = new java.util.LinkedHashSet<>();
                 for (PreviewMarker marker : snapshot.markers()) {
                     int x = mapX + (int)Math.round(marker.x() * ratio);
                     int y = mapY + (int)Math.round(marker.y() * ratio);
                     int size = Math.max(1, (int)Math.round(marker.size() * ratio));
                     if (marker.creature()) {
+                        // Live creatures are not drawn; their spots become sample positions.
+                        if (marker.iconKey() != null && creatureKeys.size() < 8) creatureKeys.add(marker.iconKey());
                         double centerX = (marker.x() + marker.size() / 2.0) * ratio;
                         double centerY = (marker.y() + marker.size() / 2.0) * ratio;
                         if (centerX >= 10 && centerX <= mapSize - 10
@@ -609,12 +614,14 @@ public final class DynamicMinimapRenderer {
                                 (marker.y() + marker.size() / 2.0) * ratio});
                     }
                 }
-                // Keep only four spaced creature examples; the rest of the live
-                // creature pool is intentionally absent from this small preview.
+                // Keep only a few spaced creature examples, one per threat colour, so colour edits
+                // are easy to follow; the rest of the live creature pool is left out of the preview.
+                // Icons mode shows real creature faces from around the player (dots if none).
                 if (preview.showEntities) {
-                    DynamicMinimapColours.Key[] kinds = {
-                            HOSTILE_ACTIVE, HOSTILE, NEUTRAL, FRIENDLY
-                    };
+                    // Hostile Only hides neutral and friendly creatures, so the preview does too.
+                    DynamicMinimapColours.Key[] kinds = preview.hostileCreaturesOnly
+                            ? new DynamicMinimapColours.Key[]{HOSTILE_ACTIVE, HOSTILE}
+                            : new DynamicMinimapColours.Key[]{HOSTILE_ACTIVE, HOSTILE, NEUTRAL, FRIENDLY};
                     double[][] positions = {
                             {0.28, 0.32}, {0.68, 0.34}, {0.30, 0.68}, {0.70, 0.68}
                     };
@@ -645,12 +652,19 @@ public final class DynamicMinimapRenderer {
                         if (previewPositionClear(candidate, samples, separation * 0.55)) samples.add(candidate);
                     }
                     int dotSize = Math.max(9, (int)Math.round(10 * mapSize / 220.0));
+                    int iconSize = DynamicCreatureIcons.markerSize(preview);
+                    java.util.List<String> keys = preview.creatureIcons
+                            ? new java.util.ArrayList<>(creatureKeys) : java.util.List.of();
                     for (int i = 0; i < samples.size(); i++) {
-                        byte[] dot = renderDot(preview.colours.awt(kinds[i], 255).getRGB() & 0xFFFFFF,
-                                preview.colours);
-                        drawPreviewAsset(g, dot,
-                                mapX + samples.get(i)[0] - dotSize / 2.0,
-                                mapY + samples.get(i)[1] - dotSize / 2.0, dotSize);
+                        int rgb = preview.colours.awt(kinds[i], 255).getRGB() & 0xFFFFFF;
+                        // A different creature for each sample where possible, edged in that colour.
+                        byte[] image = keys.isEmpty() ? null
+                                : DynamicCreatureIcons.previewIcon(keys.get(i % keys.size()), rgb);
+                        int size = image != null ? iconSize : dotSize;
+                        if (image == null) image = renderDot(rgb, preview.colours);
+                        drawPreviewAsset(g, image,
+                                mapX + samples.get(i)[0] - size / 2.0,
+                                mapY + samples.get(i)[1] - size / 2.0, size);
                     }
                 }
             }

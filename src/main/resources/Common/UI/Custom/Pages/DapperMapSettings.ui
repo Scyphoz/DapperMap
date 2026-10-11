@@ -70,7 +70,7 @@ $C.@PageOverlay {
             Group #DapperMapTabServerActive { Anchor: (Full: 0); Background: PatchStyle(TexturePath: "DapperMapGlassActive.png", Border: 11); Visible: false; }
             Label #DapperMapTabServerLabel { Anchor: (Left: 52, Top: 0, Width: 136, Height: 50); Text: "SERVER LIMITS"; Style: (FontSize: 15, TextColor: #7f89a3, HorizontalAlignment: Start, VerticalAlignment: Center); }
             Group #DapperMapTabServerButtonSlot { Anchor: (Full: 0); LayoutMode: Full; }
-            AssetImage { Anchor: (Left: 24, Top: 15, Width: 20, Height: 20); AssetPath: "UI/Custom/Pages/DapperMapIconDisplay.png"; }
+            AssetImage { Anchor: (Left: 24, Top: 15, Width: 20, Height: 20); AssetPath: "UI/Custom/Pages/DapperMapIconServer.png"; }
           }
           Group { Anchor: (Height: 4); }
         }

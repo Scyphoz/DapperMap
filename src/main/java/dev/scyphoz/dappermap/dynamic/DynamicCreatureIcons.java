@@ -214,6 +214,29 @@ public final class DynamicCreatureIcons {
         return shared.withPath("UI/DapperMap/creature-" + playerSlug + "-" + variant + ".png");
     }
 
+    /** Path prefix of every per-player creature icon ("...creature-<player>-<key>-<RRGGBB>.png"). */
+    private static final String PLAYER_ICON_PREFIX = "UI/DapperMap/creature-";
+
+    /**
+     * The creature type (icon key) of a per-player creature icon path, or null for any other
+     * path. Player slugs, keys and colours never contain '-', so the parts split cleanly.
+     */
+    public static String keyFromPath(String path) {
+        if (path == null || !path.startsWith(PLAYER_ICON_PREFIX) || !path.endsWith(".png")) return null;
+        String[] parts = path.substring(PLAYER_ICON_PREFIX.length(), path.length() - 4).split("-");
+        return parts.length == 3 && !parts[1].isEmpty() ? parts[1] : null;
+    }
+
+    /**
+     * PNG of a creature type's icon edged in {@code rgb}, for the settings preview's colour
+     * samples. Reuses (and fills) the shared colour-variant cache, so a colour shown here is
+     * ready if the live minimap needs it. Null when the icon can't be built. Render pool only.
+     */
+    public static byte[] previewIcon(String key, int rgb) {
+        DynamicAssetPublisher.PreparedAsset asset = prepareAsset(key, "preview", rgb);
+        return asset == null ? null : asset.data();
+    }
+
     // ---------------------------------------------------------------------------------
     // Disk cache of uncoloured base icons (survives server restarts)
     // ---------------------------------------------------------------------------------
