@@ -10,7 +10,7 @@
         }
     ],
     "Website": "https://www.curseforge.com/hytale/mods/dappermap",
-    "ServerVersion": ">=0.6.1 <0.7.0",
+    "ServerVersion": ">=0.7.0 <0.8.0",
     "Dependencies": {
         "Hytale:AssetModule": "*"
     },
