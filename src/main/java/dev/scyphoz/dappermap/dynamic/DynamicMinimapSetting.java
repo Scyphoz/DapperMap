@@ -44,6 +44,10 @@ public final class DynamicMinimapSetting {
     public boolean creatureIcons = true;
     /** Creature markers shown: false = all creatures (default), true = hostile and attacking only. */
     public boolean hostileCreaturesOnly = false;
+    /** Player marker style: true = head icons drawn from each player's skin (default), false = dots. */
+    public boolean playerIcons = true;
+    /** Player head icons show the helmet a player wears (default), or always their bare head. */
+    public boolean playerIconHelmets = true;
     public boolean showDeathMarker = true;
     public boolean showWorldMapMarkers = true;
     public boolean limitMobHeight = true;
@@ -132,6 +136,8 @@ public final class DynamicMinimapSetting {
         this.creatureMarkerLimit = source.creatureMarkerLimit;
         this.creatureIcons = source.creatureIcons;
         this.hostileCreaturesOnly = source.hostileCreaturesOnly;
+        this.playerIcons = source.playerIcons;
+        this.playerIconHelmets = source.playerIconHelmets;
         this.showDeathMarker = source.showDeathMarker;
         this.showWorldMapMarkers = source.showWorldMapMarkers;
         this.limitMobHeight = source.limitMobHeight;

@@ -62,6 +62,8 @@ public final class SettingPermissions {
             target.creatureMarkerLimit = source.creatureMarkerLimit;
             target.creatureIcons = source.creatureIcons; // Creature marker style (dots / icons).
             target.hostileCreaturesOnly = source.hostileCreaturesOnly; // Creature filter (all / hostile).
+            target.playerIcons = source.playerIcons; // Player marker style (icons / dots).
+            target.playerIconHelmets = source.playerIconHelmets; // Player icons with or without helmets.
             target.showDeathMarker = source.showDeathMarker;
         }
         if (allowed.test("height")) target.limitMobHeight = source.limitMobHeight;

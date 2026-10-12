@@ -582,7 +582,8 @@ public final class DapperMapSettingsPage
             case "texture_resolution" -> "resolution";
             case "info_panel" -> "info";
             case "panel_position", "panel_alignment" -> "panel";
-            case "players", "entities", "death", "creature_limit", "creature_style", "creature_filter" -> "markers";
+            case "players", "entities", "death", "creature_limit", "creature_style", "creature_filter",
+                 "player_style", "player_helmets" -> "markers";
             case "vrange" -> "height-range";
             case "clock_format" -> "clock";
             case "worldmap", "bettermap", "bettermap_markers", "bettermap_caves" -> "integration";
@@ -1145,6 +1146,8 @@ public final class DapperMapSettingsPage
             case "creature_limit" -> "Show up to 16, 32 or 64 nearby creatures, prioritising the nearest.";
             case "creature_style" -> "Show creatures as face icons or as threat-coloured dots.";
             case "creature_filter" -> "Show all creatures, or only hostile and attacking ones.";
+            case "player_style" -> "Show players as head icons or as dots.";
+            case "player_helmets" -> "Show the helmet each player wears on their icon.";
             case "death" -> "Show Hytale's death markers (BetterMap's death settings apply).";
             case "worldmap" -> "Show Hytale personal, shared, POI, spawn and respawn world-map markers.";
             case "height" -> "Hide creatures far above or below you.";
@@ -1178,6 +1181,8 @@ public final class DapperMapSettingsPage
                 || ("bettermap_caves".equals(id) && !this.betterMapCaveAvailable)
                 || (("height".equals(id) || "vrange".equals(id) || "creature_limit".equals(id)
                 || "creature_style".equals(id) || "creature_filter".equals(id)) && !settings.showEntities)
+                || (("player_style".equals(id) || "player_helmets".equals(id)) && !settings.showOtherPlayers)
+                || ("player_helmets".equals(id) && !settings.playerIcons)
                 || ("vrange".equals(id) && !settings.limitMobHeight)
                 || ("clock_format".equals(id) && !settings.showClock);
     }
@@ -1213,6 +1218,8 @@ public final class DapperMapSettingsPage
             case "creature_limit" -> settings.creatureMarkerLimit = Integer.parseInt(value);
             case "creature_style" -> settings.creatureIcons = "icons".equals(value);
             case "creature_filter" -> settings.hostileCreaturesOnly = "hostile".equals(value);
+            case "player_style" -> settings.playerIcons = "icons".equals(value);
+            case "player_helmets" -> settings.playerIconHelmets = "shown".equals(value);
             case "players" -> settings.showOtherPlayers = Boolean.parseBoolean(value);
             case "entities" -> settings.showEntities = Boolean.parseBoolean(value);
             case "death" -> settings.showDeathMarker = Boolean.parseBoolean(value);
@@ -1249,6 +1256,14 @@ public final class DapperMapSettingsPage
             case "creature_filter" -> {
                 entries.add(entry("All", "all"));
                 entries.add(entry("Hostile Only", "hostile"));
+            }
+            case "player_style" -> {
+                entries.add(entry("Icons", "icons"));
+                entries.add(entry("Dots", "dots"));
+            }
+            case "player_helmets" -> {
+                entries.add(entry("Shown", "shown"));
+                entries.add(entry("Hidden", "hidden"));
             }
             case "vrange" -> {
                 TreeSet<Integer> values = new TreeSet<>(List.of(4));
@@ -1465,6 +1480,8 @@ public final class DapperMapSettingsPage
             case "creature_limit" -> Integer.toString(settings.creatureMarkerLimit);
             case "creature_style" -> settings.creatureIcons ? "icons" : "dots";
             case "creature_filter" -> settings.hostileCreaturesOnly ? "hostile" : "all";
+            case "player_style" -> settings.playerIcons ? "icons" : "dots";
+            case "player_helmets" -> settings.playerIconHelmets ? "shown" : "hidden";
             case "players" -> Boolean.toString(settings.showOtherPlayers);
             case "entities" -> Boolean.toString(settings.showEntities);
             case "death" -> Boolean.toString(settings.showDeathMarker);
@@ -1518,7 +1535,7 @@ public final class DapperMapSettingsPage
     private static Tab tabFor(String id) {
         return switch (id) {
             case "players", "death", "entities", "height", "vrange", "creature_limit", "creature_style",
-                 "creature_filter" -> Tab.MARKERS;
+                 "creature_filter", "player_style", "player_helmets" -> Tab.MARKERS;
             case "section_4", "section_5", "worldmap", "bettermap", "bettermap_markers",
                  "bettermap_caves" -> Tab.INTEGRATIONS;
             case "info_panel", "panel_position", "panel_alignment", "section_3",
@@ -1549,6 +1566,8 @@ public final class DapperMapSettingsPage
                 new Row("panel_position", "Info Panel Position", Kind.DROPDOWN),
                 new Row("panel_alignment", "Panel Text Alignment", Kind.DROPDOWN),
                 new Row("players", "Player Markers", Kind.DROPDOWN),
+                new Row("player_style", "Player Marker Style", Kind.DROPDOWN),
+                new Row("player_helmets", "Player Icon Helmets", Kind.DROPDOWN),
                 new Row("death", "Death Markers", Kind.DROPDOWN),
                 new Row("entities", "Creature Markers", Kind.DROPDOWN),
                 new Row("creature_style", "Creature Marker Style", Kind.DROPDOWN),

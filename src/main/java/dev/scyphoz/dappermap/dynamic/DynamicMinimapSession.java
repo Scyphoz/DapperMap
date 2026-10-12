@@ -252,6 +252,8 @@ public final class DynamicMinimapSession {
     /** Creature marker style the cached markers were scanned with (dots / icons). */
     private boolean builtCreatureIcons;
     private boolean builtHostileOnly;
+    /** Player marker style and helmet setting the cached markers were scanned with. */
+    private boolean builtPlayerIcons, builtPlayerHelmets;
     private int lastMapRotationBucket = -1;
     private long terrainGeneration = 0L;
     private DynamicMinimapRenderer.RotationSource rotationSource = null;
@@ -284,6 +286,8 @@ public final class DynamicMinimapSession {
     private final DynamicEntityScanner.ThreatCache threatCache = new DynamicEntityScanner.ThreatCache();
     /** Creature icon keys for this player's view (Creature Markers: Icons). */
     private final DynamicCreatureIcons.KeyCache creatureIconKeys = new DynamicCreatureIcons.KeyCache();
+    /** Other players' head icon keys for this player's view (Player Markers: Icons). */
+    private final DynamicCreatureIcons.PlayerKeyCache playerIconKeys = new DynamicCreatureIcons.PlayerKeyCache();
     private final MarkerOrder markerOrder = new MarkerOrder();
     private record MarkerAssetKey(Style style, String source, int rgb) {}
     /** Icons sent to this client: least recently used dropped beyond 256 (clearing all made every marker blink). */
@@ -324,10 +328,10 @@ public final class DynamicMinimapSession {
     }
 
     /**
-     * Creature icon edged in its threat colour. Attacking creatures alternate with a pale edge
-     * (a pulse: one AssetPath swap per toggle, only for creatures attacking this player). While
-     * a colour variant is still being prepared, the creature type's last shown icon is reused
-     * so it never blinks out. World thread only.
+     * Creature (or player head) icon edged in its threat colour. Attacking creatures and players
+     * alternate with a pale edge (a pulse: one AssetPath swap per toggle, only for those attacking
+     * this player). While a colour variant is still being prepared, the creature type's (or
+     * player's) last shown icon is reused so it never blinks out. World thread only.
      */
     private String creatureIcon(DynamicMinimapMarker marker, int attackingRgb) {
         int rgb = marker.color == null ? 0xFFFFFF : marker.color.getRGB() & 0xFFFFFF;
@@ -367,6 +371,7 @@ public final class DynamicMinimapSession {
         long generation = this.markerAssetGeneration;
         World sourceWorld = this.lastObservedWorld;
         DynamicMinimapHud targetHud = this.hud;
+        boolean pvp = marker.player && sourceWorld != null && pvpEnabled(sourceWorld);
         if (!renderAsync(() -> {
             try {
                 if (!this.canRenderHud(targetHud) || generation != this.markerAssetGeneration
@@ -394,11 +399,21 @@ public final class DynamicMinimapSession {
                 this.putPrepared(key, asset);
                 // Creature icons and dots: also prepare the threat colours now, so a creature
                 // turning hostile or attacking changes colour on the very next projection.
-                if (marker.style == Style.CREATURE || marker.style == Style.DOT)
+                // Players only need theirs where PvP is on (they can't attack otherwise).
+                if (marker.player ? pvp : marker.style == Style.CREATURE || marker.style == Style.DOT)
                     this.prepareThreatColours(marker, rgb, palette, generation);
             } finally { this.markerAssetsPending.remove(key); }
         })) this.markerAssetsPending.remove(key);
         return null;
+    }
+
+    /** True when the world allows PvP (then players may need their attacking colours). */
+    private static boolean pvpEnabled(World world) {
+        try {
+            return world.getWorldConfig().isPvpEnabled();
+        } catch (RuntimeException ignored) {
+            return false;
+        }
     }
 
     /** Bound on prepared-but-unsent icons (several threat colours per creature type on screen). */
@@ -409,10 +424,11 @@ public final class DynamicMinimapSession {
         this.preparedMarkerAssets.put(key, asset);
     }
 
-    /** Creature face icon (CREATURE) or coloured dot (DOT) in {@code rgb}. Render pool only. */
+    /** Creature face icon (CREATURE), player head icon (PLAYER) or coloured dot (DOT) in {@code rgb}. Render pool only. */
     private DynamicAssetPublisher.PreparedAsset prepareCreatureAsset(Style style, String iconKey, int rgb,
                                                                      DynamicMinimapColours palette) {
         if (style == Style.CREATURE) return DynamicCreatureIcons.prepareAsset(iconKey, this.slug, rgb);
+        if (style == Style.PLAYER) return DynamicCreatureIcons.preparePlayerAsset(iconKey, this.slug, rgb);
         byte[] png = DynamicMinimapRenderer.renderDot(rgb, palette);
         return DynamicAssetPublisher.prepare("UI/DapperMap/mk-" + this.slug + "-" + DapperMapUtil.hex6(rgb) + ".png", png);
     }
@@ -428,9 +444,10 @@ public final class DynamicMinimapSession {
                                       DynamicMinimapColours palette, long generation) {
         int hostile = palette.rgb(DynamicMinimapColours.Key.HOSTILE);
         int attacking = palette.rgb(DynamicMinimapColours.Key.HOSTILE_ACTIVE);
-        boolean icon = marker.style == Style.CREATURE;
+        boolean icon = marker.style == Style.CREATURE || marker.style == Style.PLAYER;
         int count = icon ? 3 : 2;
-        for (int i = 0; i < count; i++) {
+        // Players are never "hostile", only attacking: skip that colour for them.
+        for (int i = marker.player ? 1 : 0; i < count; i++) {
             int rgb = i == 0 ? hostile : i == 1 ? attacking : DynamicCreatureIcons.pulseColour(attacking);
             if (rgb == shownRgb || generation != this.markerAssetGeneration) continue;
             MarkerAssetKey key = new MarkerAssetKey(marker.style, marker.assetPath, rgb);
@@ -754,6 +771,7 @@ public final class DynamicMinimapSession {
                     // Creature references from the old world would keep its entity store alive.
                     this.threatCache.clear();
                     this.creatureIconKeys.clear();
+                    this.playerIconKeys.clear();
                     // The BetterMap cave-image cache is shared by every player: leave it (it is
                     // bounded, expires, and dead worlds are pruned) instead of flushing it here.
                     this.worldPending.clear();
@@ -905,11 +923,16 @@ public final class DynamicMinimapSession {
             // One overlay publish and one layout rebuild for all of this tick's setting changes.
             this.hud.applyPendingLayout();
 
-            // Switching creature dots/icons or the hostile-only filter rescans markers straight away.
+            // Switching creature/player dots or icons, the hostile-only filter or player helmets
+            // rescans markers straight away.
             if (this.settings.creatureIcons != this.builtCreatureIcons
-                    || this.settings.hostileCreaturesOnly != this.builtHostileOnly) {
+                    || this.settings.hostileCreaturesOnly != this.builtHostileOnly
+                    || this.settings.playerIcons != this.builtPlayerIcons
+                    || this.settings.playerIconHelmets != this.builtPlayerHelmets) {
                 this.builtCreatureIcons = this.settings.creatureIcons;
                 this.builtHostileOnly = this.settings.hostileCreaturesOnly;
+                this.builtPlayerIcons = this.settings.playerIcons;
+                this.builtPlayerHelmets = this.settings.playerIconHelmets;
                 this.lastMarkerMs = 0L;
             }
 
@@ -1572,7 +1595,8 @@ public final class DynamicMinimapSession {
                     (double)(this.settings.zoomBlocks + 16),
                     this.settings,
                     this.threatCache,
-                    this.creatureIconKeys
+                    this.creatureIconKeys,
+                    this.playerIconKeys
             );
         } catch (Throwable failure) {
             DapperMapUtil.logFailure("creature scan", failure);
@@ -1714,7 +1738,7 @@ public final class DynamicMinimapSession {
                 continue;
             }
 
-            String path = marker.style == Style.CREATURE
+            String path = marker.style == Style.CREATURE || marker.style == Style.PLAYER
                     ? this.creatureIcon(marker, attackingRgb) : this.markerIcon(marker);
 
             if (path == null || path.isBlank()) {
@@ -1725,13 +1749,14 @@ public final class DynamicMinimapSession {
             int top = (int)Math.round(markerZ) - size / 2;
 
             if (marker.clampToEdge) edgeFree--; else mapFree--;
-            // Hostile and attacking creatures go in the HUD's top layer, above other markers.
+            // Hostile and attacking creatures go in the HUD's threat layer, above other markers;
+            // other players in the player layer, above every creature.
             slots[slot++] =
                     new DynamicMinimapHud.Slot(
                             path,
                             left,
                             top,
-                            size, marker.clampToEdge, marker.threat
+                            size, marker.clampToEdge, marker.threat, marker.player
                     );
         }
 
@@ -2010,8 +2035,10 @@ public final class DynamicMinimapSession {
         private static Comparator<DynamicMinimapMarker> comparator(double x, double z) {
             return Comparator.comparingInt((DynamicMinimapMarker marker) -> switch (marker.style) {
                 case BETTERMAP, NATIVE_WORLDMAP -> 1;
-                case DOT, CREATURE -> 2;
-            }).thenComparingDouble(marker -> {
+                case DOT, CREATURE, PLAYER -> 2;
+                // Other players first among in-map markers, so a crowd of creatures never uses up
+                // the in-map elements before a player is placed.
+            }).thenComparingInt((DynamicMinimapMarker marker) -> marker.player ? 0 : 1).thenComparingDouble(marker -> {
                 double dx = marker.x - x, dz = marker.z - z;
                 return dx * dx + dz * dz;
             });

@@ -14,6 +14,7 @@ DapperMap adds a live minimap to the Hytale HUD. It combines nearby terrain, a d
 - Player, creature, death and world-map markers
 - Creature icons drawn from each creature's own model, including creatures added by other mods, with threat-coloured outlines (classic coloured dots are also available)
 - Optional hostile-only creature filter
+- Player head icons drawn from each player's own skin, with or without their helmet, that flash in the attacking colour when a player attacks you in PvP
 - Optional BetterMap waypoint integration
 - Coordinates, bearing, world time and biome readouts
 - Fully configurable colours for the frame, text and marker categories
@@ -108,6 +109,19 @@ Creatures can be shown in one of two styles:
 
 Creature icons are drawn by the server from each creature's own model and textures, so creatures added by other mods and mod packs get icons too, and DapperMap does not ship any creature artwork. Most creatures show a three-quarter view of their head. Long, legless creatures such as fish, eels, whales and snakes are shown side-on so their outline is easy to recognise. If a creature's model cannot be drawn, its in-game portrait is used, and failing that a disc showing its initials. Each icon is built once per creature type and reused for every player. Icons grow with the map size so they stay readable on larger maps.
 
+#### Player marker style
+
+Other players can be shown in one of two styles:
+
+- **Icons (default):** Each player is shown as a small picture of their own head, built from their skin (skin tone, face, eyes, hair and head cosmetics, including modded cosmetics), with an outline in the player marker colour. If a player's head cannot be drawn, a disc showing their initials is used.
+- **Dots:** Each player is shown as a dot in the player marker colour.
+
+**Player Icon Helmets** chooses whether icons show the helmet each player wears (**Shown**, default) or always their bare head (**Hidden**). A helmet is never shown when its wearer has chosen to hide it in game. Player markers always draw above creature markers, including hostile and attacking creatures.
+
+When PvP is enabled in the world and another player attacks you, that player's marker switches to the attacking colour (icons pulse like attacking creatures). It returns to the player colour once that player has not attacked you for 15 seconds, or when they die. Dead players are not shown until they respawn.
+
+Each player's icon is built once per look (skin and helmet) and shared by every viewer; it is rebuilt only when that player changes their skin or helmet.
+
 #### Creatures shown
 
 **All (default)** shows every nearby creature. **Hostile Only** shows only hostile creatures and creatures currently attacking the player; a normally neutral creature appears while it is attacking. Player markers are not affected by this filter. The filter applies to both icons and dots.
@@ -143,9 +157,9 @@ The in-game colour editor provides a live preview and lets players customise:
 - Map edge and compass ticks
 - Panel border, heading and label colours
 - DapperMap title and information text
-- Player locator and other player markers
+- Player locator and other player markers (player dots and player icon outlines)
 - Death markers
-- Attacking, hostile, neutral and friendly creature markers (used for creature dots and creature icon outlines)
+- Attacking, hostile, neutral and friendly creature markers (used for creature dots and creature icon outlines; the attacking colour also marks players who attack you in PvP)
 
 Colours may also be changed through commands using hexadecimal `#RRGGBB` values or decimal RGB channels.
 
@@ -207,6 +221,8 @@ All DapperMap commands require a live player context because they operate on a p
 | `/dappermap markers players\|entities\|death\|worldmap on\|off` | Enable or disable a marker category |
 | `/dappermap creature-markers icons\|dots` | Show creatures as icons (default) or dots (`creature-icons`, `creature-style` aliases) |
 | `/dappermap creature-filter all\|hostile` | Show all creatures (default) or only hostile and attacking ones (`creatures-shown`, `hostile-only` aliases) |
+| `/dappermap player-markers icons\|dots` | Show other players as head icons (default) or dots (`player-icons`, `player-style` aliases) |
+| `/dappermap player-helmets shown\|hidden` | Show helmets on player icons (default) or always show the bare head (`player-helmet`, `helmets` aliases) |
 | `/dappermap creature-limit 16\|32\|64` | Set the maximum visible creature markers |
 | `/dappermap height on\|off` | Enable or disable creature height filtering |
 | `/dappermap height-range <4..256>` | Set the allowed creature distance above and below the player |
@@ -252,6 +268,7 @@ Examples:
 /dappermap admin creature-limit 32
 /dappermap admin creature-markers dots
 /dappermap admin creature-filter hostile
+/dappermap admin player-helmets hidden
 /dappermap admin integration bettermap enable
 ```
 
@@ -330,7 +347,7 @@ scyphoz.dappermap.command.toggle
 | `scyphoz.dappermap.command.rotation` | North-up or player-facing rotation |
 | `scyphoz.dappermap.command.position` | HUD position controls |
 | `scyphoz.dappermap.command.panel` | Information-panel visibility, position and `panel-alignment` |
-| `scyphoz.dappermap.command.markers` | Player, creature, death and Hytale world-map marker controls, plus `creature-limit`, `creature-markers` and `creature-filter` |
+| `scyphoz.dappermap.command.markers` | Player, creature, death and Hytale world-map marker controls, plus `creature-limit`, `creature-markers`, `creature-filter`, `player-markers` and `player-helmets` |
 | `scyphoz.dappermap.command.height` | Creature height detection |
 | `scyphoz.dappermap.command.height-range` | Creature vertical range |
 | `scyphoz.dappermap.command.coordinates` | Coordinate readout |
@@ -340,7 +357,7 @@ scyphoz.dappermap.command.toggle
 | `scyphoz.dappermap.command.integration` | Native and BetterMap master/marker/cave integration controls |
 | `scyphoz.dappermap.command.*` | Every player-facing DapperMap command and setting |
 
-`help` uses `scyphoz.dappermap.command.help`. New direct commands intentionally reuse the permissions of their matching UI controls: `panel-alignment` uses `panel`, and `creature-limit`, `creature-markers` and `creature-filter` use `markers`. Info Panel visibility uses `scyphoz.dappermap.command.info`.
+`help` uses `scyphoz.dappermap.command.help`. New direct commands intentionally reuse the permissions of their matching UI controls: `panel-alignment` uses `panel`, and `creature-limit`, `creature-markers`, `creature-filter`, `player-markers` and `player-helmets` use `markers`. Info Panel visibility uses `scyphoz.dappermap.command.info`.
 
 Command aliases use the permission assigned to their canonical command. For example, `coords` uses the `coordinates` permission and `update` uses the `speed` permission.
 

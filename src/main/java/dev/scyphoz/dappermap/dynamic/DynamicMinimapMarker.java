@@ -13,6 +13,8 @@ public final class DynamicMinimapMarker {
     public final boolean clampToEdge;
     /** Hostile or attacking creature: drawn in the HUD's top marker layer, above other markers. */
     public final boolean threat;
+    /** Another player (icon or dot): drawn in the HUD's player layer, above every creature marker. */
+    public final boolean player;
 
     private DynamicMinimapMarker(
             double x,
@@ -36,6 +38,20 @@ public final class DynamicMinimapMarker {
             boolean clampToEdge,
             boolean threat
     ) {
+        this(x, z, color, size, style, assetPath, clampToEdge, threat, false);
+    }
+
+    private DynamicMinimapMarker(
+            double x,
+            double z,
+            Color color,
+            int size,
+            Style style,
+            String assetPath,
+            boolean clampToEdge,
+            boolean threat,
+            boolean player
+    ) {
         this.x = x;
         this.z = z;
         this.color = color;
@@ -44,6 +60,7 @@ public final class DynamicMinimapMarker {
         this.assetPath = assetPath;
         this.clampToEdge = clampToEdge;
         this.threat = threat;
+        this.player = player;
     }
 
     public static DynamicMinimapMarker dot(double x, double z, Color color, int size) {
@@ -62,6 +79,19 @@ public final class DynamicMinimapMarker {
     public static DynamicMinimapMarker creature(double x, double z, String iconKey, Color color, int size,
                                                 boolean threat) {
         return new DynamicMinimapMarker(x, z, color, size, Style.CREATURE, iconKey, false, threat);
+    }
+
+    /** Another player's dot, in the player colour (or the attacking colour after a PvP hit). */
+    public static DynamicMinimapMarker playerDot(double x, double z, Color color, int size) {
+        return new DynamicMinimapMarker(x, z, color, size, Style.DOT, null, false, false, true);
+    }
+
+    /**
+     * Another player's head icon; {@code iconKey} identifies their look (skin and helmet, see
+     * DynamicCreatureIcons.PlayerKeyCache) and {@code color} edges the icon.
+     */
+    public static DynamicMinimapMarker player(double x, double z, String iconKey, Color color, int size) {
+        return new DynamicMinimapMarker(x, z, color, size, Style.PLAYER, iconKey, false, false, true);
     }
 
     public static DynamicMinimapMarker betterMap(
@@ -90,7 +120,7 @@ public final class DynamicMinimapMarker {
         if (!(other instanceof DynamicMinimapMarker marker)) return false;
         return Double.compare(x, marker.x) == 0 && Double.compare(z, marker.z) == 0
                 && size == marker.size && style == marker.style && clampToEdge == marker.clampToEdge
-                && threat == marker.threat
+                && threat == marker.threat && player == marker.player
                 && java.util.Objects.equals(color, marker.color)
                 && java.util.Objects.equals(assetPath, marker.assetPath);
     }
@@ -103,6 +133,7 @@ public final class DynamicMinimapMarker {
         hash = 31 * hash + java.util.Objects.hashCode(style);
         hash = 31 * hash + java.util.Objects.hashCode(assetPath);
         hash = 31 * hash + Boolean.hashCode(threat);
+        hash = 31 * hash + Boolean.hashCode(player);
         return 31 * hash + Boolean.hashCode(clampToEdge);
     }
 
@@ -110,6 +141,8 @@ public final class DynamicMinimapMarker {
         DOT,
         /** Creature face icon (Creature Markers: Icons). */
         CREATURE,
+        /** Another player's head icon (Player Markers: Icons). */
+        PLAYER,
         BETTERMAP,
         NATIVE_WORLDMAP
     }

@@ -48,6 +48,8 @@ public class DapperMap extends JavaPlugin {
         DynamicCreatureIcons.configureDiskCache(
                 this.getDataDirectory().resolve("icon-cache"),
                 config.get().isCreatureIconDiskCache(), config.get().getCreatureIconDiskCacheBytes());
+        // PvP: remembers which players recently hit which, so attackers show in the attacking colour.
+        dev.scyphoz.dappermap.dynamic.DynamicEntityScanner.PlayerAttacks.register(this.getEntityStoreRegistry());
         // Once-a-second load sampler for /dappermap admin stats and optional load shedding.
         DapperMapServerLoad.start(this.sessions);
         this.getCommandRegistry().registerCommand(new DapperMapCommand("dappermap", "Configure DapperMap", this.sessions));
@@ -59,7 +61,12 @@ public class DapperMap extends JavaPlugin {
                 });
         PlayerReadyListener readyListener = new PlayerReadyListener(this.sessions);
         this.getEventRegistry().registerGlobal(PlayerReadyEvent.class, readyListener::onPlayerReady);
-        this.getEventRegistry().registerGlobal(PlayerDisconnectEvent.class, (event) -> this.sessions.onDisconnect(event.getPlayerRef()));
+        this.getEventRegistry().registerGlobal(PlayerDisconnectEvent.class, (event) -> {
+            this.sessions.onDisconnect(event.getPlayerRef());
+            // A player who leaves is no longer anyone's attacker (or anyone's victim).
+            var ref = event.getPlayerRef();
+            if (ref != null) dev.scyphoz.dappermap.dynamic.DynamicEntityScanner.PlayerAttacks.forget(ref.getUuid());
+        });
         // Settings file read-ahead before the player is ready, so the join tick needs no disk access.
         this.getEventRegistry().registerGlobal(
                 com.hypixel.hytale.server.core.event.events.player.PlayerConnectEvent.class,

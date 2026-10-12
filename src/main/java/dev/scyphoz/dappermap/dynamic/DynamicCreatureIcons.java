@@ -51,6 +51,11 @@ import static dev.scyphoz.dappermap.util.DapperMapUtil.jsonString;
  * </ol>
  * The world thread only derives a short key per creature (cached per entity until its model
  * changes); all asset loading and drawing happens on the render pool.
+ *
+ * <p>Other players get head icons through the same pipeline (see {@link PlayerKeyCache}). The
+ * server's player Model is only the bare "Player" asset, so the head is rebuilt from the
+ * player's skin (cosmetic part ids, greyscale textures tinted by gradient sets) plus, when
+ * wanted, the helmet they wear. Player icons use their own path prefix ({@code player-}).
  */
 public final class DynamicCreatureIcons {
     /** Logical HUD size of a creature icon on the default 220 px map (scaled with map size). */
@@ -153,6 +158,284 @@ public final class DynamicCreatureIcons {
         }
     }
 
+    // ---------------------------------------------------------------------------------
+    // Player head icons
+    // ---------------------------------------------------------------------------------
+
+    /** Role prefix marking a player source ("player:<username>"); ':' never appears in creature roles. */
+    static final String PLAYER_ROLE_PREFIX = "player:";
+
+    static boolean isPlayer(Source source) {
+        return source.role() != null && source.role().startsWith(PLAYER_ROLE_PREFIX);
+    }
+
+    /**
+     * A texture path, optionally tinted: "path|gradient|RRGGBB" (gradient and colour may be
+     * empty). Creature textures are plain paths and never contain '|'.
+     * {@code fallbackRgb} is -1 when there is no base colour.
+     */
+    record TextureRef(String path, String gradient, int fallbackRgb) {
+        static TextureRef parse(String reference) {
+            if (reference == null) return null;
+            int bar = reference.indexOf('|');
+            if (bar < 0) return new TextureRef(reference, null, -1);
+            String[] parts = reference.split("\\|", -1);
+            String gradient = parts.length > 1 && !parts[1].isEmpty() ? parts[1] : null;
+            int rgb = -1;
+            if (parts.length > 2 && parts[2].length() == 6) {
+                try { rgb = Integer.parseInt(parts[2], 16); } catch (NumberFormatException ignored) { }
+            }
+            return new TextureRef(parts[0], gradient, rgb);
+        }
+
+        static String of(String path, String gradient, int fallbackRgb) {
+            if (gradient == null && fallbackRgb < 0) return path;
+            return path + "|" + (gradient == null ? "" : gradient) + "|" + (fallbackRgb < 0 ? "" : DapperMapUtil.hex6(fallbackRgb));
+        }
+    }
+
+    /**
+     * Per-viewer cache of other players' head icon keys. A key is re-derived only when the
+     * player's skin object, worn helmet or helmet setting changes (skin parts are resolved
+     * through the cosmetics registry: a few map lookups, on the world thread, rarely). Only
+     * players shown in the latest scan are kept. World thread only.
+     */
+    public static final class PlayerKeyCache {
+        private record Entry(Object skin, String helmet, String key, int generation) { }
+        private Map<Ref<EntityStore>, Entry> current = new HashMap<>();
+        private Map<Ref<EntityStore>, Entry> next = new HashMap<>();
+
+        /**
+         * Icon key for another player. {@code withHelmet}: the viewer's "Player Icons: Helmet"
+         * setting; the helmet is still left off when its wearer hides it in game.
+         */
+        String key(Ref<EntityStore> ref, String username, ComponentAccessor<EntityStore> accessor, boolean withHelmet) {
+            com.hypixel.hytale.protocol.PlayerSkin skin = null;
+            try {
+                var component = accessor.getComponent(ref,
+                        com.hypixel.hytale.server.core.modules.entity.player.PlayerSkinComponent.getComponentType());
+                skin = component == null ? null : component.getPlayerSkin();
+            } catch (RuntimeException | LinkageError ignored) { }
+            String helmet = withHelmet ? wornHelmet(ref, accessor) : null;
+            Entry entry = this.current.get(ref);
+            int generation = sourcesGeneration;
+            if (entry == null || entry.skin() != skin || !java.util.Objects.equals(entry.helmet(), helmet)
+                    || entry.generation() != generation)
+                entry = new Entry(skin, helmet, registerPlayer(username, skin, helmet), generation);
+            this.next.put(ref, entry);
+            return entry.key();
+        }
+
+        /** Keeps only players seen in the scan just finished. */
+        void endScan() {
+            var swap = this.current;
+            this.current = this.next;
+            this.next = swap;
+            this.next.clear();
+        }
+
+        /** Forgets every player (players hidden, or the viewer changed world). */
+        void clear() {
+            this.current.clear();
+            this.next.clear();
+        }
+    }
+
+    /**
+     * Item id of the helmet a player shows, or null: none worn, or hidden by the wearer's own
+     * "hide helmet" setting where the world allows hiding (as the server decides for clients).
+     */
+    private static String wornHelmet(Ref<EntityStore> ref, ComponentAccessor<EntityStore> accessor) {
+        try {
+            var armour = accessor.getComponent(ref,
+                    com.hypixel.hytale.server.core.inventory.InventoryComponent.Armor.getComponentType());
+            var container = armour == null ? null : armour.getInventory();
+            if (container == null) return null;
+            String helmet = null;
+            for (short slot = 0; slot < container.getCapacity() && helmet == null; slot++) {
+                var stack = container.getItemStack(slot);
+                if (stack == null || stack.isEmpty()) continue;
+                var item = stack.getItem();
+                var armor = item == null ? null : item.getArmor();
+                if (armor != null && armor.getArmorSlot() == com.hypixel.hytale.protocol.ItemArmorSlot.Head) helmet = stack.getItemId();
+            }
+            if (helmet == null) return null;
+            var settings = accessor.getComponent(ref,
+                    com.hypixel.hytale.server.core.modules.entity.player.PlayerSettings.getComponentType());
+            if (settings != null && settings.hideHelmet()) {
+                var world = accessor.getExternalData().getWorld();
+                if (world == null || world.getGameplayConfig().getPlayerConfig().getArmorVisibilityOption().canHideHelmet()) return null;
+            }
+            return helmet;
+        } catch (RuntimeException | LinkageError ignored) {
+            return null;
+        }
+    }
+
+    /** Skin fields drawn for a head icon, in drawing order, with the cosmetic a helmet can hide. */
+    private enum HeadPart {
+        FACE(null), EYES(null), EYEBROWS(null), MOUTH(null), EARS(com.hypixel.hytale.protocol.Cosmetic.Ear),
+        SKIN_FEATURE(null), FACIAL_HAIR(com.hypixel.hytale.protocol.Cosmetic.FacialHair),
+        HAIRCUT(com.hypixel.hytale.protocol.Cosmetic.Haircut), OVERTOP(com.hypixel.hytale.protocol.Cosmetic.Overtop),
+        CAPE(com.hypixel.hytale.protocol.Cosmetic.Cape), EAR_ACCESSORY(com.hypixel.hytale.protocol.Cosmetic.EarAccessory),
+        FACE_ACCESSORY(com.hypixel.hytale.protocol.Cosmetic.FaceAccessory),
+        HEAD_ACCESSORY(com.hypixel.hytale.protocol.Cosmetic.HeadAccessory);
+        final com.hypixel.hytale.protocol.Cosmetic hiddenAs;
+        HeadPart(com.hypixel.hytale.protocol.Cosmetic hiddenAs) { this.hiddenAs = hiddenAs; }
+    }
+
+    /**
+     * Describes another player's head (skin parts and optional helmet) and returns its icon key.
+     * Only head-related parts are listed; the renderer draws just the parts that hang off the
+     * Head node. Works from registry data only, so modded cosmetics are drawn the same way.
+     * World thread; called only when a player's skin or helmet changes.
+     */
+    static String registerPlayer(String username, com.hypixel.hytale.protocol.PlayerSkin skin, String helmetItemId) {
+        com.hypixel.hytale.server.core.cosmetics.CosmeticRegistry registry = null;
+        try {
+            var module = com.hypixel.hytale.server.core.cosmetics.CosmeticsModule.get();
+            registry = module == null ? null : module.getRegistry();
+        } catch (RuntimeException | LinkageError ignored) { }
+        return registerPlayer(registry, username, skin, helmetItemId == null ? null : helmetAttachment(helmetItemId));
+    }
+
+    /** A worn helmet: its model and texture, and the skin cosmetics it covers. */
+    record Helmet(Attachment model, java.util.Set<com.hypixel.hytale.protocol.Cosmetic> hides) { }
+
+    /** Helmet item's model and covered cosmetics, or null (unknown item, or no model). */
+    private static Helmet helmetAttachment(String itemId) {
+        try {
+            var item = com.hypixel.hytale.server.core.asset.type.item.config.Item.getAssetMap().getAsset(itemId);
+            if (item == null || item.getModel() == null) return null;
+            java.util.Set<com.hypixel.hytale.protocol.Cosmetic> hidden = java.util.EnumSet.noneOf(com.hypixel.hytale.protocol.Cosmetic.class);
+            var armour = item.getArmor() == null ? null : item.getArmor().toPacket();
+            if (armour != null && armour.cosmeticsToHide != null)
+                for (var cosmetic : armour.cosmeticsToHide) if (cosmetic != null) hidden.add(cosmetic);
+            return new Helmet(new Attachment(item.getModel(), item.getTexture()), hidden);
+        } catch (RuntimeException | LinkageError ignored) {
+            return null; // Item assets unavailable: the head is drawn without the helmet.
+        }
+    }
+
+    /** Player head source from the cosmetics registry (null registry: initials). */
+    static String registerPlayer(com.hypixel.hytale.server.core.cosmetics.CosmeticRegistry registry, String username,
+                                 com.hypixel.hytale.protocol.PlayerSkin skin, Helmet helmet) {
+        String name = username == null || username.isBlank() ? "?" : username;
+        String model = com.hypixel.hytale.server.core.cosmetics.CosmeticRegistry.MODEL, texture = null;
+        List<Attachment> attachments = new ArrayList<>();
+        try {
+            if (skin != null && registry != null) {
+                // Body: the head's own model and skin-tone texture. Its texture id is the skin
+                // tone, which face, ears and mouth parts (plain ids) are tinted with as well.
+                var body = partId(skin.bodyCharacteristic);
+                String skinTone = body == null ? null : body.textureId;
+                var bodyPart = body == null ? null : registry.getBodyCharacteristics().get(body.assetId);
+                if (bodyPart != null) {
+                    Attachment resolved = resolvePart(registry, bodyPart, body, skinTone);
+                    if (resolved != null) {
+                        if (resolved.model() != null) model = resolved.model();
+                        texture = resolved.texture();
+                    }
+                }
+                // What the helmet covers (e.g. haircut, ears) is left out; its model goes on last.
+                java.util.Set<com.hypixel.hytale.protocol.Cosmetic> hidden = helmet == null ? java.util.Set.of() : helmet.hides();
+                for (HeadPart part : HeadPart.values()) {
+                    if (part.hiddenAs != null && hidden.contains(part.hiddenAs)) continue;
+                    String id = switch (part) {
+                        case FACE -> skin.face; case EYES -> skin.eyes; case EYEBROWS -> skin.eyebrows;
+                        case MOUTH -> skin.mouth; case EARS -> skin.ears; case SKIN_FEATURE -> skin.skinFeature;
+                        case FACIAL_HAIR -> skin.facialHair; case HAIRCUT -> skin.haircut; case OVERTOP -> skin.overtop;
+                        case CAPE -> skin.cape; case EAR_ACCESSORY -> skin.earAccessory;
+                        case FACE_ACCESSORY -> skin.faceAccessory; case HEAD_ACCESSORY -> skin.headAccessory;
+                    };
+                    var parsed = partId(id);
+                    if (parsed == null) continue;
+                    var parts = switch (part) {
+                        case FACE -> registry.getFaces(); case EYES -> registry.getEyes(); case EYEBROWS -> registry.getEyebrows();
+                        case MOUTH -> registry.getMouths(); case EARS -> registry.getEars(); case SKIN_FEATURE -> registry.getSkinFeatures();
+                        case FACIAL_HAIR -> registry.getFacialHairs(); case HAIRCUT -> registry.getHaircuts();
+                        case OVERTOP -> registry.getOvertops(); case CAPE -> registry.getCapes();
+                        case EAR_ACCESSORY -> registry.getEarAccessories(); case FACE_ACCESSORY -> registry.getFaceAccessories();
+                        case HEAD_ACCESSORY -> registry.getHeadAccessories();
+                    };
+                    var skinPart = parts == null ? null : parts.get(parsed.assetId);
+                    if (skinPart == null) continue;
+                    Attachment resolved = resolvePart(registry, skinPart, parsed, skinTone);
+                    // A part with only a texture (e.g. a face painted onto the head) is drawn as the
+                    // head model again with that texture, over the base skin.
+                    // Only the head block itself gets such a texture: the head's child nodes
+                    // (hidden fittings) would otherwise show it as skin-coloured shapes.
+                    if (resolved != null && resolved.texture() != null)
+                        attachments.add(resolved.model() != null ? resolved : new Attachment(HEAD_ONLY + model, resolved.texture()));
+                }
+                if (helmet != null) attachments.add(helmet.model());
+            }
+        } catch (RuntimeException | LinkageError ignored) {
+            // Cosmetics unavailable: the icon falls back to the player's initials.
+        }
+        return remember(new Source(PLAYER_ROLE_PREFIX + name, "Player", model, texture, List.copyOf(attachments)));
+    }
+
+    /** Model prefix of a texture-only skin part: drawn on the head node's own box only, not its children. */
+    static final String HEAD_ONLY = "head-only|";
+
+    /** "Asset.Texture.Variant" skin id (texture and variant optional), or null for none. */
+    private static com.hypixel.hytale.server.core.cosmetics.PlayerSkin.PlayerSkinPartId partId(String id) {
+        if (id == null || id.isBlank()) return null;
+        try {
+            return com.hypixel.hytale.server.core.cosmetics.PlayerSkin.PlayerSkinPartId.fromString(id);
+        } catch (RuntimeException ignored) {
+            return null;
+        }
+    }
+
+    /**
+     * Model and texture of one skin part, following the same rules the server uses to validate
+     * a skin: a gradient-set part is its greyscale texture tinted by the chosen gradient; other
+     * parts pick a texture by id (from the variant when the part has variants). Parts given as
+     * a plain id (face, ears, mouth) take the skin-tone gradient. Null when nothing resolves.
+     */
+    private static Attachment resolvePart(com.hypixel.hytale.server.core.cosmetics.CosmeticRegistry registry,
+                                          com.hypixel.hytale.server.core.cosmetics.PlayerSkinPart part,
+                                          com.hypixel.hytale.server.core.cosmetics.PlayerSkin.PlayerSkinPartId id,
+                                          String skinTone) {
+        var variant = id.variantId != null && part.getVariants() != null ? part.getVariants().get(id.variantId) : null;
+        String model = variant != null && variant.getModel() != null ? variant.getModel() : part.getModel();
+        String greyscale = variant != null && variant.getGreyscaleTexture() != null
+                ? variant.getGreyscaleTexture() : part.getGreyscaleTexture();
+        // Gradient-tinted part (skin tone, hair colour, ...).
+        if (part.getGradientSet() != null && greyscale != null) {
+            var set = registry.getGradientSets().get(part.getGradientSet());
+            var gradients = set == null ? null : set.getGradients();
+            if (gradients != null && !gradients.isEmpty()) {
+                var gradient = id.textureId != null ? gradients.get(id.textureId) : null;
+                if (gradient == null && skinTone != null) gradient = gradients.get(skinTone);
+                if (gradient == null) gradient = gradients.values().iterator().next();
+                return new Attachment(model, TextureRef.of(greyscale, gradient.getTexture(), baseColour(gradient.getBaseColor())));
+            }
+        }
+        // Fixed textures, chosen by id.
+        var textures = variant != null && variant.getTextures() != null ? variant.getTextures() : part.getTextures();
+        if (textures != null && !textures.isEmpty()) {
+            var chosen = id.textureId != null ? textures.get(id.textureId) : null;
+            if (chosen == null) chosen = textures.values().iterator().next();
+            if (chosen.getTexture() != null) return new Attachment(model, chosen.getTexture());
+        }
+        return greyscale != null ? new Attachment(model, greyscale) : null;
+    }
+
+    /** First "#RRGGBB" of a part's base colours, or -1. */
+    private static int baseColour(String[] colours) {
+        if (colours == null) return -1;
+        for (String colour : colours) {
+            if (colour == null) continue;
+            String hex = colour.startsWith("#") ? colour.substring(1) : colour;
+            if (hex.length() < 6) continue;
+            try { return Integer.parseInt(hex.substring(0, 6), 16); } catch (NumberFormatException ignored) { }
+        }
+        return -1;
+    }
+
     /** Describes a creature's appearance and returns its icon key. World thread; called rarely. */
     static String register(String role, Model model) {
         String modelId = null, modelPath = null, texture = null;
@@ -165,7 +448,11 @@ public final class DynamicCreatureIcons {
             if (worn != null) for (ModelAttachment part : worn)
                 if (part != null && part.getModel() != null) attachments.add(new Attachment(part.getModel(), part.getTexture()));
         }
-        Source source = new Source(role, modelId, modelPath, texture, List.copyOf(attachments));
+        return remember(new Source(role, modelId, modelPath, texture, List.copyOf(attachments)));
+    }
+
+    /** Stores a source under its key (64-bit FNV-1a of its description) and returns the key. */
+    private static String remember(Source source) {
         // 64-bit FNV-1a of the description: short, stable and safe in an asset path.
         long hash = 0xcbf29ce484222325L;
         for (char c : source.toString().toCharArray()) hash = (hash ^ c) * 0x100000001b3L;
@@ -190,6 +477,16 @@ public final class DynamicCreatureIcons {
             DynamicAssetPublisher.prepare("UI/DapperMap/creature-busy.png", new byte[]{0});
 
     public static DynamicAssetPublisher.PreparedAsset prepareAsset(String key, String playerSlug, int rgb) {
+        return prepareAsset(key, playerSlug, rgb, PLAYER_ICON_PREFIX);
+    }
+
+    /** Player head icon for a viewer: same shared build and colour variants, under the player- prefix. */
+    public static DynamicAssetPublisher.PreparedAsset preparePlayerAsset(String key, String playerSlug, int rgb) {
+        return prepareAsset(key, playerSlug, rgb, OTHER_PLAYER_ICON_PREFIX);
+    }
+
+    /** {@code pathPrefix}: per-viewer path prefix (creature- or player-); the shared caches don't depend on it. */
+    private static DynamicAssetPublisher.PreparedAsset prepareAsset(String key, String playerSlug, int rgb, String pathPrefix) {
         if (key == null || playerSlug == null) return null;
         String hex = DapperMapUtil.hex6(rgb);
         String variant = key + "-" + hex;
@@ -227,11 +524,17 @@ public final class DynamicCreatureIcons {
             if (shared == null) return null;
             ICONS.put(variant, shared);
         }
-        return shared.withPath("UI/DapperMap/creature-" + playerSlug + "-" + variant + ".png");
+        return shared.withPath(pathPrefix + playerSlug + "-" + variant + ".png");
     }
 
     /** Path prefix of every per-player creature icon ("...creature-<player>-<key>-<RRGGBB>.png"). */
     private static final String PLAYER_ICON_PREFIX = "UI/DapperMap/creature-";
+    /**
+     * Path prefix of other players' head icons ("...player-<viewer>-<key>-<RRGGBB>.png"). Kept
+     * apart from creature- so the settings preview draws them as they are (it swaps creature
+     * icons for colour samples) and keyFromPath never mistakes them for creatures.
+     */
+    private static final String OTHER_PLAYER_ICON_PREFIX = "UI/DapperMap/player-";
 
     /**
      * The creature type (icon key) of a per-player creature icon path, or null for any other
@@ -260,8 +563,10 @@ public final class DynamicCreatureIcons {
     /**
      * Bump when the icon drawing changes, so icons saved by older versions are replaced.
      * v2: names are "v2-<icon key>-<asset content hash>.png" (v1 files are pruned).
+     * v3: depth-buffered model drawing (older icons are redrawn once, then pruned).
+     * v4: shape offsets also move a node's children (as the game places them).
      */
-    private static final String CACHE_VERSION = "v2";
+    private static final String CACHE_VERSION = "v4";
     /** Largest file accepted from the cache (a base icon is ~10-15 KB). */
     private static final int CACHE_FILE_LIMIT = 512 * 1024;
     private static final byte[] PNG_SIGNATURE = {(byte) 0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n'};
@@ -296,12 +601,26 @@ public final class DynamicCreatureIcons {
     static String contentHash(Source source) {
         long hash = 0xcbf29ce484222325L;
         hash = fnv(hash, DapperMapUtil.commonAssetHash(commonName(source.model())));
-        hash = fnv(hash, DapperMapUtil.commonAssetHash(commonName(source.texture())));
+        hash = textureHash(hash, source.texture());
         for (Attachment part : source.attachments()) {
-            hash = fnv(hash, DapperMapUtil.commonAssetHash(commonName(part.model())));
-            hash = fnv(hash, DapperMapUtil.commonAssetHash(commonName(part.texture())));
+            String model = part.model() != null && part.model().startsWith(HEAD_ONLY)
+                    ? part.model().substring(HEAD_ONLY.length()) : part.model(); // Players' texture-only parts.
+            hash = fnv(hash, DapperMapUtil.commonAssetHash(commonName(model)));
+            hash = textureHash(hash, part.texture());
         }
         return Long.toHexString(hash);
+    }
+
+    /**
+     * Folds a texture reference into the content hash. A plain path (every creature texture)
+     * hashes exactly as before, so creature disk-cache names are unchanged; a tinted player
+     * texture also folds in its gradient image.
+     */
+    private static long textureHash(long hash, String reference) {
+        TextureRef ref = TextureRef.parse(reference);
+        hash = fnv(hash, DapperMapUtil.commonAssetHash(commonName(ref == null ? reference : ref.path())));
+        if (ref != null && ref.gradient() != null) hash = fnv(hash, DapperMapUtil.commonAssetHash(commonName(ref.gradient())));
+        return hash;
     }
 
     private static long fnv(long hash, String text) {
@@ -418,7 +737,8 @@ public final class DynamicCreatureIcons {
         BufferedImage face = null;
         try { face = ModelFace.render(source); } catch (RuntimeException | LinkageError ignored) { }
         if (face == null) {
-            try { face = portrait(source); } catch (RuntimeException | LinkageError ignored) { }
+            // Players have no generated portrait: a missing head goes straight to their initials.
+            if (!isPlayer(source)) try { face = portrait(source); } catch (RuntimeException | LinkageError ignored) { }
             reportFallback(source, face != null);
         }
         return base(face, initials(source));
@@ -437,6 +757,15 @@ public final class DynamicCreatureIcons {
 
     /** Logs once per creature type when no model face could be drawn (helps check mod packs). */
     private static void reportFallback(Source source, boolean portrait) {
+        if (isPlayer(source)) {
+            // One line per server run for players: their skins all share the same parts.
+            if (REPORTED.size() < 256 && REPORTED.add(PLAYER_ROLE_PREFIX)) {
+                LOGGER.at(java.util.logging.Level.INFO).log(
+                        "DapperMap: could not draw a head icon for player '%s' (model '%s', %d skin parts); using initials.",
+                        source.role().substring(PLAYER_ROLE_PREFIX.length()), source.model(), source.attachments().size());
+            }
+            return;
+        }
         String name = source.role() != null ? source.role() : String.valueOf(source.modelId());
         if (REPORTED.size() < 256 && REPORTED.add(name)) {
             LOGGER.at(java.util.logging.Level.INFO).log(
@@ -611,6 +940,8 @@ public final class DynamicCreatureIcons {
     /** "Wyvern_Fire" -> "WF", "SkeletonArcher" -> "SA", "Yeti" -> "Ye", unknown -> "?". */
     static String initials(Source source) {
         String name = source.role() != null && !source.role().isBlank() ? source.role() : source.modelId();
+        // Players: their username ("player:Scyphoz" -> "Sc").
+        if (isPlayer(source)) name = source.role().substring(PLAYER_ROLE_PREFIX.length());
         if (name == null || name.isBlank()) return "?";
         String spaced = name.replaceAll("([a-z])([A-Z])", "$1 $2");
         List<String> words = new ArrayList<>();
@@ -679,13 +1010,13 @@ public final class DynamicCreatureIcons {
 
         /** One textured parallelogram: origin, two edge vectors, and its texture rectangle. */
         private record Face(double[] origin, double[] a, double[] b, JsonObject layout,
-                            double texWidth, double texHeight, double shade, Texture texture, boolean doubleSided) {
-            double depth() { return this.origin[2] + (this.a[2] + this.b[2]) / 2; }
-        }
+                            double texWidth, double texHeight, double shade, Texture texture, boolean doubleSided) { }
         /** Decoded texture pixels. */
         private record Texture(int[] argb, int width, int height) { }
         /** A node's frame in head space: rotation matrix (row-major 3x3) and origin. */
         private record Frame(double[] rotation, double[] origin) { }
+        /** A base node attachments hook onto: its own frame, and the frame its children hang from. */
+        private record Anchor(Frame node, Frame children) { }
 
         // Face key -> origin corner signs, a-axis, b-axis (as seen from outside), texture axes.
         private static final String[] KEYS = {"front", "back", "left", "right", "top", "bottom"};
@@ -696,6 +1027,8 @@ public final class DynamicCreatureIcons {
         private static final double[] SHADE = {1.0, 0.7, 0.82, 0.82, 0.93, 0.6};
         private static final double[] IDENTITY = {1, 0, 0, 0, 1, 0, 0, 0, 1};
         private static final int FACE_LIMIT = 4096;
+        /** Depth difference (model units) treated as the same plane: the later face wins. */
+        private static final double DEPTH_TIE = 0.05;
 
         /** Three-quarter head view: turned 30 degrees (facing left, like Hytale's portraits) and seen slightly from above. */
         static final double HEAD_YAW = Math.toRadians(-30), HEAD_PITCH = Math.toRadians(12);
@@ -753,7 +1086,7 @@ public final class DynamicCreatureIcons {
         /** Renders one head subtree, or all root nodes, plus matching attachments, from the given view. */
         static BufferedImage render(Source source, JsonObject head, JsonArray roots, Texture texture, double yaw, double pitch) {
             List<Face> faces = new ArrayList<>();
-            Map<String, Frame> frames = new HashMap<>();
+            Map<String, Anchor> frames = new HashMap<>();
             Frame origin = new Frame(IDENTITY, new double[3]);
             if (head != null) {
                 // The head's own pose is ignored so it always faces the camera the same way.
@@ -771,13 +1104,24 @@ public final class DynamicCreatureIcons {
             // match at their root; full-body overlays (e.g. a mod's coat or eye layer drawn as
             // the whole model again with another texture) match deeper, at their own "Head".
             // Faces are added in attachment order, so later layers draw over earlier ones.
+            String headName = head != null ? jsonString(head.get("name")) : "Head";
             for (Attachment attachment : source.attachments()) {
                 if (faces.size() >= FACE_LIMIT) break;
-                JsonObject part = readJson(attachment.model());
+                boolean headOnly = attachment.model() != null && attachment.model().startsWith(HEAD_ONLY);
+                JsonObject part = readJson(headOnly ? attachment.model().substring(HEAD_ONLY.length()) : attachment.model());
                 if (part == null || !part.has("nodes")) continue;
                 Texture partTexture = attachment.texture() == null ? texture : readTexture(attachment.texture());
                 if (partTexture == null) continue;
-                attach(part.getAsJsonArray("nodes"), frames, partTexture, faces, 0);
+                if (headOnly) {
+                    // Texture-only skin part (e.g. a face): painted on the head box alone.
+                    JsonObject node = findNamed(part.getAsJsonArray("nodes"), headName, 0);
+                    Anchor anchor = frames.get(headName);
+                    JsonObject shape = node == null ? null : jsonObject(node.get("shape"));
+                    if (anchor != null && shape != null && !Boolean.FALSE.equals(jsonBool(shape.get("visible"))))
+                        addShape(shape, anchor.node(), partTexture, faces);
+                } else {
+                    attach(part.getAsJsonArray("nodes"), frames, partTexture, faces, 0);
+                }
             }
             return rasterise(view(faces, yaw, pitch));
         }
@@ -802,16 +1146,46 @@ public final class DynamicCreatureIcons {
             return new Frame(multiply(parent.rotation(), rotation), add(parent.origin(), apply(parent.rotation(), position)));
         }
 
-        /** Renders each attachment node whose name matches a head node, searching down the tree. */
-        private static void attach(JsonArray nodes, Map<String, Frame> frames, Texture texture, List<Face> faces, int depth) {
+        /**
+         * Renders each attachment node whose name matches a head node, searching down the tree.
+         * A matched node stands in for the base model's node of that name: its own position and
+         * offset give way to the base node's, so its children hang off the base node exactly as
+         * the base node's own children do (e.g. a haircut's "Head" root carries an authoring
+         * offset that the game ignores once the hair is on the player's head).
+         */
+        private static void attach(JsonArray nodes, Map<String, Anchor> frames, Texture texture, List<Face> faces, int depth) {
             if (nodes == null || depth > 64) return;
             for (JsonElement element : nodes) {
                 if (!element.isJsonObject()) continue;
                 JsonObject node = element.getAsJsonObject();
-                Frame frame = frames.get(jsonString(node.get("name")));
-                if (frame != null) collect(node, frame, texture, faces, null, 0); // Its children come with it.
-                else attach(node.getAsJsonArray("children"), frames, texture, faces, depth + 1);
+                Anchor anchor = frames.get(jsonString(node.get("name")));
+                if (anchor == null) {
+                    attach(node.getAsJsonArray("children"), frames, texture, faces, depth + 1);
+                    continue;
+                }
+                JsonObject shape = jsonObject(node.get("shape"));
+                if (shape != null && !Boolean.FALSE.equals(jsonBool(shape.get("visible")))) addShape(shape, anchor.node(), texture, faces);
+                JsonArray children = node.getAsJsonArray("children");
+                if (children == null) continue;
+                for (JsonElement childElement : children) {
+                    if (!childElement.isJsonObject()) continue;
+                    JsonObject child = childElement.getAsJsonObject();
+                    collect(child, child(anchor.children(), child), texture, faces, null, 1);
+                }
             }
+        }
+
+        /** Depth-first search for the first node with this name. */
+        private static JsonObject findNamed(JsonArray nodes, String name, int depth) {
+            if (nodes == null || name == null || depth > 64) return null;
+            for (JsonElement element : nodes) {
+                if (!element.isJsonObject()) continue;
+                JsonObject node = element.getAsJsonObject();
+                if (name.equals(jsonString(node.get("name")))) return node;
+                JsonObject found = findNamed(node.getAsJsonArray("children"), name, depth + 1);
+                if (found != null) return found;
+            }
+            return null;
         }
 
         /** Depth-first search for the first Head/Skull node. */
@@ -831,20 +1205,34 @@ public final class DynamicCreatureIcons {
             return null;
         }
 
-        /** Adds a node's faces (in the given frame) and recurses into its children. */
+        /**
+         * Adds a node's faces (in the given frame) and recurses into its children. A node's shape
+         * offset also moves its children: they are placed relative to the shape, not the pivot
+         * (the Player head box sits 20 units above its pivot, and its eyelids, mouth, eye and ear
+         * anchors are all positioned from the box).
+         */
         private static void collect(JsonObject node, Frame frame, Texture texture, List<Face> faces,
-                                    Map<String, Frame> frames, int depth) {
+                                    Map<String, Anchor> frames, int depth) {
             if (depth > 64 || faces.size() >= FACE_LIMIT) return;
-            if (frames != null) frames.putIfAbsent(jsonString(node.get("name")), frame);
             JsonObject shape = jsonObject(node.get("shape"));
+            Frame inner = carry(frame, shape);
+            if (frames != null) frames.putIfAbsent(jsonString(node.get("name")), new Anchor(frame, inner));
             if (shape != null && !Boolean.FALSE.equals(jsonBool(shape.get("visible")))) addShape(shape, frame, texture, faces);
             JsonArray children = node.getAsJsonArray("children");
             if (children == null) return;
             for (JsonElement element : children) {
                 if (!element.isJsonObject()) continue;
                 JsonObject child = element.getAsJsonObject();
-                collect(child, child(frame, child), texture, faces, frames, depth + 1);
+                collect(child, child(inner, child), texture, faces, frames, depth + 1);
             }
+        }
+
+        /** The frame a node's children hang from: the node's frame moved by its shape offset. */
+        private static Frame carry(Frame frame, JsonObject shape) {
+            if (shape == null || shape.get("offset") == null) return frame;
+            double[] offset = vector(shape.get("offset"), 0);
+            if (offset[0] == 0 && offset[1] == 0 && offset[2] == 0) return frame;
+            return new Frame(frame.rotation(), add(frame.origin(), apply(frame.rotation(), offset)));
         }
 
         /** Converts a box or quad shape into textured faces. */
@@ -919,11 +1307,17 @@ public final class DynamicCreatureIcons {
             }
             double span = Math.max(maxX - minX, maxY - minY);
             if (visible.isEmpty() || !(span > 0.5)) return null;
-            visible.sort(java.util.Comparator.comparingDouble(Face::depth)); // Far faces first.
+            // No depth sort: a per-pixel depth buffer decides what is in front. Sorting whole faces
+            // by their centres failed for layered shells (a player's hair just above the scalp:
+            // the large head top could sort "nearer" and paint over the hair). Faces keep their
+            // added order, so an overlay in the same plane (a face texture, an attachment layer)
+            // still draws over the part before it.
 
             int size = FACE_RASTER;
             double scale = size * 0.96 / span, centreX = (minX + maxX) / 2, centreY = (minY + maxY) / 2;
             int[] pixels = new int[size * size];
+            float[] depth = new float[size * size]; // Nearest drawn depth per pixel (larger = nearer the camera).
+            java.util.Arrays.fill(depth, Float.NEGATIVE_INFINITY);
             for (Face face : visible) {
                 // Screen-space parallelogram: p = origin + s*A + t*B, s and t in [0, 1).
                 double ox = face.origin()[0], oy = -face.origin()[1];
@@ -948,6 +1342,11 @@ public final class DynamicCreatureIcons {
                         double dx = (px + 0.5 - size / 2.0) / scale + centreX - ox;
                         double s = (dx * by - bx * dy) / det, t = (ax * dy - dx * ay) / det;
                         if (s < 0 || s >= 1 || t < 0 || t >= 1) continue;
+                        // Depth of this point on the face; skip it when something nearer is already drawn
+                        // (DEPTH_TIE lets a later face in the same plane draw over an earlier one).
+                        double z = face.origin()[2] + s * face.a()[2] + t * face.b()[2];
+                        int at = py * size + px;
+                        if (z < depth[at] - DEPTH_TIE) continue;
                         if (mirrorX) s = 1 - s;
                         if (mirrorY) t = 1 - t;
                         double w = face.texWidth(), h = face.texHeight();
@@ -962,7 +1361,8 @@ public final class DynamicCreatureIcons {
                         if (u < 0 || v < 0 || u >= texture.width() || v >= texture.height()) continue;
                         int argb = texture.argb()[v * texture.width() + u];
                         if ((argb >>> 24) < 128) continue; // Alpha cut-out, as in game.
-                        pixels[py * size + px] = 0xFF000000 | shade(argb, face.shade());
+                        pixels[at] = 0xFF000000 | shade(argb, face.shade());
+                        depth[at] = (float) Math.max(depth[at], z);
                     }
                 }
             }
@@ -985,11 +1385,53 @@ public final class DynamicCreatureIcons {
             return (r << 16) | (g << 8) | b;
         }
 
-        private static Texture readTexture(String path) {
+        /** Reads a texture; a tinted reference (player skin parts) is coloured through its gradient. */
+        private static Texture readTexture(String reference) {
+            TextureRef ref = TextureRef.parse(reference);
+            if (ref == null) return null;
+            BufferedImage image = readImage(ref.path());
+            if (image == null) return null;
+            int width = image.getWidth(), height = image.getHeight();
+            int[] argb = image.getRGB(0, 0, width, height, null, 0, width);
+            if (ref.gradient() != null || ref.fallbackRgb() >= 0) tint(argb, ref);
+            return new Texture(argb, width, height);
+        }
+
+        /**
+         * Colours a greyscale texture the way the client does for skin parts: each grey level
+         * picks its colour from the gradient image (dark end first). Pixels that are not grey
+         * (painted details) keep their colour. Without a readable gradient, the part's base
+         * colour is multiplied in instead, so the icon still has roughly the right colour.
+         */
+        private static void tint(int[] argb, TextureRef ref) {
+            int[] ramp = gradientRamp(ref.gradient());
+            int base = ref.fallbackRgb();
+            if (ramp == null && base < 0) return;
+            for (int i = 0; i < argb.length; i++) {
+                int pixel = argb[i], alpha = pixel >>> 24;
+                if (alpha == 0) continue;
+                int r = (pixel >>> 16) & 0xFF, g = (pixel >>> 8) & 0xFF, b = pixel & 0xFF;
+                if (Math.abs(r - g) > 2 || Math.abs(g - b) > 2) continue; // Not grey: left as drawn.
+                int colour = ramp != null ? ramp[r]
+                        : ((((base >>> 16) & 0xFF) * r / 255) << 16) | ((((base >>> 8) & 0xFF) * r / 255) << 8) | ((base & 0xFF) * r / 255);
+                argb[i] = (alpha << 24) | (colour & 0xFFFFFF);
+            }
+        }
+
+        /** 256 colours sampled along a gradient image's long side, or null when unreadable. */
+        private static int[] gradientRamp(String path) {
+            if (path == null) return null;
             BufferedImage image = readImage(path);
             if (image == null) return null;
             int width = image.getWidth(), height = image.getHeight();
-            return new Texture(image.getRGB(0, 0, width, height, null, 0, width), width, height);
+            boolean horizontal = width >= height;
+            int length = horizontal ? width : height;
+            int[] ramp = new int[256];
+            for (int level = 0; level < 256; level++) {
+                int at = length <= 1 ? 0 : level * (length - 1) / 255;
+                ramp[level] = horizontal ? image.getRGB(at, height / 2) : image.getRGB(width / 2, at);
+            }
+            return ramp;
         }
 
         private static JsonObject readJson(String path) {

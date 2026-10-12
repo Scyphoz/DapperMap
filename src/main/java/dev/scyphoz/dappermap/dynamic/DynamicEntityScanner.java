@@ -57,10 +57,12 @@ public final class DynamicEntityScanner {
     /**
      * @param threats per-viewer colour cache (may be null to classify every creature afresh).
      * @param icons   per-viewer creature icon keys, used when Creature Markers is set to Icons.
+     * @param playerIcons per-viewer player head icon keys, used when Player Markers is set to Icons.
      */
     public static List<DynamicMinimapMarker> scan(Store<EntityStore> store, Ref<EntityStore> playerRef, Vector3d playerPosition,
                                                   double radius, DynamicMinimapSetting settings, ThreatCache threats,
-                                                  DynamicCreatureIcons.KeyCache icons) {
+                                                  DynamicCreatureIcons.KeyCache icons,
+                                                  DynamicCreatureIcons.PlayerKeyCache playerIcons) {
         ArrayList<DynamicMinimapMarker> markers = new ArrayList<>();
         double radiusSq = radius * radius;
         double playerX = playerPosition.x();
@@ -162,54 +164,78 @@ public final class DynamicEntityScanner {
 
         PlayerVisibility visibility = settings.showOtherPlayers ? PlayerVisibility.forViewer(store, playerRef) : null;
         if (visibility != null) {
-            Color playerColor = settings.colours.awt(PLAYERS, 255);
-            List<Ref<EntityStore>> nearby = nearby(store, playerPosition, radius, 0, false);
-            if (nearby != null) {
-                for (Ref<EntityStore> other : nearby) {
-                    try {
-                        if (!other.isValid()) continue;
-                        TransformComponent transform = store.getComponent(other, TransformComponent.getComponentType());
-                        if (transform == null || store.getComponent(other, Player.getComponentType()) == null) continue;
-                        Vector3d position = transform.getPosition();
-                        double dx = position.x() - playerX, dz = position.z() - playerZ;
-                        double distance = dx * dx + dz * dz;
-                        // Cheap distance test first; visibility lookups only for candidates.
-                        if (distance >= .01 && distance <= radiusSq
-                                && visibility.visible(store.getComponent(other, PlayerRef.getComponentType()),
-                                store.getComponent(other, Spectating.getComponentType()) != null))
-                            markers.add(DynamicMinimapMarker.dot(position.x(), position.z(), playerColor, 11));
-                    } catch (RuntimeException ignored) { }
-                }
-            } else {
+            // Nearby player entities: spatial index first, chunk scan as the fallback.
+            List<Ref<EntityStore>> others = nearby(store, playerPosition, radius, 0, false);
+            if (others == null) {
+                List<Ref<EntityStore>> found = new ArrayList<>();
                 try {
                     store.forEachChunk(Player.getComponentType(), (chunk, commandBuffer) -> {
-                        for(int i = 0; i < chunk.size(); ++i) {
+                        for (int i = 0; i < chunk.size(); ++i) {
                             try {
                                 TransformComponent transform = chunk.getComponent(i, TransformComponent.getComponentType());
-                                if (transform != null) {
-                                    Vector3d position = transform.getPosition();
-                                    double dx = position.x() - playerX;
-                                    double dz = position.z() - playerZ;
-                                    double distanceSq = dx * dx + dz * dz;
-                                    if (distanceSq >= 0.01 && distanceSq <= radiusSq
-                                            && visibility.visible(chunk.getComponent(i, PlayerRef.getComponentType()),
-                                            chunk.getComponent(i, Spectating.getComponentType()) != null)) {
-                                        markers.add(DynamicMinimapMarker.dot(position.x(), position.z(), playerColor, 11));
-                                    }
-                                }
+                                if (transform == null) continue;
+                                Vector3d position = transform.getPosition();
+                                double dx = position.x() - playerX, dz = position.z() - playerZ;
+                                if (dx * dx + dz * dz <= radiusSq) found.add(chunk.getReferenceTo(i));
                             } catch (Exception ignored) {
                                 // One unreadable entity must not end the chunk scan.
                             }
                         }
-
                     });
                 } catch (Exception ignored) {
                     // Store not readable this tick: no player markers this scan.
                 }
+                others = found;
             }
+            addPlayers(markers, others, store, settings, visibility, playerIcons, playerX, playerZ, radiusSq);
+        } else if (playerIcons != null) {
+            playerIcons.clear(); // Players hidden: don't keep their entity references alive.
         }
 
         return markers;
+    }
+
+    /**
+     * Adds a marker for each visible player: a head icon (or dot) edged in the player colour, or
+     * in the attacking colour while that player has hit the viewer in the last 15 s (PvP).
+     * Dead players are left off until they respawn. World thread.
+     */
+    private static void addPlayers(List<DynamicMinimapMarker> markers, List<Ref<EntityStore>> others,
+                                   Store<EntityStore> store, DynamicMinimapSetting settings, PlayerVisibility visibility,
+                                   DynamicCreatureIcons.PlayerKeyCache playerIcons,
+                                   double playerX, double playerZ, double radiusSq) {
+        Color playerColour = settings.colours.awt(PLAYERS, 255);
+        Color attackingColour = settings.colours.awt(HOSTILE_ACTIVE, 255);
+        boolean useIcons = settings.playerIcons && playerIcons != null;
+        // Players stand out a little from creature icons of the same map size.
+        int iconSize = DynamicCreatureIcons.markerSize(settings) + 2;
+        // Most of the time nobody has hit the viewer: skip the per-player lookups entirely.
+        boolean attacked = PlayerAttacks.anyAttackers(visibility.viewer);
+        long now = attacked ? System.currentTimeMillis() : 0L;
+        for (Ref<EntityStore> other : others) {
+            try {
+                if (!other.isValid()) continue;
+                TransformComponent transform = store.getComponent(other, TransformComponent.getComponentType());
+                if (transform == null || store.getComponent(other, Player.getComponentType()) == null) continue;
+                Vector3d position = transform.getPosition();
+                double dx = position.x() - playerX, dz = position.z() - playerZ;
+                double distance = dx * dx + dz * dz;
+                // Cheap distance test first; visibility lookups only for candidates.
+                if (distance < .01 || distance > radiusSq) continue;
+                PlayerRef ref = store.getComponent(other, PlayerRef.getComponentType());
+                if (!visibility.visible(ref, store.getComponent(other, Spectating.getComponentType()) != null)) continue;
+                // Dead (death screen): no marker until they respawn.
+                if (store.getComponent(other, com.hypixel.hytale.server.core.modules.entity.damage.DeathComponent.getComponentType()) != null) continue;
+                boolean attacking = attacked && PlayerAttacks.isAttacking(visibility.viewer, ref.getUuid(), now);
+                Color colour = attacking ? attackingColour : playerColour;
+                markers.add(useIcons
+                        ? DynamicMinimapMarker.player(position.x(), position.z(),
+                        playerIcons.key(other, ref.getUsername(), store, settings.playerIconHelmets), colour, iconSize)
+                        : DynamicMinimapMarker.playerDot(position.x(), position.z(), colour, 11));
+            } catch (RuntimeException ignored) { }
+        }
+        // Keep only the players of this scan (dots mode empties it).
+        if (playerIcons != null) playerIcons.endScan();
     }
 
     /**
@@ -246,6 +272,111 @@ public final class DynamicEntityScanner {
             if (other == null || other.getUuid() == null || other.getUuid().equals(this.viewer)) return false;
             if (otherSpectating && !this.viewerSpectating) return false;
             return this.hidden == null || !this.hidden.isPlayerHidden(other.getUuid());
+        }
+    }
+
+    /**
+     * Which players have recently hit which (PvP). A viewer's minimap shows a player who hit
+     * them in the attacking colour until that player has not hit them for {@link #HOLD_MS}, or
+     * dies. Filled by an ECS damage system that runs after Hytale's own filters, so cancelled
+     * hits (PvP off in the world, spawn protection, invulnerable players) never count.
+     * Hits land on world threads and are read on others: concurrent maps, a few entries each.
+     */
+    public static final class PlayerAttacks {
+        /** A player stays "attacking" this long after their last hit on the viewer. */
+        static final long HOLD_MS = 15_000L;
+        /** Victim -> (attacker -> time of the attacker's last hit on them). */
+        private static final ConcurrentHashMap<UUID, ConcurrentHashMap<UUID, Long>> HITS = new ConcurrentHashMap<>();
+
+        private PlayerAttacks() { }
+
+        /** Registers the damage and death systems; called once from plugin setup. */
+        public static void register(com.hypixel.hytale.component.ComponentRegistryProxy<EntityStore> registry) {
+            registry.registerSystem(new HitSystem());
+            registry.registerSystem(new DeathSystem());
+        }
+
+        static void recordHit(UUID victim, UUID attacker, long now) {
+            var attackers = HITS.computeIfAbsent(victim, ignored -> new ConcurrentHashMap<>());
+            attackers.values().removeIf(at -> now - at >= HOLD_MS); // Small map: drop stale hits here.
+            attackers.put(attacker, now);
+        }
+
+        /** True while {@code attacker} has hit {@code victim} within the last HOLD_MS. */
+        static boolean isAttacking(UUID victim, UUID attacker, long now) {
+            var attackers = victim == null || attacker == null ? null : HITS.get(victim);
+            Long at = attackers == null ? null : attackers.get(attacker);
+            if (at == null) return false;
+            if (now - at < HOLD_MS) return true;
+            attackers.remove(attacker, at); // Expired: forget it.
+            return false;
+        }
+
+        /** True when anyone has hit {@code victim} recently (skips per-player lookups otherwise). */
+        static boolean anyAttackers(UUID victim) {
+            var attackers = victim == null ? null : HITS.get(victim);
+            return attackers != null && !attackers.isEmpty();
+        }
+
+        /** A dying player stops counting as anyone's attacker. */
+        static void attackerDied(UUID attacker) {
+            for (var attackers : HITS.values()) attackers.remove(attacker);
+        }
+
+        /** The player left: forget hits on them and by them. */
+        public static void forget(UUID player) {
+            if (player == null) return;
+            HITS.remove(player);
+            attackerDied(player);
+        }
+
+        /** Records player-on-player hits (projectiles count for their shooter). World thread. */
+        static final class HitSystem extends com.hypixel.hytale.server.core.modules.entity.damage.DamageEventSystem {
+            @Override public com.hypixel.hytale.component.query.Query<EntityStore> getQuery() {
+                return PlayerRef.getComponentType();
+            }
+
+            /** Inspect group: runs after the filters, so only damage that really lands is seen. */
+            @Override public com.hypixel.hytale.component.SystemGroup<EntityStore> getGroup() {
+                return com.hypixel.hytale.server.core.modules.entity.damage.DamageModule.get().getInspectDamageGroup();
+            }
+
+            @Override public void handle(int index, com.hypixel.hytale.component.ArchetypeChunk<EntityStore> chunk,
+                                         Store<EntityStore> store, com.hypixel.hytale.component.CommandBuffer<EntityStore> buffer,
+                                         com.hypixel.hytale.server.core.modules.entity.damage.Damage damage) {
+                try {
+                    // Cheapest test first: most damage is from creatures, falls or the world.
+                    if (!(damage.getSource() instanceof com.hypixel.hytale.server.core.modules.entity.damage.Damage.EntitySource source)) return;
+                    Ref<EntityStore> attackerRef = source.getRef();
+                    if (attackerRef == null || !attackerRef.isValid()) return;
+                    PlayerRef attacker = buffer.getComponent(attackerRef, PlayerRef.getComponentType());
+                    if (attacker == null) return; // Not a player.
+                    PlayerRef victim = chunk.getComponent(index, PlayerRef.getComponentType());
+                    if (victim == null || victim.getUuid() == null || attacker.getUuid() == null
+                            || victim.getUuid().equals(attacker.getUuid())) return;
+                    var world = store.getExternalData().getWorld();
+                    if (world != null && !world.getWorldConfig().isPvpEnabled()) return; // Belt and braces: PvP off.
+                    recordHit(victim.getUuid(), attacker.getUuid(), System.currentTimeMillis());
+                } catch (RuntimeException ignored) {
+                    // Never disturb the damage pipeline.
+                }
+            }
+        }
+
+        /** Clears a player's attacks on everyone when they die. World thread. */
+        static final class DeathSystem extends com.hypixel.hytale.server.core.modules.entity.damage.DeathSystems.OnDeathSystem {
+            @Override public com.hypixel.hytale.component.query.Query<EntityStore> getQuery() {
+                return PlayerRef.getComponentType();
+            }
+
+            @Override public void onComponentAdded(Ref<EntityStore> ref, com.hypixel.hytale.server.core.modules.entity.damage.DeathComponent death,
+                                                   Store<EntityStore> store, com.hypixel.hytale.component.CommandBuffer<EntityStore> buffer) {
+                try {
+                    if (HITS.isEmpty()) return;
+                    PlayerRef player = buffer.getComponent(ref, PlayerRef.getComponentType());
+                    if (player != null && player.getUuid() != null) attackerDied(player.getUuid());
+                } catch (RuntimeException ignored) { }
+            }
         }
     }
 

@@ -269,6 +269,8 @@ public final class DynamicMinimapSettingsStore {
         if (all || s.creatureMarkerLimit != b.creatureMarkerLimit) field(out, "creatureMarkerLimit", s.creatureMarkerLimit);
         if (all || s.creatureIcons != b.creatureIcons) field(out, "creatureIcons", s.creatureIcons);
         if (all || s.hostileCreaturesOnly != b.hostileCreaturesOnly) field(out, "hostileCreaturesOnly", s.hostileCreaturesOnly);
+        if (all || s.playerIcons != b.playerIcons) field(out, "playerIcons", s.playerIcons);
+        if (all || s.playerIconHelmets != b.playerIconHelmets) field(out, "playerIconHelmets", s.playerIconHelmets);
         if (all || s.showDeathMarker != b.showDeathMarker) field(out, "showDeathMarker", s.showDeathMarker);
         if (all || s.showWorldMapMarkers != b.showWorldMapMarkers) field(out, "showWorldMapMarkers", s.showWorldMapMarkers);
         if (all || s.limitMobHeight != b.limitMobHeight) field(out, "limitMobHeight", s.limitMobHeight);
@@ -369,6 +371,9 @@ public final class DynamicMinimapSettingsStore {
                 // Files without this key (pre-v12) take the inherited default (icons, unless an admin changed it).
                 if ((bool = extractBool(json, "creatureIcons")) != null) settings.creatureIcons = bool;
                 if ((bool = extractBool(json, "hostileCreaturesOnly")) != null) settings.hostileCreaturesOnly = bool;
+                // Files without these keys (before 3.1.0 player icons) inherit the defaults (icons, helmets shown).
+                if ((bool = extractBool(json, "playerIcons")) != null) settings.playerIcons = bool;
+                if ((bool = extractBool(json, "playerIconHelmets")) != null) settings.playerIconHelmets = bool;
                 // Legacy files hold the old 32-block default the player never chose: 16 applies instead.
                 if ((number = extractInt(json, "mobVerticalRange")) != null
                         && !(legacy && number == RETIRED_VERTICAL_RANGE_DEFAULT)) settings.mobVerticalRange = number;

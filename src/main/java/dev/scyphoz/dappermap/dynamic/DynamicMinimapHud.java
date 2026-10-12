@@ -28,6 +28,11 @@ public final class DynamicMinimapHud extends CustomUIHud {
      * every in-map marker), so none are lost.
      */
     public static final int THREAT_MARKER_SLOTS = 32;
+    /**
+     * Other players (head icons or dots), drawn above every creature marker. Any beyond this
+     * many fall back to the threat, then the normal in-map layer, so none are lost.
+     */
+    public static final int PLAYER_MARKER_SLOTS = 16;
     /** Markers one projection can place (in-map + edge); the threat layer takes some in-map ones. */
     public static final int MARKER_SLOTS = MAP_MARKER_SLOTS + EDGE_MARKER_SLOTS;
     /** Largest in-map marker movement (logical px) that does not trigger an Anchor update. */
@@ -82,6 +87,9 @@ public final class DynamicMinimapHud extends CustomUIHud {
     /** Emitted after mapLayer in the same group, so its markers draw on top. */
     private final MarkerLayer threatLayer = new MarkerLayer(false, THREAT_MARKER_SLOTS,
             "WayfinderMmThr", "#WayfinderMmRoot #WayfinderMmClip #WayfinderMmMarkers #");
+    /** Emitted after threatLayer, so other players draw above every creature. */
+    private final MarkerLayer playerLayer = new MarkerLayer(false, PLAYER_MARKER_SLOTS,
+            "WayfinderMmPly", "#WayfinderMmRoot #WayfinderMmClip #WayfinderMmMarkers #");
 
     // All constants below are logical HUD units. They are converted to display units
     // only when markup/Anchor values are produced.
@@ -297,7 +305,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
     public DynamicMinimapRenderer.LiveSnapshot snapshot(byte[] terrain, double selfAngle) {
         if (!this.built || !this.terrainShown || terrain == null) return null;
         java.util.List<DynamicMinimapRenderer.PreviewMarker> markers = new java.util.ArrayList<>();
-        for (MarkerLayer layer : new MarkerLayer[]{this.mapLayer, this.threatLayer, this.edgeLayer}) {
+        for (MarkerLayer layer : new MarkerLayer[]{this.mapLayer, this.threatLayer, this.playerLayer, this.edgeLayer}) {
             for (int i = 0; i < layer.active; i++) {
                 if (!layer.visible[i] || layer.path[i] == null) continue;
                 byte[] icon = DynamicAssetPublisher.markerBytes(this.uuid, layer.path[i]);
@@ -570,6 +578,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
     public void invalidateMarkerSlots() {
         this.mapLayer.forget();
         this.threatLayer.forget();
+        this.playerLayer.forget();
         this.edgeLayer.forget();
     }
 
@@ -583,24 +592,29 @@ public final class DynamicMinimapHud extends CustomUIHud {
         // Scratch arrays reused on every update (world thread only), cleared at the end.
         Slot[] map = this.scratchMap;
         Slot[] threat = this.scratchThreat;
+        Slot[] players = this.scratchPlayers;
         Slot[] edge = this.scratchEdge;
-        int mapCount = 0, threatCount = 0, edgeCount = 0;
+        int mapCount = 0, threatCount = 0, playerCount = 0, edgeCount = 0;
         if (slots != null) {
             for (Slot slot : slots) {
                 if (slot == null || slot.path == null) continue;
                 if (slot.fixed) { if (edgeCount < edge.length) edge[edgeCount++] = slot; }
-                // Hostile/attacking creatures use the top layer while it has room.
-                else if (slot.threat && threatCount < threat.length) threat[threatCount++] = slot;
+                // Other players use the topmost layer while it has room.
+                else if (slot.player && playerCount < players.length) players[playerCount++] = slot;
+                    // Hostile/attacking creatures (and any overflow players) use the threat layer.
+                else if ((slot.threat || slot.player) && threatCount < threat.length) threat[threatCount++] = slot;
                 else if (mapCount < map.length) map[mapCount++] = slot;
             }
         }
         UICommandBuilder builder = new AnchorCommandBuilder();
         boolean changed = this.applyArranged(builder, this.mapLayer, map, mapCount);
         changed |= this.applyArranged(builder, this.threatLayer, threat, threatCount);
+        changed |= this.applyArranged(builder, this.playerLayer, players, playerCount);
         changed |= this.applyLayer(builder, this.edgeLayer, edge, edgeCount);
         if (changed) this.update(false, builder);
         java.util.Arrays.fill(map, null);
         java.util.Arrays.fill(threat, null);
+        java.util.Arrays.fill(players, null);
         java.util.Arrays.fill(edge, null);
     }
 
@@ -617,6 +631,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
 
     private final Slot[] scratchMap = new Slot[MAP_MARKER_SLOTS];
     private final Slot[] scratchThreat = new Slot[THREAT_MARKER_SLOTS];
+    private final Slot[] scratchPlayers = new Slot[PLAYER_MARKER_SLOTS];
     private final Slot[] scratchEdge = new Slot[EDGE_MARKER_SLOTS];
     private final Slot[] scratchPlaced = new Slot[MAP_MARKER_SLOTS];
     private final boolean[] scratchTaken = new boolean[MAP_MARKER_SLOTS];
@@ -830,6 +845,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
             this.invalidateMarkerSlots();
             this.mapLayer.active = 0;
             this.threatLayer.active = 0;
+            this.playerLayer.active = 0;
             this.edgeLayer.active = 0;
         }
     }
@@ -1113,6 +1129,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
 
         appendMarkerLayer(out, this.mapLayer);
         appendMarkerLayer(out, this.threatLayer); // After the map layer: hostiles draw on top.
+        appendMarkerLayer(out, this.playerLayer); // Last: other players draw above every creature.
         out.append("} "); // Markers
         out.append("} "); // Pan
         out.append("} "); // Clip
@@ -1598,8 +1615,10 @@ public final class DynamicMinimapHud extends CustomUIHud {
         public final int top;
         public final int size;
         public final boolean fixed;
-        /** Hostile or attacking creature: placed in the top marker layer. */
+        /** Hostile or attacking creature: placed in the threat marker layer. */
         public final boolean threat;
+        /** Another player: placed in the player layer, above every creature. */
+        public final boolean player;
 
         public Slot(String path, int left, int top, int size) {
             this(path, left, top, size, false, false);
@@ -1610,12 +1629,17 @@ public final class DynamicMinimapHud extends CustomUIHud {
         }
 
         public Slot(String path, int left, int top, int size, boolean fixed, boolean threat) {
+            this(path, left, top, size, fixed, threat, false);
+        }
+
+        public Slot(String path, int left, int top, int size, boolean fixed, boolean threat, boolean player) {
             this.path = path;
             this.left = left;
             this.top = top;
             this.size = size;
             this.fixed = fixed;
             this.threat = threat;
+            this.player = player;
         }
     }
 }

@@ -230,7 +230,8 @@ public final class DynamicAssetPublisher {
     private static void rememberMarker(UUID uuid, String path, byte[] data) {
         if (uuid == null || !path.startsWith("UI/DapperMap/")
                 || !(path.contains("/mk-") || path.contains("/bettermap-")
-                || path.contains("/worldmap-") || path.contains("/creature-"))) return;
+                || path.contains("/worldmap-") || path.contains("/creature-")
+                || path.contains("/player-"))) return; // Player head icons show in the settings preview too.
         Map<String, byte[]> markers = MARKER_BYTES.computeIfAbsent(uuid, ignored -> newMarkerStore());
         synchronized (markers) {
             markers.put(path, data); // Reference, not a copy: the bytes are immutable.

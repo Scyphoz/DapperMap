@@ -83,6 +83,8 @@ public class DapperMapCommand extends AbstractPlayerCommand {
         addInt(parent, scope, "creature-limit", "Set visible creature markers: 16, 32 or 64", "creature-marker-limit");
         addString(parent, scope, "creature-markers", "Show creatures as face icons or dots", new String[]{"icons", "dots"}, "creature-icons", "creature-style");
         addString(parent, scope, "creature-filter", "Show all creatures or only hostile ones", new String[]{"all", "hostile"}, "creatures-shown", "hostile-only");
+        addString(parent, scope, "player-markers", "Show players as head icons or dots", new String[]{"icons", "dots"}, "player-icons", "player-style");
+        addString(parent, scope, "player-helmets", "Show or hide helmets on player icons", new String[]{"shown", "hidden"}, "player-helmet", "helmets");
         addString(parent, scope, "height", "Toggle creature height detection", ON_OFF, "height-detection");
         addString(parent, scope, "clock", "Configure World Time and Clock Format", new String[]{"on", "off", "12", "24"}, "world-time");
         addString(parent, scope, "coordinates", "Toggle coordinates", ON_OFF, "coords");
@@ -158,6 +160,16 @@ public class DapperMapCommand extends AbstractPlayerCommand {
                     if (!setCreatureFilter(settings, value)) { context.sendMessage(Message.raw("Usage: /mm creature-filter all|hostile")); return; }
                     this.sessions.applySettings(playerRef, settings);
                     context.sendMessage(Message.raw("DapperMap creatures shown: " + creatureFilterName(settings) + "."));
+                    break;
+                case "player-markers":
+                    if (!setPlayerStyle(settings, value)) { context.sendMessage(Message.raw("Usage: /mm player-markers icons|dots")); return; }
+                    this.sessions.applySettings(playerRef, settings);
+                    context.sendMessage(Message.raw("DapperMap player markers: " + playerStyleName(settings) + "."));
+                    break;
+                case "player-helmets":
+                    if (!setPlayerHelmets(settings, value)) { context.sendMessage(Message.raw("Usage: /mm player-helmets shown|hidden")); return; }
+                    this.sessions.applySettings(playerRef, settings);
+                    context.sendMessage(Message.raw("DapperMap player icon helmets: " + playerHelmetsName(settings) + "."));
                     break;
                 case "on":
                     settings.enabled = true;
@@ -414,6 +426,8 @@ public class DapperMapCommand extends AbstractPlayerCommand {
             case "creature-limit" -> { changed=setCreatureLimit(settings,value); usage="admin creature-limit 16|32|64"; }
             case "creature-markers" -> { changed=setCreatureStyle(settings,value); usage="admin creature-markers icons|dots"; }
             case "creature-filter" -> { changed=setCreatureFilter(settings,value); usage="admin creature-filter all|hostile"; }
+            case "player-markers" -> { changed=setPlayerStyle(settings,value); usage="admin player-markers icons|dots"; }
+            case "player-helmets" -> { changed=setPlayerHelmets(settings,value); usage="admin player-helmets shown|hidden"; }
             case "status" -> { context.sendMessage(Message.raw("DapperMap admin defaults: " + status(settings)));
                 context.sendMessage(Message.raw("Server limits: " + (config.hasLimits() ? config.describeLimits() : "none")
                         + "; load shedding " + (config.isLoadShedding() ? "on" : "off") + ".")); return; }
@@ -710,6 +724,34 @@ public class DapperMapCommand extends AbstractPlayerCommand {
         return settings.hostileCreaturesOnly ? "hostile" : "all";
     }
 
+    /** Player marker style for both scopes: head icons drawn from each player's skin, or dots. */
+    private static boolean setPlayerStyle(DynamicMinimapSetting settings, String value) {
+        switch (value) {
+            case "dots", "dot", "off" -> settings.playerIcons = false;
+            case "icons", "icon", "heads", "on" -> settings.playerIcons = true;
+            default -> { return false; }
+        }
+        return true;
+    }
+
+    private static String playerStyleName(DynamicMinimapSetting settings) {
+        return settings.playerIcons ? "icons" : "dots";
+    }
+
+    /** Helmets on player head icons for both scopes: shown (as worn) or hidden (bare head). */
+    private static boolean setPlayerHelmets(DynamicMinimapSetting settings, String value) {
+        switch (value) {
+            case "shown", "show", "on", "with" -> settings.playerIconHelmets = true;
+            case "hidden", "hide", "off", "without" -> settings.playerIconHelmets = false;
+            default -> { return false; }
+        }
+        return true;
+    }
+
+    private static String playerHelmetsName(DynamicMinimapSetting settings) {
+        return settings.playerIconHelmets ? "shown" : "hidden";
+    }
+
     private static boolean setPanelAlignment(DynamicMinimapSetting settings, String value) {
         switch (value) {
             case "left": settings.infoPanelTextAlignment = DynamicMinimapSetting.INFO_ALIGN_LEFT; return true;
@@ -909,6 +951,8 @@ public class DapperMapCommand extends AbstractPlayerCommand {
                 + ", creature-limit=" + settings.creatureMarkerLimit
                 + ", creature-markers=" + creatureStyleName(settings)
                 + ", creature-filter=" + creatureFilterName(settings)
+                + ", player-markers=" + playerStyleName(settings)
+                + ", player-helmets=" + playerHelmetsName(settings)
                 + ", markers[players=" + settings.showOtherPlayers
                 + ", entities=" + settings.showEntities
                 + ", death=" + settings.showDeathMarker
@@ -937,6 +981,7 @@ public class DapperMapCommand extends AbstractPlayerCommand {
         context.sendMessage(Message.raw("/mm info on|off | /mm panel below|above|left|right"));
         context.sendMessage(Message.raw("/mm panel-alignment left|centre|right | /mm creature-limit 16|32|64"));
         context.sendMessage(Message.raw("/mm creature-markers icons|dots | /mm creature-filter all|hostile"));
+        context.sendMessage(Message.raw("/mm player-markers icons|dots | /mm player-helmets shown|hidden"));
         context.sendMessage(Message.raw("/mm markers players|entities|death|worldmap on|off"));
         context.sendMessage(Message.raw("/mm height on|off | /mm height-range <4..256>"));
         context.sendMessage(Message.raw("/mm coordinates on|off | /mm clock on|off|12|24"));
@@ -1001,12 +1046,13 @@ public class DapperMapCommand extends AbstractPlayerCommand {
                 // DapperMapPermissions.player(...) registers it against the default player
                 // group via PermissionsModule, not via setPermissionGroups — see that
                 // method's javadoc for why setPermissionGroups was dropped here.
-                // Creature options share the existing "markers" node (no new node to grant).
+                // Creature and player marker options share the existing "markers" node (no new node to grant).
                 this.requirePermission(DapperMapPermissions.player(switch (name.toLowerCase(java.util.Locale.ROOT)) {
                     // on/off change the same setting as toggle: one node, as on the settings page.
                     case "on", "off" -> "toggle";
                     case "panel-alignment" -> "panel";
-                    case "creature-limit", "creature-markers", "creature-filter" -> "markers";
+                    case "creature-limit", "creature-markers", "creature-filter",
+                         "player-markers", "player-helmets" -> "markers";
                     default -> name.toLowerCase(java.util.Locale.ROOT);
                 }));
             }
