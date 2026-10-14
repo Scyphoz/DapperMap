@@ -1,15 +1,18 @@
 package dev.scyphoz.dappermap.integration;
 
+import com.hypixel.hytale.protocol.packets.worldmap.CompassAlertComponent;
 import com.hypixel.hytale.protocol.packets.worldmap.MapMarker;
 import com.hypixel.hytale.protocol.packets.worldmap.MapMarkerComponent;
+import com.hypixel.hytale.protocol.packets.worldmap.MapMarkerIconSize;
 import com.hypixel.hytale.protocol.packets.worldmap.TintComponent;
 import com.hypixel.hytale.server.core.asset.common.CommonAssetRegistry;
 import com.hypixel.hytale.server.core.entity.entities.Player;
 import com.hypixel.hytale.server.core.universe.PlayerRef;
 import com.hypixel.hytale.server.core.universe.world.World;
+import com.hypixel.hytale.server.core.universe.world.worldmap.WorldMapManager;
+import com.hypixel.hytale.server.core.universe.world.worldmap.markers.MapMarkerOverride;
 import com.hypixel.hytale.server.core.universe.world.worldmap.markers.MarkersCollector;
 import dev.scyphoz.dappermap.dynamic.DynamicMinimapMarker;
-import dev.scyphoz.dappermap.dynamic.DynamicMinimapColours;
 import dev.scyphoz.dappermap.dynamic.DynamicAssetPublisher;
 import dev.scyphoz.dappermap.util.DapperMapUtil;
 import java.util.ArrayList;
@@ -41,13 +44,8 @@ public final class NativeWorldMapIntegration {
     private static final java.util.regex.Pattern ICON_PATH = java.util.regex.Pattern.compile("[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*\\.png");
     private static final String ICON_PREFIX = "UI/WorldMap/MapMarkers/";
     private static final int MARKER_SIZE = 18;
-    /** Markers Hytale flags as Major (0.7.0+, e.g. objective targets) are drawn a little larger. */
+    /** Markers Hytale flags as Major (block and objective markers with IconSize Major) are drawn a little larger. */
     private static final int MAJOR_MARKER_SIZE = 24;
-    /**
-     * MapMarker.iconSize, added in Hytale 0.7.0 (null on 0.6.x, where every marker is Default).
-     * Read reflectively so one build runs on both versions; a public field, so no access tricks.
-     */
-    private static final java.lang.reflect.Field ICON_SIZE = markerField("iconSize");
     private static final int BETTERMAP_MARKER_SIZE = 20;
     private static final Map<String, byte[]> ICON_BYTES = new ConcurrentHashMap<>();
     private static final Map<String, byte[]> TINTED_ICON_BYTES = new ConcurrentHashMap<>();
@@ -63,8 +61,30 @@ public final class NativeWorldMapIntegration {
             com.hypixel.hytale.logger.HytaleLogger.get("DapperMap");
     private NativeWorldMapIntegration() { }
 
+    /** One marker pass in flight: the world it reads and the markers it will produce. */
+    public record Pass(World world, long startedMs, java.util.concurrent.CompletableFuture<List<DynamicMinimapMarker>> future) { }
+
     /**
-     * One pass over the world's marker providers. World thread only.
+     * Starts one marker pass on DapperMap's marker thread and returns at once; the session
+     * picks the result up on a later tick. Hytale itself runs every provider on the world
+     * map's own thread, so none of them needs the world thread. Colours are resolved by the
+     * caller (world thread), so the pass never reads the player's live settings.
+     * Returns null when the marker thread's queue is full (try again on a later scan).
+     */
+    public static Pass requestMarkers(World world, Player player, java.util.UUID viewer,
+                                      java.awt.Color neutral, java.awt.Color deathTint,
+                                      boolean includeNative, boolean betterMapWaypoints, boolean includeDeaths) {
+        try {
+            return new Pass(world, System.currentTimeMillis(), java.util.concurrent.CompletableFuture.supplyAsync(
+                    () -> getMarkers(world, player, viewer, neutral, deathTint,
+                            includeNative, betterMapWaypoints, includeDeaths), PASS_EXECUTOR));
+        } catch (java.util.concurrent.RejectedExecutionException busy) {
+            return null;
+        }
+    }
+
+    /**
+     * One pass over the world's marker providers. Marker thread (see requestMarkers).
      *
      * @param includeNative       Hytale world-map markers enabled (POIs, spawn, warps, ...).
      * @param betterMapWaypoints  BetterMap integration and its waypoint markers enabled; its
@@ -72,34 +92,36 @@ public final class NativeWorldMapIntegration {
      *                            still shown as ordinary world-map markers if includeNative.
      * @param includeDeaths       Death Marker switch: Hytale's (or BetterMap's) death markers,
      *                            independent of includeNative and tinted with the Death colour.
+     * @param viewer              the player's UUID (keys the blocking-provider results).
+     * @param neutral             colour of markers whose image can't be used (drawn as dots).
      */
-    public static List<DynamicMinimapMarker> getMarkers(World world, Player player, DynamicMinimapColours colours,
-                                                        boolean includeNative, boolean betterMapWaypoints,
-                                                        boolean includeDeaths) {
+    static List<DynamicMinimapMarker> getMarkers(World world, Player player, java.util.UUID viewer,
+                                                 java.awt.Color neutral, java.awt.Color deathTint,
+                                                 boolean includeNative, boolean betterMapWaypoints,
+                                                 boolean includeDeaths) {
         List<DynamicMinimapMarker> result = new ArrayList<>();
-        // World marker overrides are not applied: WorldMapManager.getMarkerOverridesView() may
-        // only be called on the world map's own thread (it throws on the world thread), and the
-        // overrides map has no other public accessor in 0.6.8 or 0.7.0.
+        if (!world.isAlive()) return result; // World shut down while the pass was queued.
+        // World marker overrides (icon swaps from /worldmap markers override and world events),
+        // applied the same way Hytale's own collector applies them. Usually empty: no lookups then.
+        Map<String, MapMarkerOverride> overrides = markerOverrides(world);
         MarkersCollector nativeCollector = collector(marker -> {
             double mx = marker.transform.position.x, mz = marker.transform.position.z;
-            String image = markerImage(marker.markerImage);
+            String image = markerImage(overriddenImage(marker, overrides));
             if (image == null) {
-                result.add(DynamicMinimapMarker.dot(
-                        mx, mz, colours.awt(DynamicMinimapColours.Key.NEUTRAL, 255), 9));
+                result.add(DynamicMinimapMarker.dot(mx, mz, neutral, 9));
                 return;
             }
-            result.add(DynamicMinimapMarker.nativeWorldMap(mx, mz, image, markerTint(marker),
-                    isMajor(marker) ? MAJOR_MARKER_SIZE : MARKER_SIZE));
+            result.add(withAlert(DynamicMinimapMarker.nativeWorldMap(mx, mz, image, markerTint(marker),
+                    marker.iconSize == MapMarkerIconSize.Major ? MAJOR_MARKER_SIZE : MARKER_SIZE), marker));
         });
         MarkersCollector betterMapCollector = collector(marker -> {
-            String image = markerImage(marker.markerImage);
+            String image = markerImage(overriddenImage(marker, overrides));
             if (image == null) return;
-            result.add(DynamicMinimapMarker.betterMap(marker.transform.position.x,
-                    marker.transform.position.z, image, markerTint(marker), BETTERMAP_MARKER_SIZE));
+            result.add(withAlert(DynamicMinimapMarker.betterMap(marker.transform.position.x,
+                    marker.transform.position.z, image, markerTint(marker), BETTERMAP_MARKER_SIZE), marker));
         });
-        java.awt.Color deathTint = colours.awt(DynamicMinimapColours.Key.DEATH, 255);
         MarkersCollector deathCollector = collector(marker -> {
-            String image = markerImage(marker.markerImage);
+            String image = markerImage(overriddenImage(marker, overrides));
             if (image == null) return;
             result.add(DynamicMinimapMarker.nativeWorldMap(marker.transform.position.x,
                     marker.transform.position.z, image, deathTint, MARKER_SIZE));
@@ -111,11 +133,11 @@ public final class NativeWorldMapIntegration {
                     : waypoints && betterMapWaypoints ? betterMapCollector
                     : includeNative ? nativeCollector : null;
             if (target == null) return;
-            // Hytale 0.7.0's spawn provider blocks (join, up to 10 s) on a lookup that can need the
-            // world thread itself: draw the spawn marker from a non-blocking lookup instead.
-            if (SPAWN_ASYNC != null && target == nativeCollector
-                    && provider instanceof com.hypixel.hytale.server.core.universe.world.worldmap.markers.providers.SpawnMarkerProvider) {
-                addSpawnMarker(world, player, result);
+            // Providers that block (Hytale's spawn provider, and BetterMap's spawn privacy wrapper
+            // registered under the same key) run on their own thread, so a slow spawn lookup never
+            // holds up the other markers; the pass replays their last finished result.
+            if (BLOCKING_PROVIDERS.contains(key)) {
+                for (MapMarker marker : offThreadMarkers(viewer, key, provider, world, player)) target.add(marker);
                 return;
             }
             try {
@@ -128,97 +150,171 @@ public final class NativeWorldMapIntegration {
     }
 
     // ---------------------------------------------------------------------------------
-    // Spawn marker without blocking the world thread (Hytale 0.7.0+)
+    // Compass alerts (Hytale 0.7 CompassAlertComponent)
+    // ---------------------------------------------------------------------------------
+
+    /** Longest alert Hytale allows (MapMarkerAlert.MAX_DURATION_S). */
+    private static final int MAX_ALERT_MS = 30_000;
+
+    /**
+     * Copies a marker's compass alert onto the minimap marker: the alert icon (relative to
+     * UI/WorldMap/MapMarkers, null = keep the marker icon), its tint (null = keep the marker
+     * tint) and how long it lasts. The id lets the session start each alert once, when the
+     * marker appears, as Hytale's compass does when the client adds a marker.
+     */
+    private static DynamicMinimapMarker withAlert(DynamicMinimapMarker minimap, MapMarker marker) {
+        if (marker.components == null) return minimap;
+        for (MapMarkerComponent component : marker.components) {
+            if (!(component instanceof CompassAlertComponent alert)) continue;
+            int durationMs = (int) Math.min(MAX_ALERT_MS, Math.max(0f, alert.durationSeconds) * 1000f);
+            if (durationMs <= 0) return minimap;
+            // Markers without an id (rare) are told apart by image and block position.
+            String id = marker.id != null ? marker.id
+                    : minimap.assetPath + "@" + Math.floor(minimap.x) + "," + Math.floor(minimap.z);
+            java.awt.Color tint = alert.tint == null ? null : new java.awt.Color(
+                    Byte.toUnsignedInt(alert.tint.red), Byte.toUnsignedInt(alert.tint.green), Byte.toUnsignedInt(alert.tint.blue));
+            return minimap.withAlert(id, markerImage(alert.image), tint, durationMs);
+        }
+        return minimap;
+    }
+
+    // ---------------------------------------------------------------------------------
+    // World marker overrides
     // ---------------------------------------------------------------------------------
 
     /**
-     * ISpawnProvider.getSpawnPointAsync(World, UUID), added in 0.7.0 (null on 0.6.x, where the
-     * spawn provider is called normally: its lookup there is synchronous and doesn't block).
+     * WorldMapManager.markerOverrides: a ConcurrentHashMap, so it can be read from the world
+     * thread. The public getMarkerOverridesView() only works on the world map's own thread, so
+     * the private field is read instead; null (no overrides applied) if it is ever renamed.
      */
-    private static final java.lang.reflect.Method SPAWN_ASYNC = spawnAsyncMethod();
-    /** How often a player's spawn point is looked up again (it rarely changes). */
-    private static final long SPAWN_REFRESH_MS = 30_000L;
-    /** Per player: the world, the lookup in flight, when it started, and the last known x/z. */
-    private record SpawnLookup(World world, java.util.concurrent.CompletableFuture<?> future,
-                               long startedMs, double[] lastXZ) { }
-    private static final Map<java.util.UUID, SpawnLookup> SPAWN_LOOKUPS = new ConcurrentHashMap<>();
+    private static final java.lang.reflect.Field OVERRIDES_FIELD = overridesField();
 
-    private static java.lang.reflect.Method spawnAsyncMethod() {
+    private static java.lang.reflect.Field overridesField() {
         try {
-            return com.hypixel.hytale.server.core.universe.world.spawn.ISpawnProvider.class
-                    .getMethod("getSpawnPointAsync", World.class, java.util.UUID.class);
-        } catch (NoSuchMethodException | RuntimeException absent) {
+            java.lang.reflect.Field field = com.hypixel.hytale.server.core.universe.world.worldmap.WorldMapManager.class
+                    .getDeclaredField("markerOverrides");
+            if (!Map.class.isAssignableFrom(field.getType())) return null;
+            field.setAccessible(true);
+            return field;
+        } catch (ReflectiveOperationException | RuntimeException | LinkageError unavailable) {
             return null;
         }
+    }
+
+    /** The world's marker overrides, keyed by marker name (translation key or raw text); empty when none. */
+    @SuppressWarnings("unchecked")
+    private static Map<String, MapMarkerOverride> markerOverrides(World world) {
+        if (OVERRIDES_FIELD == null) return Map.of();
+        try {
+            Object value = OVERRIDES_FIELD.get(world.getWorldMapManager());
+            return value instanceof Map<?, ?> map && !map.isEmpty() ? (Map<String, MapMarkerOverride>) map : Map.of();
+        } catch (ReflectiveOperationException | RuntimeException unreadable) {
+            return Map.of();
+        }
+    }
+
+    /** The marker's image after any override, matched as Hytale does (name key, then raw text). */
+    private static String overriddenImage(MapMarker marker, Map<String, MapMarkerOverride> overrides) {
+        if (overrides.isEmpty() || marker.name == null) return marker.markerImage;
+        String name = marker.name.messageId != null ? marker.name.messageId : marker.name.rawText;
+        MapMarkerOverride override = name == null ? null : overrides.get(name);
+        return override != null && override.icon() != null ? override.icon() : marker.markerImage;
+    }
+
+    // ---------------------------------------------------------------------------------
+    // Blocking providers, run off the world thread
+    // ---------------------------------------------------------------------------------
+
+    /**
+     * Provider keys whose update() joins a lookup that may need the world thread itself (up to
+     * a 10 s timeout): Hytale's SpawnMarkerProvider and BetterMap's SpawnPrivacyProvider. Hytale
+     * itself calls providers on the world map thread, so calling them off the world thread is safe.
+     */
+    private static final Set<String> BLOCKING_PROVIDERS = Set.of("spawn");
+    /** How often a blocking provider is asked again (spawn points and privacy settings rarely change). */
+    private static final long OFF_THREAD_REFRESH_MS = 10_000L;
+    /** One daemon thread for blocking providers; at most one lookup per player and provider is in flight. */
+    private static final java.util.concurrent.ThreadPoolExecutor MARKER_EXECUTOR = markerExecutor("DapperMap-Spawn");
+    /**
+     * One daemon thread for marker passes (all players, one pass per player in flight). A single
+     * thread mirrors Hytale's one world-map thread, so providers see no extra concurrency of
+     * their own beyond what Hytale already does.
+     */
+    private static final java.util.concurrent.ThreadPoolExecutor PASS_EXECUTOR = markerExecutor("DapperMap-Markers");
+
+    private record OffThreadKey(java.util.UUID viewer, String provider) { }
+    /** The world and provider asked, the lookup in flight, when it started, and the last finished markers. */
+    private record OffThreadLookup(World world, Object provider, java.util.concurrent.CompletableFuture<List<MapMarker>> future,
+                                   long startedMs, List<MapMarker> last) { }
+    private static final Map<OffThreadKey, OffThreadLookup> OFF_THREAD = new ConcurrentHashMap<>();
+
+    private static java.util.concurrent.ThreadPoolExecutor markerExecutor(String name) {
+        java.util.concurrent.ThreadPoolExecutor executor = new java.util.concurrent.ThreadPoolExecutor(
+                1, 1, 30L, java.util.concurrent.TimeUnit.SECONDS,
+                new java.util.concurrent.LinkedBlockingQueue<>(256),
+                DapperMapUtil.daemonThreads(name),
+                new java.util.concurrent.ThreadPoolExecutor.AbortPolicy());
+        executor.allowCoreThreadTimeOut(true); // No idle thread when nobody needs these markers.
+        return executor;
     }
 
     /**
-     * Adds the world's spawn marker for this player, as Hytale's provider would, from a lookup
-     * that is started here and only read once it has finished (never joined). The last known
-     * position stays drawn while a refresh is in flight. World thread only.
+     * The last finished markers of a blocking provider for this player, starting a fresh lookup
+     * on the spawn thread when due. Never waits: the previous markers stay drawn while a
+     * refresh is in flight, and a failed lookup keeps them. Marker thread (one pass per player
+     * at a time, so each key has a single writer).
      */
-    private static void addSpawnMarker(World world, Player player, List<DynamicMinimapMarker> result) {
-        try {
-            if (!world.getGameplayConfig().getWorldMapConfig().isDisplaySpawn()) return;
-            java.util.UUID uuid = player.getUuid();
-            if (uuid == null) return;
-            long now = System.currentTimeMillis();
-            SpawnLookup lookup = SPAWN_LOOKUPS.get(uuid);
-            if (lookup != null && lookup.world() != world) lookup = null; // Another world: start afresh.
-            double[] lastXZ = lookup == null ? null : lookup.lastXZ();
-            if (lookup != null && lookup.future().isDone()) {
-                // A finished lookup: remember its position (a failed one keeps the last known).
-                if (!lookup.future().isCompletedExceptionally()
-                        && lookup.future().getNow(null) instanceof com.hypixel.hytale.math.vector.Transform spawn
-                        && spawn.getPosition() != null) {
-                    lastXZ = new double[]{spawn.getPosition().x(), spawn.getPosition().z()};
-                }
-            }
-            if (lookup == null || (lookup.future().isDone() && now - lookup.startedMs() >= SPAWN_REFRESH_MS)) {
-                var spawnProvider = world.getWorldConfig().getSpawnProvider();
-                Object future = spawnProvider == null ? null : SPAWN_ASYNC.invoke(spawnProvider, world, uuid);
-                if (future instanceof java.util.concurrent.CompletableFuture<?> started) {
-                    if (SPAWN_LOOKUPS.size() >= 512 && !SPAWN_LOOKUPS.containsKey(uuid)) SPAWN_LOOKUPS.clear();
-                    SPAWN_LOOKUPS.put(uuid, new SpawnLookup(world, started, now, lastXZ));
-                }
-            } else if (lastXZ != lookup.lastXZ()) {
-                SPAWN_LOOKUPS.put(uuid, new SpawnLookup(world, lookup.future(), lookup.startedMs(), lastXZ));
-            }
-            if (lastXZ != null) result.add(DynamicMinimapMarker.nativeWorldMap(lastXZ[0], lastXZ[1],
-                    "Spawn.png", java.awt.Color.WHITE, MARKER_SIZE));
-        } catch (ReflectiveOperationException | RuntimeException | LinkageError ignored) {
-            // No spawn marker this scan; the other providers are unaffected.
+    private static List<MapMarker> offThreadMarkers(java.util.UUID viewer, String key,
+                                                    WorldMapManager.MarkerProvider provider,
+                                                    World world, Player player) {
+        if (viewer == null) return List.of();
+        OffThreadKey id = new OffThreadKey(viewer, key);
+        OffThreadLookup lookup = OFF_THREAD.get(id);
+        // Another world, or BetterMap swapped the provider in or out: start afresh.
+        if (lookup != null && (lookup.world() != world || lookup.provider() != provider)) lookup = null;
+        List<MapMarker> last = lookup == null ? List.of() : lookup.last();
+        if (lookup != null && lookup.future().isDone() && !lookup.future().isCompletedExceptionally()) {
+            List<MapMarker> finished = lookup.future().getNow(null);
+            if (finished != null) last = finished;
         }
+        long now = System.currentTimeMillis();
+        if (lookup == null || (lookup.future().isDone() && now - lookup.startedMs() >= OFF_THREAD_REFRESH_MS)) {
+            try {
+                java.util.concurrent.CompletableFuture<List<MapMarker>> started =
+                        java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+                            // Copies of the markers only: nothing here touches DapperMap state.
+                            List<MapMarker> collected = new ArrayList<>(2);
+                            provider.update(world, player, collector(collected::add));
+                            return collected;
+                        }, MARKER_EXECUTOR);
+                if (OFF_THREAD.size() >= 1024 && !OFF_THREAD.containsKey(id)) OFF_THREAD.clear(); // Bounded.
+                OFF_THREAD.put(id, new OffThreadLookup(world, provider, started, now, last));
+            } catch (java.util.concurrent.RejectedExecutionException busy) {
+                // Queue full: keep the last markers and try again on the next scan.
+                if (lookup != null && last != lookup.last()) OFF_THREAD.put(id, new OffThreadLookup(
+                        world, provider, lookup.future(), lookup.startedMs(), last));
+            }
+        } else if (last != lookup.last()) {
+            OFF_THREAD.put(id, new OffThreadLookup(world, provider, lookup.future(), lookup.startedMs(), last));
+        }
+        return last;
     }
 
-    /** Drops spawn lookups for a removed world (and the world reference they hold). */
-    /** Drops a departed player's spawn lookup (and its World reference). */
+    /** Drops a departed player's off-thread lookups (and the World references they hold). */
     public static void forgetPlayer(java.util.UUID uuid) {
-        if (uuid != null) SPAWN_LOOKUPS.remove(uuid);
+        if (uuid != null) OFF_THREAD.keySet().removeIf(key -> uuid.equals(key.viewer()));
     }
 
+    /** Drops off-thread lookups for a removed world. */
     public static void clearWorld(World world) {
-        SPAWN_LOOKUPS.values().removeIf(lookup -> lookup.world() == world);
+        OFF_THREAD.values().removeIf(lookup -> lookup.world() == world);
     }
 
-    /** True when Hytale 0.7.0+ flags the marker as Major. Always false on 0.6.x. */
-    private static boolean isMajor(MapMarker marker) {
-        if (ICON_SIZE == null) return false;
-        try {
-            Object size = ICON_SIZE.get(marker);
-            return size instanceof Enum<?> value && "Major".equals(value.name());
-        } catch (IllegalAccessException | RuntimeException unreadable) {
-            return false;
-        }
-    }
-
-    /** A public MapMarker field by name, or null when this server version doesn't have it. */
-    private static java.lang.reflect.Field markerField(String name) {
-        try {
-            return MapMarker.class.getField(name);
-        } catch (NoSuchFieldException | RuntimeException missing) {
-            return null;
-        }
+    /** Plugin shutdown: forget every lookup and stop the marker threads. */
+    public static void shutdown() {
+        OFF_THREAD.clear();
+        MARKER_EXECUTOR.shutdownNow();
+        PASS_EXECUTOR.shutdownNow();
     }
 
     /** View distance is ignored: the minimap edge-tracks distant markers itself. */

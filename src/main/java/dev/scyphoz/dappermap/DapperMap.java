@@ -79,6 +79,8 @@ public class DapperMap extends JavaPlugin {
         DapperMapServerLoad.stop();
         this.sessions.stopAll();
         dev.scyphoz.dappermap.integration.BetterMapIntegration.clearImages();
+        // Stops the thread that runs blocking world-map providers (spawn) off the world thread.
+        dev.scyphoz.dappermap.integration.NativeWorldMapIntegration.shutdown();
         dev.scyphoz.dappermap.dynamic.DynamicMinimapSession.shutdownRendering();
     }
 

@@ -976,7 +976,11 @@ public final class DynamicEntityScanner {
                      "Template_Swimming_Passive", "Template_Edible_Critter" ->
                         new NpcThreatProfile(Kind.FLEE_ONLY, false);
                 case "Template_Predator" -> {
-                    JsonElement flee = evaluate(values.get("FleeIfNotThreatened"), parameters, new HashSet<>());
+                    // Most predator variants (zombies, ghoul, werewolf, raptor, ...) don't set the
+                    // flag themselves: fall back to the template's parameter default (false in 0.7.1).
+                    JsonElement raw = values.get("FleeIfNotThreatened");
+                    if (raw == null) raw = parameters.get("FleeIfNotThreatened");
+                    JsonElement flee = evaluate(raw, parameters, new HashSet<>());
                     if (flee == null || !flee.isJsonPrimitive() || !flee.getAsJsonPrimitive().isBoolean())
                         yield UNKNOWN;
                     yield new NpcThreatProfile(flee.getAsBoolean() ? Kind.DEFENSIVE : Kind.AGGRESSIVE, true);

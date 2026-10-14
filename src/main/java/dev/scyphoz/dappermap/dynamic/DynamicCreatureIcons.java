@@ -443,12 +443,53 @@ public final class DynamicCreatureIcons {
         if (model != null) {
             modelId = model.getModelAssetId();
             modelPath = model.getModel();
-            texture = model.getTexture();
+            // Player-model NPCs (Outlanders, Santa, pirate skeletons, ...) use greyscale skin, hair
+            // and cloth textures tinted by a gradient, like player skins; untinted they drew grey.
+            com.hypixel.hytale.server.core.cosmetics.CosmeticRegistry registry = null;
+            if (model.getGradientSet() != null || hasGradientPart(model.getAttachments())) registry = cosmeticRegistry();
+            texture = gradientTexture(registry, model.getTexture(), model.getGradientSet(), model.getGradientId());
             ModelAttachment[] worn = model.getAttachments();
             if (worn != null) for (ModelAttachment part : worn)
-                if (part != null && part.getModel() != null) attachments.add(new Attachment(part.getModel(), part.getTexture()));
+                if (part != null && part.getModel() != null) attachments.add(new Attachment(part.getModel(),
+                        gradientTexture(registry, part.getTexture(), part.getGradientSet(), part.getGradientId())));
         }
         return remember(new Source(role, modelId, modelPath, texture, List.copyOf(attachments)));
+    }
+
+    /** True when any attachment is gradient-tinted (most creatures have none: no registry lookup then). */
+    private static boolean hasGradientPart(ModelAttachment[] parts) {
+        if (parts != null) for (ModelAttachment part : parts) if (part != null && part.getGradientSet() != null) return true;
+        return false;
+    }
+
+    /** The cosmetics registry (gradient sets), or null when unavailable. */
+    private static com.hypixel.hytale.server.core.cosmetics.CosmeticRegistry cosmeticRegistry() {
+        try {
+            var module = com.hypixel.hytale.server.core.cosmetics.CosmeticsModule.get();
+            return module == null ? null : module.getRegistry();
+        } catch (RuntimeException | LinkageError unavailable) {
+            return null;
+        }
+    }
+
+    /**
+     * A model or attachment texture tinted the way the client tints it: a greyscale texture with
+     * a gradient set (Skin, Hair, Colored_Cotton, ...) takes the named gradient (the set's first
+     * when the id is missing), as player skin parts do. Untinted textures are returned as they are.
+     */
+    static String gradientTexture(com.hypixel.hytale.server.core.cosmetics.CosmeticRegistry registry,
+                                  String texture, String gradientSet, String gradientId) {
+        if (texture == null || gradientSet == null || registry == null) return texture;
+        try {
+            var set = registry.getGradientSets().get(gradientSet);
+            var gradients = set == null ? null : set.getGradients();
+            if (gradients == null || gradients.isEmpty()) return texture;
+            var gradient = gradientId != null ? gradients.get(gradientId) : null;
+            if (gradient == null) gradient = gradients.values().iterator().next();
+            return TextureRef.of(texture, gradient.getTexture(), baseColour(gradient.getBaseColor()));
+        } catch (RuntimeException unreadable) {
+            return texture;
+        }
     }
 
     /** Stores a source under its key (64-bit FNV-1a of its description) and returns the key. */

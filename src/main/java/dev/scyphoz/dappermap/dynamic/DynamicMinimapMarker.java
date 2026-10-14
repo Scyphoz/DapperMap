@@ -15,6 +15,19 @@ public final class DynamicMinimapMarker {
     public final boolean threat;
     /** Another player (icon or dot): drawn in the HUD's player layer, above every creature marker. */
     public final boolean player;
+    /**
+     * Compass alert (Hytale 0.7 CompassAlertComponent) on a world-map marker: the marker's id,
+     * or null when it has no alert. The alert pulses the marker for {@link #alertMs} after it
+     * first appears (see DynamicMinimapSession).
+     */
+    public final String alertId;
+    /** Alert duration in milliseconds (0 without an alert). */
+    public final int alertMs;
+    /**
+     * The marker as drawn during the "on" half of an alert pulse (alert icon and/or tint), or
+     * null when the alert keeps the marker's own look (then only its size pulses).
+     */
+    public final DynamicMinimapMarker alertLook;
 
     private DynamicMinimapMarker(
             double x,
@@ -61,6 +74,37 @@ public final class DynamicMinimapMarker {
         this.clampToEdge = clampToEdge;
         this.threat = threat;
         this.player = player;
+        this.alertId = null;
+        this.alertMs = 0;
+        this.alertLook = null;
+    }
+
+    /** Copy of {@code base} carrying a compass alert. */
+    private DynamicMinimapMarker(DynamicMinimapMarker base, String alertId, int alertMs, DynamicMinimapMarker alertLook) {
+        this.x = base.x;
+        this.z = base.z;
+        this.color = base.color;
+        this.size = base.size;
+        this.style = base.style;
+        this.assetPath = base.assetPath;
+        this.clampToEdge = base.clampToEdge;
+        this.threat = base.threat;
+        this.player = base.player;
+        this.alertId = alertId;
+        this.alertMs = alertMs;
+        this.alertLook = alertLook;
+    }
+
+    /**
+     * This world-map marker with a compass alert. {@code image}/{@code tint}: the alert's icon
+     * and tint, each null to keep the marker's own; the alert look is built once here.
+     */
+    public DynamicMinimapMarker withAlert(String id, String image, Color tint, int durationMs) {
+        if (id == null || durationMs <= 0) return this;
+        DynamicMinimapMarker look = image == null && tint == null ? null
+                : new DynamicMinimapMarker(x, z, tint != null ? tint : color, size, style,
+                image != null ? image : assetPath, clampToEdge, threat, player);
+        return new DynamicMinimapMarker(this, id, durationMs, look);
     }
 
     public static DynamicMinimapMarker dot(double x, double z, Color color, int size) {
@@ -122,7 +166,9 @@ public final class DynamicMinimapMarker {
                 && size == marker.size && style == marker.style && clampToEdge == marker.clampToEdge
                 && threat == marker.threat && player == marker.player
                 && java.util.Objects.equals(color, marker.color)
-                && java.util.Objects.equals(assetPath, marker.assetPath);
+                && java.util.Objects.equals(assetPath, marker.assetPath)
+                && alertMs == marker.alertMs && java.util.Objects.equals(alertId, marker.alertId)
+                && java.util.Objects.equals(alertLook, marker.alertLook);
     }
 
     @Override public int hashCode() {
@@ -134,6 +180,7 @@ public final class DynamicMinimapMarker {
         hash = 31 * hash + java.util.Objects.hashCode(assetPath);
         hash = 31 * hash + Boolean.hashCode(threat);
         hash = 31 * hash + Boolean.hashCode(player);
+        hash = 31 * hash + java.util.Objects.hashCode(alertId);
         return 31 * hash + Boolean.hashCode(clampToEdge);
     }
 

@@ -458,6 +458,14 @@ public final class DynamicMinimapSession {
         }
     }
     private List<DynamicMinimapMarker> cachedWorldMapMarkers = new ArrayList<>();
+    /** World-map marker pass running on the marker thread, or null. */
+    private NativeWorldMapIntegration.Pass worldMapPass;
+    /** A pass older than this is abandoned (a provider that never returns), so a new one can start. */
+    private static final long WORLD_MAP_PASS_TIMEOUT_MS = 30_000L;
+    /** Compass alerts: marker id -> when its alert started (world thread only). */
+    private final java.util.Map<String, Long> alertStarts = new java.util.HashMap<>();
+    /** Alert markers grow by about a quarter of their size during the "on" half of a pulse (even, so they stay centred). */
+    private static int alertGrowth(int size) { return Math.max(2, (size / 4) & ~1); }
     /** Integration switches used by the last world-map scan; a change forces a rescan. */
     private boolean scannedNative, scannedBetterMap, scannedDeaths;
     private int emptyWorldMapScans = 0;
@@ -787,6 +795,8 @@ public final class DynamicMinimapSession {
                     this.cachedMarkers = new ArrayList<>();
                     this.cachedWorldMapMarkers = List.of();
                     this.emptyWorldMapScans = 0;
+                    this.worldMapPass = null; // Its markers belong to the old world.
+                    this.alertStarts.clear(); // A world change shows alerts again, as Hytale's compass does.
                 }
                 this.lastMarkerMs = 0L;
                 this.lastWorldMapScanMs = 0L;
@@ -1619,29 +1629,34 @@ public final class DynamicMinimapSession {
                 this.lastWorldMapScanMs = 0L;
                 this.stableWorldMapScans = 0;
                 this.emptyWorldMapScans = 3; // Accept the new switch state's result immediately.
+                this.worldMapPass = null; // A pass still running used the old switches: ignore it.
             }
-            // The tick's own Player component and world: no second component lookup per scan.
             long now = System.currentTimeMillis();
-            // Each pass runs every marker provider on the world thread: back off while the
-            // markers stay the same (a teleport or switch change still rescans at once).
+            // 1. Take a finished pass (marker thread) from this world.
+            NativeWorldMapIntegration.Pass pass = this.worldMapPass;
+            if (pass != null && pass.future().isDone()) {
+                this.worldMapPass = null;
+                if (pass.world() == world && !pass.future().isCompletedExceptionally()) {
+                    List<DynamicMinimapMarker> current = pass.future().getNow(null);
+                    if (current != null) this.acceptWorldMapMarkers(current, now);
+                }
+            } else if (pass != null && now - pass.startedMs() >= WORLD_MAP_PASS_TIMEOUT_MS) {
+                // A provider that never returns must not stop this player's markers for good.
+                this.worldMapPass = null;
+                DapperMapUtil.logFailure("world-map marker scan",
+                        new java.util.concurrent.TimeoutException("marker pass still running after 30 s"));
+            }
+            // 2. Start the next pass when due. Providers run off the world thread (Hytale runs
+            // them on its world-map thread); back off while the markers stay the same (a teleport
+            // or switch change still rescans at once).
             long interval = this.stableWorldMapScans >= 3 ? 4000L : 2000L;
-            if (player != null && now - this.lastWorldMapScanMs >= interval) {
+            if (player != null && this.worldMapPass == null && now - this.lastWorldMapScanMs >= interval) {
                 this.lastWorldMapScanMs = now;
-                try {
-                    List<DynamicMinimapMarker> current = NativeWorldMapIntegration.getMarkers(
-                            world, player, this.settings.colours,
-                            includeNative, betterMapWaypoints, includeDeaths);
-                    if (current.isEmpty() && !this.cachedWorldMapMarkers.isEmpty()
-                            && ++this.emptyWorldMapScans < 3) {
-                        // A provider can briefly return no markers during a map refresh.
-                    } else {
-                        if (!current.equals(this.cachedWorldMapMarkers)) {
-                            this.cachedWorldMapMarkers = current;
-                            this.stableWorldMapScans = 0; // Something changed: keep the fast cadence.
-                        } else this.stableWorldMapScans++;
-                        this.emptyWorldMapScans = 0;
-                    }
-                } catch (Throwable failure) { DapperMapUtil.logFailure("world-map marker scan", failure); }
+                // Colours are read here (world thread), never by the pass.
+                this.worldMapPass = NativeWorldMapIntegration.requestMarkers(world, player, this.uuid,
+                        this.settings.colours.awt(DynamicMinimapColours.Key.NEUTRAL, 255),
+                        this.settings.colours.awt(DynamicMinimapColours.Key.DEATH, 255),
+                        includeNative, betterMapWaypoints, includeDeaths);
             }
         } else {
             this.cachedWorldMapMarkers = List.of();
@@ -1650,9 +1665,66 @@ public final class DynamicMinimapSession {
             this.scannedNative = false;
             this.scannedBetterMap = false;
             this.scannedDeaths = false;
+            this.worldMapPass = null;
+            this.alertStarts.clear();
         }
 
         if (!markers.equals(this.cachedMarkers)) this.cachedMarkers = markers;
+    }
+
+    /**
+     * Applies a finished world-map pass: ignores a briefly empty result (a provider can return
+     * nothing during a map refresh), keeps the fast cadence while markers change, and starts
+     * the compass alert of each alert marker that has just appeared. World thread only.
+     */
+    private void acceptWorldMapMarkers(List<DynamicMinimapMarker> current, long now) {
+        if (current.isEmpty() && !this.cachedWorldMapMarkers.isEmpty() && ++this.emptyWorldMapScans < 3) return;
+        this.emptyWorldMapScans = 0;
+        if (current.equals(this.cachedWorldMapMarkers)) {
+            this.stableWorldMapScans++;
+            return;
+        }
+        this.cachedWorldMapMarkers = current;
+        this.stableWorldMapScans = 0; // Something changed: keep the fast cadence.
+        this.updateAlerts(current, now);
+    }
+
+    /**
+     * Alert start times follow Hytale's compass: an alert starts when its marker appears (join,
+     * world change, a new marker such as a Goblin Breach, or one that comes back after leaving
+     * the list) and runs once for its duration. Markers that are gone are forgotten, so they
+     * alert again if they return. Costs one null check per marker while none has an alert.
+     */
+    private void updateAlerts(List<DynamicMinimapMarker> markers, long now) {
+        java.util.Set<String> present = null;
+        for (DynamicMinimapMarker marker : markers) {
+            if (marker.alertId == null) continue;
+            if (present == null) present = new java.util.HashSet<>();
+            present.add(marker.alertId);
+            this.alertStarts.putIfAbsent(marker.alertId, now);
+        }
+        if (present == null) this.alertStarts.clear();
+        else this.alertStarts.keySet().retainAll(present);
+    }
+
+    /** True while this marker's compass alert is running. World thread only. */
+    private boolean alerting(DynamicMinimapMarker marker, long now) {
+        if (marker.alertId == null) return false;
+        Long started = this.alertStarts.get(marker.alertId);
+        return started != null && now - started < marker.alertMs;
+    }
+
+    /**
+     * World-map marker icon; during the "on" half of an alert pulse, its alert look (alert icon
+     * and/or tint), prepared and sent like any other marker icon the first time it is needed.
+     * Until that icon is ready the normal icon is shown (the size still pulses).
+     */
+    private String alertIcon(DynamicMinimapMarker marker, boolean alertOn) {
+        if (alertOn && marker.alertLook != null) {
+            String alert = this.markerIcon(marker.alertLook);
+            if (alert != null) return alert;
+        }
+        return this.markerIcon(marker);
     }
 
     /** True when BetterMap waypoints are drawn with BetterMap styling and icons. */
@@ -1710,6 +1782,9 @@ public final class DynamicMinimapSession {
             double markerZ = dx * sin + dz * cos + (double)bufferPixels / 2.0D;
 
             int size = Math.max(8, marker.size);
+            // Compass alert: during the "on" half of the pulse the marker shows its alert look and
+            // grows a little about the same centre (edge clamping keeps using its normal size).
+            boolean alertOn = this.pulseOn && this.alerting(marker, projectionTime);
 
             if (marker.clampToEdge) {
                 // Edge bearings belong to the viewport, not the stitched map's
@@ -1739,14 +1814,15 @@ public final class DynamicMinimapSession {
             }
 
             String path = marker.style == Style.CREATURE || marker.style == Style.PLAYER
-                    ? this.creatureIcon(marker, attackingRgb) : this.markerIcon(marker);
+                    ? this.creatureIcon(marker, attackingRgb) : this.alertIcon(marker, alertOn);
 
             if (path == null || path.isBlank()) {
                 continue;
             }
 
-            int left = (int)Math.round(markerX) - size / 2;
-            int top = (int)Math.round(markerZ) - size / 2;
+            int drawSize = alertOn ? size + alertGrowth(size) : size;
+            int left = (int)Math.round(markerX) - drawSize / 2;
+            int top = (int)Math.round(markerZ) - drawSize / 2;
 
             if (marker.clampToEdge) edgeFree--; else mapFree--;
             // Hostile and attacking creatures go in the HUD's threat layer, above other markers;
@@ -1756,7 +1832,7 @@ public final class DynamicMinimapSession {
                             path,
                             left,
                             top,
-                            size, marker.clampToEdge, marker.threat, marker.player
+                            drawSize, marker.clampToEdge, marker.threat, marker.player
                     );
         }
 
