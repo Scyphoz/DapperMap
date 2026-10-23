@@ -1148,7 +1148,7 @@ public final class DapperMapSettingsPage
             case "creature_filter" -> "Show all creatures, or only hostile and attacking ones.";
             case "player_style" -> "Show players as head icons or as dots.";
             case "player_helmets" -> "Show the helmet each player wears on their icon.";
-            case "death" -> "Show Hytale's death markers (BetterMap's death settings apply).";
+            case "death" -> "Show death markers on your minimap.";
             case "worldmap" -> "Show Hytale personal, shared, POI, spawn and respawn world-map markers.";
             case "height" -> "Hide creatures far above or below you.";
             case "vrange" -> "Set how far above and below to show creatures.";

@@ -117,8 +117,9 @@ public final class DynamicMinimapHud extends CustomUIHud {
 
     private static InitialOverlayKey initialOverlayKey(DynamicMinimapSetting settings) {
         return new InitialOverlayKey(settings.sizePixels, settings.shape,
+                // Alignment 0: the panel image is text-free, so alignment never changes it.
                 settings.textureResolution, settings.infoPanelShown(), settings.infoPanelPosition,
-                settings.infoPanelTextAlignment, settings.showCoordinates, settings.showCompass,
+                0, settings.showCoordinates, settings.showCompass,
                 settings.showClock, settings.showBiome, settings.colours);
     }
 
@@ -780,9 +781,8 @@ public final class DynamicMinimapHud extends CustomUIHud {
         if (this.settings.infoPanelTextAlignment == normalized) return;
         this.settings.infoPanelTextAlignment = normalized;
         if (this.built) {
-            // Headers are raster artwork; values are native labels. Publish the
-            // matching panel before replacing both in the same layout update.
-            this.overlayPublishPending = true;
+            // Brand, headings and values are all native labels; the panel image is
+            // unaffected by alignment, so only the layout markup is rebuilt.
             this.rebuildPositionLayout();
         }
     }
@@ -1063,6 +1063,14 @@ public final class DynamicMinimapHud extends CustomUIHud {
         String[] values = {this.coordsText, this.compassText, this.clockText, this.biomeText};
         DynamicMinimapColours.Key[] colours = {COORDS_TEXT, COMPASS_TEXT, CLOCK_TEXT, BIOME_TEXT};
         String alignment = switch (this.settings.infoPanelTextAlignment) { case 1 -> "Center"; case 2 -> "End"; default -> "Start"; };
+        // Brand label: native text (previously painted into the panel PNG, which the client
+        // stretched and blurred). Same insets/position as the old raster version.
+        int brandCurve = this.settings.isCircle() && side ? 6 : 0;
+        int brandLeft = 8 + (position == DynamicMinimapSetting.INFO_RIGHT ? brandCurve : 0);
+        int brandRight = 8 + (position == DynamicMinimapSetting.INFO_LEFT ? brandCurve : 0);
+        this.appendPanelLabel(out, "WayfinderMmBrand", "DapperMap", panelX + brandLeft,
+                READOUT_WIDTH - brandLeft - brandRight, panelY + 12, panelY + 27, 10, 0.35F, true,
+                this.settings.colours.hex(BRAND_TEXT), alignment);
         int cursor = panelY + 30;
         for (int i = 0; i < 4; i++) {
             if (!this.readoutEnabled(i)) continue;
@@ -1070,6 +1078,10 @@ public final class DynamicMinimapHud extends CustomUIHud {
             int curve = this.settings.isCircle() && side ? (i == 0 || i == 3 ? 12 : 22) : 0;
             int left = 8 + (position == DynamicMinimapSetting.INFO_RIGHT ? curve : 0);
             int right = 8 + (position == DynamicMinimapSetting.INFO_LEFT ? curve : 0);
+            // Heading above the value: static text, only sent with layout rebuilds.
+            this.appendPanelLabel(out, "WayfinderMmHeading" + i, READOUT_HEADINGS[i], panelX + left,
+                    READOUT_WIDTH - left - right, cursor + 3, cursor + 18, 9, 0.95F, false,
+                    this.settings.colours.hex(INFO_HEADERS), alignment);
             out.append("Label #WayfinderMmReadout").append(i).append(" { Anchor: (Left: ")
                     .append(this.displayCoordinate(panelX + left)).append(", Top: ")
                     .append(this.displayCoordinate(cursor + 19)).append(", Width: ")
@@ -1081,6 +1093,30 @@ public final class DynamicMinimapHud extends CustomUIHud {
                     .append(alignment).append(", VerticalAlignment: Center); } ");
             cursor += 43;
         }
+    }
+
+    /** Info-panel headings, indexed like the readouts (coords, compass, clock, biome). */
+    private static final String[] READOUT_HEADINGS = {"COORDINATES", "BEARING", "WORLD TIME", "REGION"};
+
+    /**
+     * Appends one static native label to the info panel (brand or heading). Logical
+     * coordinates are converted to display space; letter spacing scales with the UI.
+     */
+    private void appendPanelLabel(StringBuilder out, String id, String text, int left, int width,
+                                  int top, int bottom, int fontSize, float letterSpacing, boolean bold,
+                                  String colourHex, String alignment) {
+        float spacing = Math.round(letterSpacing * this.interfaceScalePercent / 10.0F) / 10.0F;
+        out.append("Label #").append(id).append(" { Anchor: (Left: ")
+                .append(this.displayCoordinate(left)).append(", Top: ")
+                .append(this.displayCoordinate(top)).append(", Width: ")
+                .append(this.displaySize(width)).append(", Height: ")
+                .append(this.displayCoordinate(bottom) - this.displayCoordinate(top))
+                .append("); Text: \"").append(text)
+                .append("\"; Style: (FontSize: ").append(this.displaySize(fontSize))
+                .append(", TextColor: ").append(colourHex);
+        if (bold) out.append(", RenderBold: true");
+        if (spacing > 0.0F) out.append(", LetterSpacing: ").append(spacing);
+        out.append(", HorizontalAlignment: ").append(alignment).append(", VerticalAlignment: Center); } ");
     }
 
     private static String escapeUiText(String value) {
@@ -1188,7 +1224,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
         this.maskFile = maskFileFor(this.settings);
         this.overlayPath = "UI/DapperMap/overlay-" + this.slug + "-" + shape
                 + "-r" + this.settings.textureResolution
-                + "-p" + this.settings.infoPanelPosition + "-a" + this.settings.infoPanelTextAlignment
+                + "-p" + this.settings.infoPanelPosition
                 + "-s" + this.logicalUiSize
                 + "-h" + this.readoutHeight()
                 + "-" + this.settings.colours.frameKey()

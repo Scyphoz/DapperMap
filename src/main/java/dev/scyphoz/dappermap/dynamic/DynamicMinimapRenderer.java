@@ -449,13 +449,15 @@ public final class DynamicMinimapRenderer {
         int height = !settings.infoPanelShown() ? mapSize : side ? Math.max(mapSize, panelHeight) : mapSize + gap + panelHeight;
         int flags = (settings.infoPanelShown() ? 16 : 0) | (settings.showCoordinates ? 1 : 0)
                 | (settings.showCompass ? 2 : 0) | (settings.showClock ? 4 : 0) | (settings.showBiome ? 8 : 0);
+        // The live panel is text-free glass (headings and values are native client labels), so text
+        // alignment no longer changes its pixels: key it as 0 to share one cached panel per layout.
         var key = new RowLayerKey(new OverlayLayout(mapSize, width, height, panelHeight, gap,
-                settings.shape, settings.infoPanelPosition, settings.infoPanelTextAlignment, flags, settings.colours), -2, "native");
+                settings.shape, settings.infoPanelPosition, 0, flags, settings.colours), -2, "native");
         byte[] panel = OVERLAY_LAYERS.get(key);
         if (panel == null) {
             if (cachedOnly) return null;
             BufferedImage image = renderHudOverlayImage(settings, mapSize, sidePanelWidth, panelHeight, gap,
-                    0, "", "", "", "", false);
+                    0, "", "", "", "", false, false);
             if (image == null) return null;
             panel = toPng(image);
             OVERLAY_LAYERS.put(key, panel);
@@ -515,13 +517,16 @@ public final class DynamicMinimapRenderer {
                                                        double frameAngle, String coords, String compass,
                                                        String clock, String biome) {
         return renderHudOverlayImage(settings, mapSize, sidePanelWidth, panelHeight, gap,
-                frameAngle, coords, compass, clock, biome, true);
+                frameAngle, coords, compass, clock, biome, true, true);
     }
 
     private static BufferedImage renderHudOverlayImage(DynamicMinimapSetting settings, int mapSize,
                                                        int sidePanelWidth, int panelHeight, int gap,
                                                        double frameAngle, String coords, String compass,
-                                                       String clock, String biome, boolean includeFrame) {
+                                                       String clock, String biome, boolean includeFrame,
+                                                       boolean rasterText) {
+        // rasterText=false: the live HUD draws brand, headings and values as native labels
+        // (sharp at any UI scale); only the settings-page preview still paints text here.
         if (!settings.infoPanelShown()) {
             try {
                 BufferedImage overlay = new BufferedImage(mapSize, mapSize, BufferedImage.TYPE_INT_ARGB);
@@ -566,7 +571,7 @@ public final class DynamicMinimapRenderer {
                 graphics.drawImage(frame, mapX, mapY, mapSize, mapSize, null);
             }
 
-            drawTelemetry(graphics, settings, panelX, panelY, panelWidth,
+            if (rasterText) drawTelemetry(graphics, settings, panelX, panelY, panelWidth,
                     coords, compass, clock, biome);
             graphics.dispose();
             return overlay;
