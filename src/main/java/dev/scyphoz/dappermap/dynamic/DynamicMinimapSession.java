@@ -272,7 +272,11 @@ public final class DynamicMinimapSession {
     private final AtomicLong rotationSequence = new AtomicLong();
     private long deliveredSequence = 0L;
     private long lastTickMs = 0L;
-    private long lastSignature = 0L;
+    /**
+     * Per-chunk image hashes of the shown terrain, grid order (0 = missing); null when nothing is
+     * shown. The probe compares against it on the render pool. Arrays are never mutated once stored.
+     */
+    private long[] shownChunkHashes;
     private long lastSignatureMs = 0L;
     private boolean signatureChangedPending = false;
     private BetterMapIntegration.CaveView lastCaveView;
@@ -570,8 +574,18 @@ public final class DynamicMinimapSession {
         ++this.terrainGeneration;
     }
 
+    /** Bumped by every start: a cleanup task posted by an earlier stop then no longer applies. */
+    private final AtomicInteger lifecycle = new AtomicInteger();
+    /** World-thread cleanup from stop() that has not run yet (taken exactly once; see stop). */
+    private final java.util.concurrent.atomic.AtomicReference<Runnable> pendingCleanup =
+            new java.util.concurrent.atomic.AtomicReference<>();
+
     public void start() {
         if (!this.running) {
+            this.lifecycle.incrementAndGet();
+            // An earlier stop's cleanup still queued on a world: finish it here, before this run
+            // begins (start runs on the world thread), so the late task finds nothing to do.
+            this.runPendingCleanup();
             this.running = true;
             this.staticAssetsReady = new CompletableFuture<>();
             this.queueStaticAssets();
@@ -596,16 +610,56 @@ public final class DynamicMinimapSession {
             catch (RuntimeException failure) { if (!isStoppedWorldException(failure)) throw failure; }
         }
 
-        if (this.hud != null) this.hud.detach();
+        // Thread-safe part, done at once from any thread: the volatile/concurrent fields that make
+        // in-flight renders and world tasks see the session as stopped.
+        DynamicMinimapHud oldHud = this.hud;
         this.hud = null;
+        // Prefer the player's current world: just after a world switch lastObservedWorld can still
+        // be the old one, while ticks already run on the new world's thread.
+        World world = null;
+        try { world = currentWorld(); }
+        catch (RuntimeException ignored) { } // Universe already gone (shutdown).
+        if (world == null) world = this.lastObservedWorld;
+        this.lastObservedWorld = null;
+        this.worldPending.clear();
+        ++this.markerAssetGeneration; // Icon jobs still running drop their results.
+        // World-thread-only state (HUD command batch, edge tracker, icon fallback, ...) is cleared
+        // on the session's world thread: a disconnect calls stop on another thread while a tick or
+        // delivery may still be using it. Several stops before it runs merge into one cleanup.
+        Runnable cleanup = () -> this.clearWorldState(oldHud);
+        this.pendingCleanup.accumulateAndGet(cleanup,
+                (earlier, next) -> earlier == null ? next : () -> { earlier.run(); next.run(); });
+        int generation = this.lifecycle.get();
+        boolean posted = false;
+        if (world != null && world.isAlive() && !world.isInThread()) {
+            try {
+                world.execute(labelled("stop cleanup", () -> {
+                    // A restarted session took (or will take) the cleanup itself: never clobber it.
+                    if (!this.running && this.lifecycle.get() == generation) this.runPendingCleanup();
+                }));
+                posted = true;
+            } catch (RuntimeException ignored) {
+                // World stopping or removed: nothing runs on it any more, so clean up here.
+            }
+        }
+        if (!posted) this.runPendingCleanup(); // On that world's thread already, or no live world.
+    }
+
+    /** Runs the pending stop() cleanup, if any; idempotent (each cleanup is taken once). */
+    private void runPendingCleanup() {
+        Runnable cleanup = this.pendingCleanup.getAndSet(null);
+        if (cleanup != null) cleanup.run();
+    }
+
+    /** stop()'s world-thread-only cleanup (see stop); safe to run more than once. */
+    private void clearWorldState(DynamicMinimapHud oldHud) {
+        if (oldHud != null) oldHud.detach();
         this.rotationSource = null;
         this.displayedTerrainPng = null;
         this.terrainPublications.clear();
-        this.lastObservedWorld = null;
         this.lastCaveView = null;
         this.markerOrder.clear();
         this.edgeTracker.clear();
-        this.worldPending.clear();
         this.invalidateMarkerAssets();
         // Delivered-image records are kept: the client still holds those images on this
         // connection, so turning the minimap off and on again re-sends nothing. They are cleared
@@ -832,7 +886,7 @@ public final class DynamicMinimapSession {
                 // signature/recenter event, making the resolution control appear inert.
                 this.forceTerrainRender();
                 this.warmupUntilMs = 0L;
-                this.lastSignature = 0L;
+                this.shownChunkHashes = null;
                 this.lastSignatureMs = 0L;
                 this.rotationSource = null;
                 this.displayedTerrainPng = null;
@@ -849,7 +903,7 @@ public final class DynamicMinimapSession {
                 // path create a fresh one without recreating the Custom HUD.
                 this.forceTerrainRender();
                 this.warmupUntilMs = 0L;
-                this.lastSignature = 0L;
+                this.shownChunkHashes = null;
                 this.lastSignatureMs = 0L;
                 this.lastMarkerMs = 0L;
                 this.rotationSource = null;
@@ -1244,7 +1298,8 @@ public final class DynamicMinimapSession {
         byte[][] arrows = DynamicMinimapRenderer.cachedSelfArrows(colours);
         if (arrows == null) {
             // First use of this colour: build the set off-thread; a later tick applies it.
-            submitRender("self", () -> DynamicMinimapRenderer.selfArrows(colours));
+            // All 72 hashes are taken here too, so no locator delivery hashes on the world thread.
+            submitRender("self", () -> DynamicMinimapHud.rememberArrowHashes(DynamicMinimapRenderer.selfArrows(colours)));
             return;
         }
         String path = "UI/DapperMap/self-" + this.slug + "-" + colours.arrowKey() + "-" + bucket + ".png";
@@ -1280,27 +1335,34 @@ public final class DynamicMinimapSession {
         DynamicMinimapSetting probeSettings = this.settings.copy();
         DynamicMinimapHud probeHud = this.hud;
         long generation = this.terrainGeneration;
+        long[] shown = this.shownChunkHashes; // Read here (world thread); never mutated afterwards.
         submitRender("signature", () -> {
-            long signature;
+            long[] probe;
             try {
-                signature = DynamicMinimapRenderer.terrainSignature(
+                probe = DynamicMinimapRenderer.terrainChunkHashes(
                         world.getWorldMapManager(), centerX, centerZ, probeSettings, caveView);
             } catch (Throwable failure) {
                 DapperMapUtil.logFailure("terrain change check", failure);
-                signature = 0L;
+                return;
             }
-            if (!this.canRenderHud(probeHud)) return;
-            long result = signature;
+            // Compared here on the pool: removed images are not changes, and an unchanged probe
+            // (the normal case) posts no world task at all.
+            if (probe == null || !DynamicMinimapRenderer.chunksChanged(shown, probe)
+                    || !this.canRenderHud(probeHud)) return;
+            // Baseline for later probes: the shown hashes with this probe's present images on top,
+            // so the same change never requests a second redraw (as lastSignature did), and an
+            // image that is removed and comes back unchanged is still no change.
+            long[] baseline = shown == null || shown.length != probe.length ? probe.clone() : shown.clone();
+            if (baseline != probe) for (int i = 0; i < probe.length; i++) if (probe[i] != 0L) baseline[i] = probe[i];
             executeWorld(world, "signature result", () -> {
                 if (!this.canRenderHud(probeHud)
                         || generation != this.terrainGeneration
+                        || this.shownChunkHashes != shown // A newer terrain was shown meanwhile.
                         || Double.compare(centerX, this.bufferCenterX) != 0
                         || Double.compare(centerZ, this.bufferCenterZ) != 0
                         || !java.util.Objects.equals(caveView, this.lastCaveView)) return;
-                if (result != 0L && result != this.lastSignature) {
-                    this.lastSignature = result;
-                    this.signatureChangedPending = true;
-                }
+                this.shownChunkHashes = baseline;
+                this.signatureChangedPending = true;
             });
         });
     }
@@ -1334,7 +1396,9 @@ public final class DynamicMinimapSession {
                             centerZ,
                             renderSettings,
                             caveView,
-                            !playerUp
+                            !playerUp,
+                            // Only loaded chunks may request images (no forced chunk loads).
+                            DynamicMinimapRenderer.loadedChunkFilter(world)
                     );
 
             if (terrain.present == 0) {
@@ -1360,8 +1424,8 @@ public final class DynamicMinimapSession {
             DynamicAssetPublisher.PreparedAsset preparedFrame = DynamicAssetPublisher.prepareShared( // Cached frame bytes: remembered hash.
                     playerUp ? this.headingFramePath(renderSettings, rotationBucket)
                             : compassFramePath(prepared.path()), framePng);
-            // Change signature of exactly the chunk images drawn, hashed while stitching.
-            long renderSignature = terrain.signature;
+            // Per-chunk hashes of exactly the chunk images drawn, hashed while stitching.
+            long[] renderHashes = terrain.chunkHashes;
             executeDelivery(world, "terrain delivery", () -> {
                 if (!this.canRenderHud(renderHud)
                         || !java.util.Objects.equals(caveView, this.lastCaveView)
@@ -1391,10 +1455,13 @@ public final class DynamicMinimapSession {
                 ++this.terrainGeneration;
 
                 this.displayedTerrainPng = displayPng;
-                this.bufferComplete = terrain.complete();
+                // Chunks skipped only because they aren't loaded can't fill in on a retry, so they
+                // don't hold the warm-up retries open; the probe still catches images that appear.
+                this.bufferComplete = terrain.complete()
+                        || (terrain.total > 0 && terrain.present + terrain.unloaded >= terrain.total);
                 this.bufferCenterX = centerX;
                 this.bufferCenterZ = centerZ;
-                this.lastSignature = renderSignature;
+                this.shownChunkHashes = renderHashes;
                 this.lastMapRotationBucket = rotationBucket;
                 this.displayedRotationReduced = false; // Terrain renders are always full sharpness.
 
@@ -2108,16 +2175,27 @@ public final class DynamicMinimapSession {
         private List<DynamicMinimapMarker> ordered = List.of();
         private double centerX = Double.NaN, centerZ = Double.NaN;
 
+        /**
+         * Integrations first, then other players before other in-map markers (so a crowd of
+         * creatures never uses up the in-map elements before a player is placed), then nearest.
+         * One flat comparator: the same order as the former comparingInt/thenComparing chain.
+         */
         private static Comparator<DynamicMinimapMarker> comparator(double x, double z) {
-            return Comparator.comparingInt((DynamicMinimapMarker marker) -> switch (marker.style) {
+            return (a, b) -> {
+                int ra = rank(a), rb = rank(b);
+                if (ra != rb) return Integer.compare(ra, rb);
+                double ax = a.x - x, az = a.z - z, bx = b.x - x, bz = b.z - z;
+                return Double.compare(ax * ax + az * az, bx * bx + bz * bz);
+            };
+        }
+
+        /** Style rank (integrations 1, in-map 2) doubled, plus 0 for players and 1 otherwise. */
+        private static int rank(DynamicMinimapMarker marker) {
+            int style = switch (marker.style) {
                 case BETTERMAP, NATIVE_WORLDMAP -> 1;
                 case DOT, CREATURE, PLAYER -> 2;
-                // Other players first among in-map markers, so a crowd of creatures never uses up
-                // the in-map elements before a player is placed.
-            }).thenComparingInt((DynamicMinimapMarker marker) -> marker.player ? 0 : 1).thenComparingDouble(marker -> {
-                double dx = marker.x - x, dz = marker.z - z;
-                return dx * dx + dz * dz;
-            });
+            };
+            return style * 2 + (marker.player ? 0 : 1);
         }
 
         List<DynamicMinimapMarker> get(List<DynamicMinimapMarker> snapshot,

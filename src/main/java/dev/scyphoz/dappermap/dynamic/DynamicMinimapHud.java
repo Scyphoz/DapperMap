@@ -352,7 +352,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
         normalized.normalize();
         // Pre-render every locator heading so the first turn needs no render round trip.
         byte[][] arrows = DynamicMinimapRenderer.selfArrows(normalized.colours);
-        if (arrows != null) rememberHash(arrows[0]); // The heading deliverStaticAssets sends.
+        rememberArrowHashes(arrows); // Every heading, so locator deliveries never hash on the world thread.
         var overlay = initialOverlay(normalized); // Includes frame/font setup and PNG encoding off the world thread.
         if (overlay != null) { rememberHash(overlay.readout()); rememberHash(overlay.frame()); rememberHash(overlay.bezel()); }
     }
@@ -360,6 +360,11 @@ public final class DynamicMinimapHud extends CustomUIHud {
     /** Hashes a cached image here (render pool) so the world thread's delivery finds its hash ready. */
     private static void rememberHash(byte[] png) {
         if (png != null && png.length > 0) DynamicAssetPublisher.rememberedHash(png);
+    }
+
+    /** Hashes all locator headings of one colour set (render pool; already-hashed arrays are a map hit). */
+    static void rememberArrowHashes(byte[][] arrows) {
+        if (arrows != null) for (byte[] png : arrows) rememberHash(png);
     }
 
     public void deliverStaticAssets() {
@@ -621,7 +626,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
 
     /** Arranges an in-map layer's markers onto its existing elements, then emits the changes. */
     private boolean applyArranged(UICommandBuilder builder, MarkerLayer layer, Slot[] slots, int count) {
-        Slot[] arranged = arrangeMapSlots(layer, slots, count, this.scratchPlaced, this.scratchTaken);
+        Slot[] arranged = arrangeMapSlots(layer, slots, count, this.scratchPlaced, this.scratchTaken, this.scratchHashes);
         int arrangedCount = 0;
         int capacity = layer.path.length;
         for (int i = 0; i < capacity; i++) if (arranged[i] != null) arrangedCount = i + 1;
@@ -636,6 +641,8 @@ public final class DynamicMinimapHud extends CustomUIHud {
     private final Slot[] scratchEdge = new Slot[EDGE_MARKER_SLOTS];
     private final Slot[] scratchPlaced = new Slot[MAP_MARKER_SLOTS];
     private final boolean[] scratchTaken = new boolean[MAP_MARKER_SLOTS];
+    /** Path hash of each new slot (per HUD, world thread only: HUDs live on different world threads). */
+    private final int[] scratchHashes = new int[MAP_MARKER_SLOTS];
 
     /**
      * Places in-map markers so each one reuses the HUD element already showing the same
@@ -645,15 +652,19 @@ public final class DynamicMinimapHud extends CustomUIHud {
      * Unmatched markers take the lowest free elements. At most a few 96 x 96 cheap comparisons.
      */
     private static Slot[] arrangeMapSlots(MarkerLayer layer, Slot[] slots, int count,
-                                          Slot[] placed, boolean[] taken) {
+                                          Slot[] placed, boolean[] taken, int[] hashes) {
         java.util.Arrays.fill(placed, null);
         java.util.Arrays.fill(taken, 0, count, false);
+        // String caches its hash, so this is one field read per slot.
+        for (int j = 0; j < count; j++) hashes[j] = slots[j].path.hashCode();
         for (int i = 0; i < layer.active; i++) {
             String path = layer.path[i];
             if (!layer.visible[i] || path == null) continue;
+            int hash = path.hashCode();
             int best = -1, bestDistance = Integer.MAX_VALUE;
             for (int j = 0; j < count; j++) {
-                if (taken[j] || !path.equals(slots[j].path)) continue;
+                // An int compare rejects other images; equals only runs for a probable match.
+                if (taken[j] || hashes[j] != hash || !path.equals(slots[j].path)) continue;
                 int distance = Math.abs(slots[j].left - layer.left[i]) + Math.abs(slots[j].top - layer.top[i]);
                 if (distance < bestDistance) { best = j; bestDistance = distance; }
             }
@@ -1323,7 +1334,12 @@ public final class DynamicMinimapHud extends CustomUIHud {
                         : DynamicMinimapRenderer.renderNativeHudParts(snapshot, key.mapSize(), READOUT_WIDTH,
                         key.panelHeight(), key.gap(), key.angle());
                 if (parts == null) this.overlayPrepareFailed = true;
-                else this.preparedOverlay = new PreparedOverlay(key, parts);
+                else {
+                    // Hash the parts here, so publishOverlayAsset's prepareShared finds them remembered
+                    // instead of running SHA-256 on the world thread.
+                    rememberHash(parts.readout()); rememberHash(parts.frame()); rememberHash(parts.bezel());
+                    this.preparedOverlay = new PreparedOverlay(key, parts);
+                }
             } finally {
                 this.overlayPrepareQueued = false; // The next tick's applyPendingLayout publishes it.
             }

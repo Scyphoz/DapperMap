@@ -88,8 +88,49 @@ public class DapperMap extends JavaPlugin {
         return config;
     }
 
-    /** Writes dappermap_minimap.json after an admin changes limits or load shedding in game. */
+    /** Guards {@link #saving} and {@link #saveAgain}. */
+    private static final Object SAVE_LOCK = new Object();
+    /** A save is being written (Config.save writes through one shared .tmp file on a writer pool). */
+    private static boolean saving;
+    /** Another save was asked for while one was running: write once more afterwards. */
+    private static boolean saveAgain;
+
+    /**
+     * Writes dappermap_minimap.json after an admin changes limits or load shedding in game.
+     * Single-flight: two saves never write the shared temp file at once. Requests made while
+     * one runs coalesce into exactly one more save, which writes the newest values.
+     */
     public static void saveConfig() {
-        if (config != null) config.save();
+        Config<DapperMapConfig> current = config;
+        if (current == null) return;
+        synchronized (SAVE_LOCK) {
+            if (saving) { saveAgain = true; return; }
+            saving = true;
+        }
+        startSave(current);
+    }
+
+    /** Starts one write; when it finishes, runs the coalesced follow-up save if one was asked for. */
+    private static void startSave(Config<DapperMapConfig> current) {
+        java.util.concurrent.CompletableFuture<Void> write;
+        try {
+            write = current.save();
+        } catch (RuntimeException failure) {
+            write = java.util.concurrent.CompletableFuture.failedFuture(failure);
+        }
+        if (write == null) write = java.util.concurrent.CompletableFuture.completedFuture(null);
+        // A write stuck for 30 s (e.g. writer pool stopped) releases the flag so later saves aren't
+        // silently dropped; the copy leaves Hytale's own future untouched.
+        write.copy().orTimeout(30, java.util.concurrent.TimeUnit.SECONDS).whenComplete((ignored, failure) -> {
+            if (failure != null) dev.scyphoz.dappermap.util.DapperMapUtil.logFailure("config save", failure);
+            boolean again;
+            synchronized (SAVE_LOCK) {
+                again = saveAgain;
+                saveAgain = false;
+                if (!again) saving = false;
+            }
+            // Runs on the writer thread, so the follow-up's encode is off the world thread too.
+            if (again) startSave(current);
+        });
     }
 }

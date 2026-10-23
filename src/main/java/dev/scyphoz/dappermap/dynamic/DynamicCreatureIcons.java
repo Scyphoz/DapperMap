@@ -100,7 +100,7 @@ public final class DynamicCreatureIcons {
     /** Icon key -> source description, filled on the world thread, read on the render pool. */
     private static final ConcurrentHashMap<String, Source> SOURCES = new ConcurrentHashMap<>();
     /** Bumped whenever SOURCES is cleared; per-viewer key caches then register their creatures again. */
-    private static volatile int sourcesGeneration;
+    private static final java.util.concurrent.atomic.AtomicInteger sourcesGeneration = new java.util.concurrent.atomic.AtomicInteger();
     /** A creature's uncoloured icon: 2x canvas PNG, and whether it is a face "sticker" or an initials disc. */
     private record Base(byte[] png, boolean sticker) { }
     /** Icon key -> uncoloured base (shared by all players). Bounded: ~10-15 KB each. */
@@ -135,12 +135,18 @@ public final class DynamicCreatureIcons {
                 model = component == null ? null : component.getModel();
             } catch (RuntimeException ignored) { }
             Entry entry = this.current.get(ref);
-            int generation = sourcesGeneration;
+            int generation = sourcesGeneration.get();
             // Re-register after SOURCES was cleared, so a creature that stayed in view keeps a resolvable key.
             if (entry == null || entry.model() != model || entry.generation() != generation)
                 entry = new Entry(model, register(npc.getRoleName(), model), generation);
             this.next.put(ref, entry);
             return entry.key();
+        }
+
+        /** Keeps a pool member's key for the next scan without reading its model (hostile-only pool). */
+        void carry(Ref<EntityStore> ref) {
+            Entry entry = this.current.get(ref);
+            if (entry != null) this.next.put(ref, entry);
         }
 
         /** Keeps only creatures seen in the scan just finished. */
@@ -199,9 +205,15 @@ public final class DynamicCreatureIcons {
      * player's skin object, worn helmet or helmet setting changes (skin parts are resolved
      * through the cosmetics registry: a few map lookups, on the world thread, rarely). Only
      * players shown in the latest scan are kept. World thread only.
+     *
+     * <p>The worn helmet (armour slots plus the wearer's hide-helmet setting) is re-read at most
+     * every {@link #HELMET_RECHECK_MS}, or at once when the skin object or the viewer's helmet
+     * setting changes, so a helmet swap shows within about a second.
      */
     public static final class PlayerKeyCache {
-        private record Entry(Object skin, String helmet, String key, int generation) { }
+        static final long HELMET_RECHECK_MS = 750L;
+        /** {@code withHelmet}: the setting the helmet was resolved for; {@code helmetAt}: when it was read. */
+        private record Entry(Object skin, String helmet, boolean withHelmet, long helmetAt, String key, int generation) { }
         private Map<Ref<EntityStore>, Entry> current = new HashMap<>();
         private Map<Ref<EntityStore>, Entry> next = new HashMap<>();
 
@@ -216,12 +228,26 @@ public final class DynamicCreatureIcons {
                         com.hypixel.hytale.server.core.modules.entity.player.PlayerSkinComponent.getComponentType());
                 skin = component == null ? null : component.getPlayerSkin();
             } catch (RuntimeException | LinkageError ignored) { }
-            String helmet = withHelmet ? wornHelmet(ref, accessor) : null;
             Entry entry = this.current.get(ref);
-            int generation = sourcesGeneration;
-            if (entry == null || entry.skin() != skin || !java.util.Objects.equals(entry.helmet(), helmet)
-                    || entry.generation() != generation)
-                entry = new Entry(skin, helmet, registerPlayer(username, skin, helmet), generation);
+            int generation = sourcesGeneration.get();
+            String helmet = null;
+            long helmetAt = 0L;
+            if (withHelmet) {
+                long now = System.currentTimeMillis();
+                // Reuse the last helmet read while it is fresh and nothing it depends on changed.
+                if (entry != null && entry.withHelmet() && entry.skin() == skin && now - entry.helmetAt() < HELMET_RECHECK_MS) {
+                    helmet = entry.helmet();
+                    helmetAt = entry.helmetAt();
+                } else {
+                    helmet = wornHelmet(ref, accessor);
+                    helmetAt = now;
+                }
+            }
+            if (entry == null || entry.skin() != skin || entry.withHelmet() != withHelmet
+                    || !java.util.Objects.equals(entry.helmet(), helmet) || entry.generation() != generation)
+                entry = new Entry(skin, helmet, withHelmet, helmetAt, registerPlayer(username, skin, helmet), generation);
+            else if (entry.helmetAt() != helmetAt)
+                entry = new Entry(skin, helmet, withHelmet, helmetAt, entry.key(), generation); // Same key, fresh read time.
             this.next.put(ref, entry);
             return entry.key();
         }
@@ -500,7 +526,7 @@ public final class DynamicCreatureIcons {
         String key = Long.toHexString(hash);
         if (SOURCES.size() >= 4096 && !SOURCES.containsKey(key)) {
             SOURCES.clear(); // Bounded; keys re-register (KeyCache sees the new generation).
-            sourcesGeneration++;
+            sourcesGeneration.incrementAndGet(); // Atomic: world threads of different worlds may clear at once.
         }
         SOURCES.putIfAbsent(key, source);
         return key;

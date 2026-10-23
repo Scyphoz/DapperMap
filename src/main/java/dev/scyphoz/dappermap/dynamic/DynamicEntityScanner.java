@@ -129,8 +129,13 @@ public final class DynamicEntityScanner {
             boolean useIcons = settings.creatureIcons && icons != null;
             int iconSize = DynamicCreatureIcons.markerSize(settings); // Grows with map size (20-32 units).
             int shown = 0;
-            for (NearestNpcs.Candidate candidate : creatures.sorted()) {
+            // E2: this world's per-tick store of viewer-independent creature reads (null = read directly).
+            SharedReads shared = threats == null ? null : SharedReads.forScan(store);
+            List<NearestNpcs.Candidate> pool = creatures.sorted();
+            int index = 0;
+            for (; index < pool.size(); index++) {
                 if (shown >= creatures.shown) break; // Marker limit reached (nearest first).
+                NearestNpcs.Candidate candidate = pool.get(index);
                 try {
                     if (!candidate.ref().isValid()) continue;
                     NPCEntity npc = candidate.npc(); // Read during selection; no second lookup.
@@ -138,7 +143,7 @@ public final class DynamicEntityScanner {
                     DynamicMinimapColours.Key key = threats == null
                             ? colourFor(candidate.ref(), npc, playerRef, store)
                             : threats.classify(candidate.ref(), npc, playerRef, store, now,
-                            hostileOnly ? ThreatCache.HIDDEN_TTL_MS : ThreatCache.TTL_MS);
+                            hostileOnly ? ThreatCache.HIDDEN_TTL_MS : ThreatCache.TTL_MS, shared);
                     // Hostile-only: skip neutral and friendly creatures (attacking ones always show).
                     if (hostileOnly && key != HOSTILE && key != HOSTILE_ACTIVE) continue;
                     Color colour = settings.colours.awt(key, 255);
@@ -152,6 +157,13 @@ public final class DynamicEntityScanner {
                             : DynamicMinimapMarker.creatureDot(candidate.x(), candidate.z(), colour, 7, threat));
                     shown++;
                 } catch (RuntimeException ignored) { }
+            }
+            // E3: hostile-only pool members past the break keep their cached entries (map moves
+            // only, no ECS reads), so crossing the cut-off does not force fresh classifications.
+            for (; index < pool.size(); index++) {
+                Ref<EntityStore> ref = pool.get(index).ref();
+                if (threats != null) threats.carry(ref);
+                if (icons != null) icons.carry(ref);
             }
             // Both caches keep only the creatures of this scan (the unused one empties itself).
             if (threats != null) threats.endScan();
@@ -216,7 +228,9 @@ public final class DynamicEntityScanner {
             try {
                 if (!other.isValid()) continue;
                 TransformComponent transform = store.getComponent(other, TransformComponent.getComponentType());
-                if (transform == null || store.getComponent(other, Player.getComponentType()) == null) continue;
+                // Both sources (player spatial index: Player+Transform; fallback: Player chunks)
+                // only hold Player entities, so no separate Player lookup is needed.
+                if (transform == null) continue;
                 Vector3d position = transform.getPosition();
                 double dx = position.x() - playerX, dz = position.z() - playerZ;
                 double distance = dx * dx + dz * dz;
@@ -294,6 +308,7 @@ public final class DynamicEntityScanner {
         public static void register(com.hypixel.hytale.component.ComponentRegistryProxy<EntityStore> registry) {
             registry.registerSystem(new HitSystem());
             registry.registerSystem(new DeathSystem());
+            registry.registerSystem(new SharedReads.TickSystem());
         }
 
         static void recordHit(UUID victim, UUID attacker, long now) {
@@ -486,11 +501,15 @@ public final class DynamicEntityScanner {
         private java.util.Map<Ref<EntityStore>, Entry> next = new java.util.HashMap<>();
 
         DynamicMinimapColours.Key classify(Ref<EntityStore> npcRef, NPCEntity npc, Ref<EntityStore> playerRef,
-                                           ComponentAccessor<EntityStore> accessor, long now, long passiveTtl) {
-            // Read once and shared with a full reclassification (previously read twice each).
-            Ref<EntityStore> lockedTarget = getLockedTarget(npcRef, accessor);
-            boolean executingAttack = isExecutingAttack(npcRef, accessor);
-            int engagement = engagement(npc, playerRef, lockedTarget, executingAttack);
+                                           ComponentAccessor<EntityStore> accessor, long now, long passiveTtl,
+                                           SharedReads shared) {
+            // Raw creature reads (locked target, attack state, motion target): shared by every
+            // viewer's scan in this world tick, or read now. Copied to locals before any reuse.
+            SharedReads.Npc raw = SharedReads.read(shared, npcRef, npc, accessor);
+            Ref<EntityStore> lockedTarget = raw.lockedTarget();
+            boolean executingAttack = raw.executingAttack;
+            // The viewer-dependent "engaging ME" comparison stays per viewer.
+            int engagement = engagement(playerRef, lockedTarget, executingAttack, raw.motionTarget);
             Entry cached = this.current.get(npcRef);
             if (cached == null || cached.engagement() != engagement || now >= cached.expiresAt()) {
                 NpcThreatProfile profile;
@@ -510,6 +529,12 @@ public final class DynamicEntityScanner {
             return cached.key();
         }
 
+        /** E3: keeps a pool member's entry for the next scan without classifying it. */
+        void carry(Ref<EntityStore> npcRef) {
+            Entry entry = this.current.get(npcRef);
+            if (entry != null) this.next.put(npcRef, entry);
+        }
+
         /** Keeps only creatures seen in the scan just finished. */
         void endScan() {
             var swap = this.current;
@@ -525,16 +550,109 @@ public final class DynamicEntityScanner {
         }
 
         /** Bit 0: locked onto player; bit 1: executing an attack; bit 2: moving at player. */
-        private static int engagement(NPCEntity npc, Ref<EntityStore> playerRef,
-                                      Ref<EntityStore> lockedTarget, boolean executingAttack) {
+        private static int engagement(Ref<EntityStore> playerRef, Ref<EntityStore> lockedTarget,
+                                      boolean executingAttack, Ref<EntityStore> motionTarget) {
             int bits = sameEntity(lockedTarget, playerRef) ? 1 : 0;
             if (executingAttack) bits |= 2;
+            if (sameEntity(motionTarget, playerRef)) bits |= 4;
+            return bits;
+        }
+    }
+
+    /**
+     * E2: viewer-independent raw creature reads (locked target, executing-attack flag, current
+     * body-motion target), read once per creature per world tick and shared by every viewer's
+     * scan in that tick. Viewer-specific checks (is the target ME, attitude, overrides) stay per
+     * viewer. One instance per world thread (ThreadLocal), stamped with the store and world
+     * tick, and also cleared at the start of every entity-store tick: World.tick drains its task
+     * queue both before and after Store.tick under the same tick number, and NPC AI changes in
+     * between. Values are never reused across ticks or worlds. World thread only; bounded.
+     */
+    static final class SharedReads {
+        /** The reads of one creature. {@code lockedTarget} is raw: validity is re-checked at use. */
+        static final class Npc {
+            private Ref<EntityStore> lockedTarget;
+            boolean executingAttack;
+            Ref<EntityStore> motionTarget;
+
+            /** Locked target if still valid (as getLockedTarget returns it), else null. */
+            Ref<EntityStore> lockedTarget() {
+                return lockedTarget != null && lockedTarget.isValid() ? lockedTarget : null;
+            }
+        }
+
+        /** Entries per world tick (pools are at most 128 per viewer); further creatures read directly. */
+        private static final int MAX_ENTRIES = 1024;
+        private static final ThreadLocal<SharedReads> LOCAL = new ThreadLocal<>();
+        private final HashMap<Ref<EntityStore>, Npc> reads = new HashMap<>();
+        /** Reused for direct reads (solo world or full map); consumed before the next read. */
+        private final Npc scratch = new Npc();
+        private Store<EntityStore> store;
+        private long tick = Long.MIN_VALUE;
+        /** Set by the store tick: NPC state may have changed under the same world tick number. */
+        private boolean stale = true;
+        /** Sharing only pays off with more than one player in the world. */
+        private boolean sharing;
+
+        private SharedReads() { }
+
+        /** This world thread's reads for a scan of {@code store}; null when not on its world thread. */
+        static SharedReads forScan(Store<EntityStore> store) {
+            try {
+                var world = store.getExternalData().getWorld();
+                if (world == null || !world.isInThread()) return null;
+                SharedReads reads = LOCAL.get();
+                if (reads == null) LOCAL.set(reads = new SharedReads());
+                long tick = world.getTick();
+                if (reads.stale || reads.store != store || reads.tick != tick) {
+                    reads.reads.clear();
+                    reads.store = store;
+                    reads.tick = tick;
+                    reads.stale = false;
+                }
+                reads.sharing = world.getPlayerCount() > 1;
+                return reads;
+            } catch (RuntimeException | LinkageError ignored) {
+                return null;
+            }
+        }
+
+        /** The creature's raw reads: shared for this tick when possible, otherwise read now. */
+        static Npc read(SharedReads shared, Ref<EntityStore> npcRef, NPCEntity npc, ComponentAccessor<EntityStore> accessor) {
+            if (shared == null) return fill(new Npc(), npcRef, npc, accessor);
+            if (!shared.sharing) return fill(shared.scratch, npcRef, npc, accessor);
+            Npc reads = shared.reads.get(npcRef);
+            if (reads != null) return reads;
+            if (shared.reads.size() >= MAX_ENTRIES) return fill(shared.scratch, npcRef, npc, accessor);
+            reads = fill(new Npc(), npcRef, npc, accessor);
+            shared.reads.put(npcRef, reads);
+            return reads;
+        }
+
+        /** The same reads, in the same order, as the per-viewer code made before sharing. */
+        private static Npc fill(Npc reads, Ref<EntityStore> npcRef, NPCEntity npc, ComponentAccessor<EntityStore> accessor) {
+            reads.lockedTarget = rawLockedTarget(npcRef, accessor);
+            reads.executingAttack = isExecutingAttack(npcRef, accessor);
+            Ref<EntityStore> target = null;
             try {
                 Role role = npc.getRole();
                 BodyMotion motion = role == null ? null : role.getLastBodySteeringMotion();
-                if (motion != null && sameEntity(motion.getDesiredTargetEntity(), playerRef)) bits |= 4;
+                if (motion != null) target = motion.getDesiredTargetEntity();
             } catch (RuntimeException | LinkageError ignored) { }
-            return bits;
+            reads.motionTarget = target;
+            return reads;
+        }
+
+        /** Runs inside every entity-store tick (world thread, no scan runs meanwhile): drops the reads
+         * so no viewer after the tick sees pre-tick AI state. Paused worlds skip it (NPCs are frozen). */
+        static final class TickSystem extends com.hypixel.hytale.component.system.tick.TickingSystem<EntityStore> {
+            @Override public void tick(float dt, int systemIndex, Store<EntityStore> store) {
+                SharedReads reads = LOCAL.get();
+                if (reads != null && !reads.stale) {
+                    reads.reads.clear(); // Also releases the entity references.
+                    reads.stale = true;
+                }
+            }
         }
     }
 
@@ -592,14 +710,15 @@ public final class DynamicEntityScanner {
     }
 
     private static Ref<EntityStore> getLockedTarget(Ref<EntityStore> npcRef, ComponentAccessor<EntityStore> commandBuffer) {
+        Ref<EntityStore> target = rawLockedTarget(npcRef, commandBuffer);
+        return target != null && target.isValid() ? target : null;
+    }
+
+    /** The creature's "LockedTarget" slot as stored (validity not checked), or null. */
+    private static Ref<EntityStore> rawLockedTarget(Ref<EntityStore> npcRef, ComponentAccessor<EntityStore> commandBuffer) {
         try {
             MarkedEntitySupport markedEntitySupport = MarkedEntitySupport.get(npcRef, commandBuffer);
-            if (markedEntitySupport == null) {
-                return null;
-            } else {
-                Ref<EntityStore> target = markedEntitySupport.getMarkedEntityRef("LockedTarget");
-                return target != null && target.isValid() ? target : null;
-            }
+            return markedEntitySupport == null ? null : markedEntitySupport.getMarkedEntityRef("LockedTarget");
         } catch (Exception ignored) {
             return null;
         }

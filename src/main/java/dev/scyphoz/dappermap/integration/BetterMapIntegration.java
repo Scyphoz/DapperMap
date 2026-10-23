@@ -165,8 +165,51 @@ public final class BetterMapIntegration {
         }
     }
 
+    /**
+     * Shared cave images. The cap starts at 512 and grows with demand (one cave buffer is
+     * (4 x zoom / 32 + 1)^2 chunks: 169 at zoom 96, 1089 at zoom 256) up to 4096 entries, about
+     * 2 MB of 16x16 images at the default image scale; it shrinks back as demand falls.
+     */
     private static final BoundedImageRequests<Key, MapImage> IMAGES =
-            new BoundedImageRequests<>(512, 16, 8, 100L, 30000L, System::currentTimeMillis);
+            new BoundedImageRequests<>(512, 4096, 16, 8, 100L, 30000L, System::currentTimeMillis);
+
+    // Cave-builder failure back-off. A BetterMap built against another server version can throw
+    // LinkageError (NoSuchMethodError and so on) on every build; without a latch each render would
+    // start up to 8 builds per 100 ms, all failing.
+    /** Latched on a LinkageError: cave mode is off until BetterMap's class loader changes. */
+    private static volatile boolean caveBuilderBroken;
+    /** Consecutive failed builds (any success resets it). */
+    private static final java.util.concurrent.atomic.AtomicInteger caveFailures = new java.util.concurrent.atomic.AtomicInteger();
+    /** No new cave builds start before this time (repeated ordinary failures). */
+    private static volatile long caveRetryAtMs;
+    private static final int CAVE_FAILURE_BURST = 16;
+    private static final long CAVE_BACKOFF_MS = 5000L, CAVE_BACKOFF_MAX_MS = 60000L;
+
+    /** Records a failed cave build: a LinkageError latches, other repeats back off up to 60 s. */
+    private static void caveBuildFailed(Throwable failure) {
+        Throwable cause = failure;
+        for (int depth = 0; cause != null && depth < 16; ++depth, cause = cause.getCause()) {
+            if (cause instanceof LinkageError) {
+                if (!caveBuilderBroken) {
+                    caveBuilderBroken = true;
+                    DapperMapUtil.logFailure("BetterMap cave builder (incompatible with this server; cave terrain off until BetterMap reloads)", failure);
+                }
+                return;
+            }
+        }
+        int failures = caveFailures.incrementAndGet();
+        if (failures % CAVE_FAILURE_BURST == 0) {
+            // 5 s after 16 failures in a row, 10 s after 32, ... capped at 60 s.
+            long delay = Math.min(CAVE_BACKOFF_MAX_MS, CAVE_BACKOFF_MS * (failures / CAVE_FAILURE_BURST));
+            caveRetryAtMs = System.currentTimeMillis() + delay;
+            DapperMapUtil.logFailure("BetterMap cave builder (repeated failures; backing off)", failure);
+        }
+    }
+
+    /** Records a finished cave build; the volatile write only happens after failures. */
+    private static void caveBuildSucceeded() {
+        if (caveFailures.get() != 0) caveFailures.set(0);
+    }
     private static volatile ClassLoader caveLoader;
     private static volatile Method managerInstance, enabled, state, underground, renderY, verticalRange, build, image;
 
@@ -188,6 +231,7 @@ public final class BetterMapIntegration {
             ClassLoader current = resolvedLoader;
             if (current == null) return null;
             resolve(current);
+            if (caveBuilderBroken) return null; // Incompatible builder: show surface terrain instead.
             if (!Boolean.TRUE.equals(enabled.invoke(null, player))) return null;
             Object manager = managerInstance.invoke(null);
             if (!Boolean.TRUE.equals(underground.invoke(manager, player))) return null;
@@ -227,6 +271,10 @@ public final class BetterMapIntegration {
         build = builder.getMethod("build", long.class, int.class, int.class, World.class, int.class, int.class);
         image = builder.getMethod("getImage");
         IMAGES.clear();
+        // A new BetterMap class loader gets a fresh chance after an earlier failure latch.
+        caveBuilderBroken = false;
+        caveFailures.set(0);
+        caveRetryAtMs = 0L;
         caveLoader = current;
     }
 
@@ -253,22 +301,31 @@ public final class BetterMapIntegration {
         }
 
         @Override public MapImage apply(Integer x, Integer z) {
-            if (!world.isAlive()) return null;
+            if (!world.isAlive() || caveBuilderBroken) return null;
             pruneImages();
             Key key = new Key(world, y, range, pixels, x, z);
+            // Backing off after repeated failures: ready images only, no new builds.
+            if (caveRetryAtMs != 0L && System.currentTimeMillis() < caveRetryAtMs) return IMAGES.peek(key);
             return IMAGES.request(key, () -> {
                 try {
                     CompletableFuture<?> builder = (CompletableFuture<?>) build.invoke(
                             null, ChunkUtil.indexChunk(x, z), pixels, pixels, world, y, range);
                     // The builder retains WorldChunk and sections. Store only its
                     // finished MapImage, releasing those references on completion.
-                    return builder.thenApply(result -> {
+                    return builder.<MapImage>thenApply(result -> {
                         if (result == null) return null;
                         try { return (MapImage) image.invoke(result); }
                         catch (ReflectiveOperationException e) { throw new java.util.concurrent.CompletionException(e); }
+                    }).whenComplete((result, failure) -> {
+                        // Feed the back-off latch; a null image (nothing to draw) is not a failure.
+                        if (failure != null) caveBuildFailed(failure); else caveBuildSucceeded();
                     });
                 } catch (ReflectiveOperationException | LinkageError e) {
+                    caveBuildFailed(e); // Thrown synchronously (InvocationTargetException wraps it).
                     throw new java.util.concurrent.CompletionException(e);
+                } catch (RuntimeException e) {
+                    caveBuildFailed(e);
+                    throw e;
                 }
             });
         }
@@ -280,16 +337,31 @@ public final class BetterMapIntegration {
     public static final class BoundedImageRequests<K, V> {
         private final LinkedHashMap<K, Entry<V>> entries = new LinkedHashMap<>();
         private final LongSupplier clock;
-        private final int capacity, maxPending, startsPerWindow;
+        private final int baseCapacity, maxCapacity, maxPending, startsPerWindow;
         private final long ttlMs, windowMs;
-        private int pending, starts;
+        private int capacity, pending, starts; // capacity: current cap, baseCapacity..maxCapacity.
         private long windowStart;
 
+        /** A fixed cap. */
         public BoundedImageRequests(int capacity, int maxPending, int startsPerWindow,
                                     long windowMs, long ttlMs, LongSupplier clock) {
-            this.capacity=capacity; this.maxPending=maxPending; this.startsPerWindow=startsPerWindow;
+            this(capacity, capacity, maxPending, startsPerWindow, windowMs, ttlMs, clock);
+        }
+
+        /**
+         * A cap that follows demand: it doubles (up to {@code maxCapacity}) when a new image would
+         * have to evict one that is still fresh, and shrinks back towards {@code capacity} in
+         * {@link #prune} once fewer than half the entries are live.
+         */
+        public BoundedImageRequests(int capacity, int maxCapacity, int maxPending, int startsPerWindow,
+                                    long windowMs, long ttlMs, LongSupplier clock) {
+            this.baseCapacity=capacity; this.maxCapacity=Math.max(capacity, maxCapacity); this.capacity=capacity;
+            this.maxPending=maxPending; this.startsPerWindow=startsPerWindow;
             this.windowMs=windowMs; this.ttlMs=ttlMs; this.clock=clock;
         }
+
+        /** Current cap (for tests and stats). */
+        public synchronized int capacity() { return capacity; }
 
         public synchronized V peek(K key) {
             Entry<V> entry=entries.get(key);
@@ -318,7 +390,14 @@ public final class BetterMapIntegration {
                     var iterator=entries.entrySet().iterator();
                     boolean removed=false;
                     while(iterator.hasNext()) {
-                        if(iterator.next().getValue().future.isDone()) {iterator.remove();removed=true;break;}
+                        Entry<V> oldest=iterator.next().getValue();
+                        if(!oldest.future.isDone()) continue;
+                        if(capacity<maxCapacity && now-oldest.completedAt<ttlMs) {
+                            // The oldest image is still fresh: demand exceeds the cap, so grow it
+                            // instead of evicting an image some buffer is still showing.
+                            capacity=Math.min(maxCapacity, capacity*2);
+                        } else iterator.remove();
+                        removed=true; break;
                     }
                     if(!removed) return null;
                 }
@@ -352,6 +431,10 @@ public final class BetterMapIntegration {
             long now=clock.getAsLong();
             entries.entrySet().removeIf(e->dead.test(e.getKey())
                     || (e.getValue().future.isDone() && now-e.getValue().completedAt>=ttlMs));
+            // Demand fell: shrink by a quarter per prune, never below twice the live entries
+            // (so shrinking itself never evicts) or the base cap.
+            int target=Math.max(baseCapacity, entries.size()*2);
+            if(capacity>target) capacity=Math.max(target, capacity-capacity/4);
         }
         public synchronized void removeIf(Predicate<K> predicate) { entries.keySet().removeIf(predicate); }
         public synchronized void clear() { entries.clear(); }

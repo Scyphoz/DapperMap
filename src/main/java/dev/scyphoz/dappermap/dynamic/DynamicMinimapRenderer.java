@@ -2,7 +2,9 @@ package dev.scyphoz.dappermap.dynamic;
 
 import com.hypixel.hytale.math.util.ChunkUtil;
 import com.hypixel.hytale.protocol.packets.worldmap.MapImage;
+import com.hypixel.hytale.server.core.universe.world.World;
 import com.hypixel.hytale.server.core.universe.world.chunk.palette.BitFieldArr;
+import com.hypixel.hytale.server.core.universe.world.storage.ChunkStore;
 import com.hypixel.hytale.server.core.universe.world.worldmap.WorldMapManager;
 import java.awt.BasicStroke;
 import java.awt.Color;
@@ -24,6 +26,7 @@ import java.io.IOException;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.BiFunction;
+import java.util.function.LongPredicate;
 import javax.imageio.ImageIO;
 
 import dev.scyphoz.dappermap.service.DapperMapServerLoad;
@@ -111,13 +114,16 @@ public final class DynamicMinimapRenderer {
 
     /**
      * Stitches the world-map chunk images around (centerX, centerZ) into one terrain buffer.
-     * The change signature of exactly the images drawn is hashed in the same pass (it used to be
+     * The per-chunk hashes of exactly the images drawn are taken in the same pass (it used to be
      * a second pass over every chunk after rendering). {@code encodePng} false skips the PNG for
      * player-up maps, whose rotation source works from the image and encodes north-up lazily.
+     * {@code chunkLoaded} (see {@link #loadedChunkFilter}; null = no gating) keeps image requests
+     * to loaded world chunks: an unloaded chunk only uses an image already in memory, so a render
+     * never makes the server load or generate terrain. A skipped chunk counts as missing.
      */
     public static Terrain renderTerrain(WorldMapManager worldMapManager, double centerX, double centerZ,
                                         DynamicMinimapSetting settings, BiFunction<Integer, Integer, MapImage> caveImages,
-                                        boolean encodePng) {
+                                        boolean encodePng, LongPredicate chunkLoaded) {
         int logicalBuffer = bufferPixels(settings);
         int textureBuffer = textureBufferPixels(settings);
         double logicalPixelsPerBlock = pixelsPerBlock(settings);
@@ -131,13 +137,16 @@ public final class DynamicMinimapRenderer {
         graphics.fillRect(0, 0, textureBuffer, textureBuffer);
         int present = 0;
         int total = 0;
+        int unloaded = 0;
         long signature = 0L;
+        long[] chunkHashes = null;
+        // The always-true filter needs no index work at all.
+        boolean gated = chunkLoaded != null && chunkLoaded != ALWAYS_LOADED;
         if (worldMapManager != null || caveImages != null) {
             ChunkRange range = ChunkRange.of(centerX, centerZ, settings);
             int chunkPixels = (int)Math.ceil((double)CHUNK_SIZE * texturePixelsPerBlock);
-            // Per-chunk hashes in grid order, folded after the loop exactly as terrainSignature does.
-            long[] chunkHashes = new long[range.width() * range.height()];
-            java.util.Arrays.fill(chunkHashes, 1L);
+            // Per-chunk hashes in grid order (0 = missing), the layout terrainChunkHashes returns.
+            chunkHashes = new long[range.width() * range.height()];
 
             java.util.List<int[]> chunks = new java.util.ArrayList<>(chunkHashes.length);
             for (int z = range.minZ(); z <= range.maxZ(); ++z)
@@ -170,13 +179,18 @@ public final class DynamicMinimapRenderer {
                         image = caveImages.apply(chunkX, chunkZ);
                     } else {
                         image = worldMapManager.getImageIfInMemory(chunkX, chunkZ);
-                        if (image == null && requests < 16) {
-                            ++requests;
-                            image = worldMapManager.getImageAsync(chunkX, chunkZ).getNow(null);
+                        if (image == null) {
+                            // World-map chunk index == ChunkStore column index (both 32 blocks,
+                            // ChunkUtil.indexChunk): no conversion. Unloaded: no request slot used.
+                            if (gated && !chunkLoaded.test(ChunkUtil.indexChunk(chunkX, chunkZ))) ++unloaded;
+                            else if (requests < 16) {
+                                ++requests;
+                                image = worldMapManager.getImageAsync(chunkX, chunkZ).getNow(null);
+                            }
                         }
                     }
                     // Hash before drawing, so an image that fails to decode still counts as seen.
-                    if (image != null) chunkHashes[range.indexOf(chunkX, chunkZ)] = chunkHash(image);
+                    if (image != null) chunkHashes[range.indexOf(chunkX, chunkZ)] = presentHash(image);
                     if (image != null && image.width > 0 && image.height > 0
                             && (long)image.width * image.height <= Integer.MAX_VALUE) {
                         if (chunkImage == null || chunkImage.getWidth() != image.width || chunkImage.getHeight() != image.height) {
@@ -206,35 +220,146 @@ public final class DynamicMinimapRenderer {
         }
 
         graphics.dispose();
-        if (present == 0) return new Terrain(null, null, 0, total, signature);
-        return new Terrain(encodePng ? terrainPng(terrain) : null, terrain, present, total, signature);
+        if (present == 0) return new Terrain(null, null, 0, total, unloaded, signature, chunkHashes);
+        return new Terrain(encodePng ? terrainPng(terrain) : null, terrain, present, total, unloaded, signature, chunkHashes);
     }
 
     /**
-     * Cheap change signature of the chunk images currently in memory for a buffer (no chunk
-     * loads are started). Used by the periodic probe; renderTerrain computes the same value for
-     * the images it drew.
+     * Per-chunk hashes of the images currently in memory for a buffer, in renderTerrain's grid
+     * order (0 = missing; null when there is no image source). Used by the periodic probe and
+     * compared with {@link #chunksChanged}. No world-map loads are started. A BetterMap cave view
+     * quietly re-requests up to {@link #PROBE_CAVE_REFRESHES} expired chunks per probe (its images
+     * time out after 30 s): a rebuild that differs shows up as a changed hash on a later probe,
+     * so mined-out caves still refresh, while removals themselves never force a redraw.
      */
-    public static long terrainSignature(WorldMapManager worldMapManager, double centerX, double centerZ, DynamicMinimapSetting settings, BiFunction<Integer, Integer, MapImage> caveImages) {
-        if (worldMapManager == null && caveImages == null) return 0L;
+    public static long[] terrainChunkHashes(WorldMapManager worldMapManager, double centerX, double centerZ,
+                                            DynamicMinimapSetting settings, BiFunction<Integer, Integer, MapImage> caveImages) {
+        if (worldMapManager == null && caveImages == null) return null;
         ChunkRange range = ChunkRange.of(centerX, centerZ, settings);
         long[] chunkHashes = new long[range.width() * range.height()];
+        dev.scyphoz.dappermap.integration.BetterMapIntegration.CaveView view =
+                caveImages instanceof dev.scyphoz.dappermap.integration.BetterMapIntegration.CaveView cave ? cave : null;
+        // Cave chunks found missing on this pass (x, z pairs); refreshed nearest-first below.
+        int[] missing = view != null ? new int[chunkHashes.length * 2] : null;
+        int missingCount = 0;
         for (int chunkZ = range.minZ(); chunkZ <= range.maxZ(); ++chunkZ) {
             for (int chunkX = range.minX(); chunkX <= range.maxX(); ++chunkX) {
-                long hash = 1L;
                 try {
-                    MapImage image = caveImages instanceof dev.scyphoz.dappermap.integration.BetterMapIntegration.CaveView view
-                            ? view.peek(chunkX, chunkZ)
-                            : caveImages != null ? caveImages.apply(chunkX, chunkZ)
-                            : worldMapManager.getImageIfInMemory(chunkX, chunkZ);
-                    if (image != null) hash = chunkHash(image);
+                    MapImage image;
+                    if (view != null) {
+                        image = view.peek(chunkX, chunkZ);
+                        if (image == null) { missing[missingCount * 2] = chunkX; missing[missingCount * 2 + 1] = chunkZ; ++missingCount; }
+                    } else {
+                        image = caveImages != null ? caveImages.apply(chunkX, chunkZ)
+                                : worldMapManager.getImageIfInMemory(chunkX, chunkZ);
+                    }
+                    if (image != null) chunkHashes[range.indexOf(chunkX, chunkZ)] = presentHash(image);
                 } catch (Throwable ignored) {
-                    // Unreadable chunk: hashed as missing.
+                    // Unreadable chunk: left as missing (0).
                 }
-                chunkHashes[range.indexOf(chunkX, chunkZ)] = hash;
             }
         }
-        return foldSignature(chunkHashes);
+        if (missingCount > 0) refreshCaveChunks(view, chunkHashes, range, missing, missingCount, centerX, centerZ);
+        return chunkHashes;
+    }
+
+    /** Cave chunks the probe may re-request per pass (BetterMap admits 8 starts per 100 ms overall). */
+    private static final int PROBE_CAVE_REFRESHES = 4;
+    /** A cave chunk the probe re-requested is not re-requested again for this long (pending or empty builds). */
+    private static final long PROBE_CAVE_RETRY_MS = 10_000L;
+    /** Last probe re-request per (cave view, chunk); pruned when large. Shared by all players' probes. */
+    private static final java.util.concurrent.ConcurrentHashMap<Long, Long> PROBE_CAVE_TRIED = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /**
+     * Re-requests up to {@link #PROBE_CAVE_REFRESHES} missing cave chunks, nearest to the player
+     * first, skipping chunks re-requested in the last {@link #PROBE_CAVE_RETRY_MS} (still building,
+     * failed or empty). Nearest-first keeps the area around the player fresh after mining.
+     */
+    private static void refreshCaveChunks(dev.scyphoz.dappermap.integration.BetterMapIntegration.CaveView view,
+                                          long[] chunkHashes, ChunkRange range, int[] missing, int count,
+                                          double centerX, double centerZ) {
+        long now = System.currentTimeMillis();
+        if (PROBE_CAVE_TRIED.size() > 8192) PROBE_CAVE_TRIED.values().removeIf(at -> now - at >= PROBE_CAVE_RETRY_MS);
+        int centerChunkX = Math.floorDiv((int)Math.floor(centerX), CHUNK_SIZE);
+        int centerChunkZ = Math.floorDiv((int)Math.floor(centerZ), CHUNK_SIZE);
+        long viewKey = (long)view.hashCode() * 0x9E3779B97F4A7C15L;
+        // Order the missing chunks by distance from the player (small list: one sort per probe).
+        Integer[] order = new Integer[count];
+        int[] distance = new int[count];
+        for (int i = 0; i < count; ++i) {
+            int dx = missing[i * 2] - centerChunkX, dz = missing[i * 2 + 1] - centerChunkZ;
+            distance[i] = dx * dx + dz * dz;
+            order[i] = i;
+        }
+        java.util.Arrays.sort(order, (a, b) -> Integer.compare(distance[a], distance[b]));
+        int refreshes = 0;
+        for (int n = 0; n < count && refreshes < PROBE_CAVE_REFRESHES; ++n) {
+            int chunkX = missing[order[n] * 2], chunkZ = missing[order[n] * 2 + 1];
+            long key = viewKey ^ ((long)chunkX << 32 | (chunkZ & 0xFFFFFFFFL));
+            Long tried = PROBE_CAVE_TRIED.get(key);
+            if (tried != null && now - tried < PROBE_CAVE_RETRY_MS) continue; // Pending, failed or empty recently.
+            PROBE_CAVE_TRIED.put(key, now);
+            ++refreshes;
+            try {
+                MapImage image = view.apply(chunkX, chunkZ);
+                if (image != null) chunkHashes[range.indexOf(chunkX, chunkZ)] = presentHash(image);
+            } catch (Throwable ignored) {
+                // Build failure: retried after the cooldown (BetterMapIntegration backs off on repeats).
+            }
+        }
+    }
+
+    /**
+     * True when the probe found a chunk image that is new or different from the one shown.
+     * A chunk that disappeared (probe 0: unloaded, cave TTL, cap eviction) is never a change: the
+     * HUD still shows it correctly, and redrawing would only punch a hole. Nothing shown yet
+     * ({@code shown} null) is a change only once some image exists; a different grid size always is.
+     */
+    public static boolean chunksChanged(long[] shown, long[] probe) {
+        if (probe == null) return false; // No image source: nothing to compare.
+        if (shown == null) {
+            for (long hash : probe) if (hash != 0L) return true;
+            return false;
+        }
+        if (shown.length != probe.length) return true;
+        for (int i = 0; i < probe.length; ++i) {
+            long hash = probe[i];
+            if (hash != 0L && hash != shown[i]) return true;
+        }
+        return false;
+    }
+
+    /** Filter that never gates (no world, or the chunk store cannot be asked). */
+    private static final LongPredicate ALWAYS_LOADED = index -> true;
+    /** Set if the chunk-store lookup is missing on this server build; gating is then off. */
+    private static volatile boolean chunkGateUnavailable;
+
+    /**
+     * Maps a world-map chunk index to whether its world chunk is loaded. Map chunks and ChunkStore
+     * chunks are both 32 blocks and share ChunkUtil.indexChunk, so the index is used unchanged.
+     * {@code ChunkStore.getChunkReference(long)} is a concurrent-map get plus a StampedLock
+     * optimistic read with no thread assert, so the filter is safe on the render pool. Any doubt
+     * (no world, no store, a lookup failure) answers true, i.e. today's ungated behaviour.
+     */
+    public static LongPredicate loadedChunkFilter(World world) {
+        if (world == null || chunkGateUnavailable) return ALWAYS_LOADED;
+        ChunkStore store;
+        try {
+            store = world.getChunkStore();
+        } catch (RuntimeException | LinkageError unavailable) {
+            return ALWAYS_LOADED;
+        }
+        if (store == null) return ALWAYS_LOADED;
+        return index -> {
+            try {
+                return store.getChunkReference(index) != null;
+            } catch (LinkageError missing) {
+                chunkGateUnavailable = true; // Older/newer server without this lookup: stop gating.
+                return true;
+            } catch (RuntimeException unsure) {
+                return true;
+            }
+        };
     }
 
     /** World-map chunks covered by a terrain buffer centred on (centerX, centerZ). */
@@ -266,10 +391,19 @@ public final class DynamicMinimapRenderer {
         return chunkHash;
     }
 
-    /** FNV-1a style fold of per-chunk hashes in row-major order. */
+    /** chunkHash for a present image, never 0 (0 marks a missing chunk in the hash arrays). */
+    private static long presentHash(MapImage image) {
+        long hash = chunkHash(image);
+        return hash == 0L ? 1L : hash;
+    }
+
+    /**
+     * FNV-1a style fold of per-chunk hashes in row-major order. A missing chunk (0) folds as 1L,
+     * as it always has, so the signature keeps its previous value for the same images.
+     */
     private static long foldSignature(long[] chunkHashes) {
         long hash = 1469598103934665603L;
-        for (long chunkHash : chunkHashes) hash = (hash ^ chunkHash) * 1099511628211L;
+        for (long chunkHash : chunkHashes) hash = (hash ^ (chunkHash == 0L ? 1L : chunkHash)) * 1099511628211L;
         return hash;
     }
 
@@ -612,6 +746,8 @@ public final class DynamicMinimapRenderer {
         BufferedImage overlay = renderHudOverlayImage(preview, mapSize, panelWidth, panelHeight, gap, snapshot.frameAngle(),
                 snapshot.coords(), snapshot.compass(), snapshot.clock(), snapshot.biome());
         if (overlay == null) return null;
+        // Decoded terrain and icons for this snapshot, shared by every preview render of the page.
+        DecodedPreview decoded = decodedPreview(snapshot);
         try {
             BufferedImage hud = new BufferedImage(overlay.getWidth(), overlay.getHeight(), BufferedImage.TYPE_INT_ARGB);
             Graphics2D g = hud.createGraphics();
@@ -629,7 +765,7 @@ public final class DynamicMinimapRenderer {
             double apertureSize = mapSize - 2 * apertureInset;
             if (preview.isCircle()) g.setClip(new Ellipse2D.Double(mapX + apertureInset, mapY + apertureInset, apertureSize, apertureSize));
             else g.setClip(new RoundRectangle2D.Double(mapX + apertureInset, mapY + apertureInset, apertureSize, apertureSize, mapSize * 10.0D / STATIC_ASSET_LOGICAL_SIZE, mapSize * 10.0D / STATIC_ASSET_LOGICAL_SIZE));
-            BufferedImage terrain = ImageIO.read(new ByteArrayInputStream(snapshot.terrain()));
+            BufferedImage terrain = decoded.terrain(snapshot.terrain());
             if (terrain != null) {
                 double ratio = (double)mapSize / snapshot.mapSize();
                 int panX = (int)Math.round(snapshot.panX() * ratio);
@@ -656,7 +792,7 @@ public final class DynamicMinimapRenderer {
                             creatureCandidates.add(new double[]{centerX, centerY});
                         }
                     } else {
-                        drawPreviewAsset(g, marker.image(), x, y, size);
+                        drawPreviewAsset(g, decoded, marker.image(), x, y, size);
                         occupied.add(new double[]{(marker.x() + marker.size() / 2.0) * ratio,
                                 (marker.y() + marker.size() / 2.0) * ratio});
                     }
@@ -709,7 +845,7 @@ public final class DynamicMinimapRenderer {
                                 : DynamicCreatureIcons.previewIcon(keys.get(i % keys.size()), rgb);
                         int size = image != null ? iconSize : dotSize;
                         if (image == null) image = renderDot(rgb, preview.colours);
-                        drawPreviewAsset(g, image,
+                        drawPreviewAsset(g, decoded, image,
                                 mapX + samples.get(i)[0] - size / 2.0,
                                 mapY + samples.get(i)[1] - size / 2.0, size);
                     }
@@ -717,7 +853,7 @@ public final class DynamicMinimapRenderer {
             }
             g.setClip(oldClip);
             int arrowSize = Math.max(18, mapSize / 10);
-            drawPreviewAsset(g, renderSelfArrow(snapshot.selfAngle(), preview.colours),
+            drawPreviewAsset(g, decoded, renderSelfArrow(snapshot.selfAngle(), preview.colours),
                     mapX + (mapSize - arrowSize) / 2, mapY + (mapSize - arrowSize) / 2,
                     arrowSize);
             g.drawImage(overlay, 0, 0, null);
@@ -782,6 +918,89 @@ public final class DynamicMinimapRenderer {
         if (snapshot == null) return;
         synchronized (POSITION_BASES) {
             POSITION_BASES.removeIf(cached -> cached.snapshot() == snapshot);
+        }
+        synchronized (DECODED_PREVIEWS) {
+            DECODED_PREVIEWS.removeIf(cached -> cached.snapshot == snapshot);
+        }
+    }
+
+    /**
+     * Decoded images for one preview snapshot: its terrain PNG and the icon PNGs drawn over it,
+     * keyed by array identity. Snapshots and the cached icon arrays are never mutated, so a decode
+     * stays valid for the snapshot's life and previews no longer re-decode them on every render.
+     * The images are only read (drawImage). Render pool only.
+     */
+    private static final class DecodedPreview {
+        /** Icon arrays remembered per snapshot; new arrays beyond this just decode as before. */
+        private static final int ICON_LIMIT = 64;
+        final LiveSnapshot snapshot;
+        private volatile BufferedImage terrain;
+        private final java.util.IdentityHashMap<byte[], BufferedImage> icons = new java.util.IdentityHashMap<>();
+
+        DecodedPreview(LiveSnapshot snapshot) { this.snapshot = snapshot; }
+
+        /** The snapshot terrain, decoded once (a racing first decode is harmless). */
+        BufferedImage terrain(byte[] png) throws IOException {
+            BufferedImage image = this.terrain;
+            if (image == null) {
+                image = ImageIO.read(new ByteArrayInputStream(png));
+                this.terrain = image;
+                if (image != null) trimDecodedPreviews(); // Its size is only known now.
+            }
+            return image;
+        }
+
+        BufferedImage icon(byte[] png) throws IOException {
+            synchronized (this.icons) {
+                BufferedImage image = this.icons.get(png);
+                if (image != null) return image;
+            }
+            BufferedImage image = ImageIO.read(new ByteArrayInputStream(png)); // Decoded outside the lock.
+            if (image != null) {
+                synchronized (this.icons) {
+                    if (this.icons.size() < ICON_LIMIT) this.icons.put(png, image);
+                }
+            }
+            return image;
+        }
+
+        long pixels() {
+            BufferedImage image = this.terrain;
+            return image == null ? 0L : (long)image.getWidth() * image.getHeight();
+        }
+    }
+
+    /** Recent snapshots' decodes (one per open settings page, typically), most recent first. */
+    private static final java.util.ArrayDeque<DecodedPreview> DECODED_PREVIEWS = new java.util.ArrayDeque<>();
+    private static final int DECODED_PREVIEW_LIMIT = 4;
+    /** Terrain pixels kept decoded across snapshots (8M ARGB pixels = 32 MB; the default size is ~0.6M each). */
+    private static final long DECODED_PREVIEW_PIXELS = 8L * 1024L * 1024L;
+
+    private static DecodedPreview decodedPreview(LiveSnapshot snapshot) {
+        synchronized (DECODED_PREVIEWS) {
+            DecodedPreview found = null;
+            for (DecodedPreview cached : DECODED_PREVIEWS) if (cached.snapshot == snapshot) { found = cached; break; }
+            if (found != null) {
+                if (DECODED_PREVIEWS.peekFirst() != found) { DECODED_PREVIEWS.remove(found); DECODED_PREVIEWS.addFirst(found); }
+                return found;
+            }
+            found = new DecodedPreview(snapshot);
+            DECODED_PREVIEWS.addFirst(found);
+            trimDecodedPreviews();
+            return found;
+        }
+    }
+
+    /**
+     * Drops the least recent decodes beyond the count or terrain-pixel budget (a 2048px buffer
+     * decodes to 16 MB). The most recent entry always stays.
+     */
+    private static void trimDecodedPreviews() {
+        synchronized (DECODED_PREVIEWS) {
+            long pixels = 0L;
+            for (DecodedPreview cached : DECODED_PREVIEWS) pixels += cached.pixels();
+            while (DECODED_PREVIEWS.size() > 1 && (DECODED_PREVIEWS.size() > DECODED_PREVIEW_LIMIT
+                    || pixels > DECODED_PREVIEW_PIXELS)) pixels -= DECODED_PREVIEWS.removeLast().pixels();
         }
     }
 
@@ -906,9 +1125,10 @@ public final class DynamicMinimapRenderer {
         }
     }
 
-    private static void drawPreviewAsset(Graphics2D g, byte[] png, double x, double y, int size) throws IOException {
+    private static void drawPreviewAsset(Graphics2D g, DecodedPreview decoded, byte[] png,
+                                         double x, double y, int size) throws IOException {
         if (png == null) return;
-        BufferedImage image = ImageIO.read(new ByteArrayInputStream(png));
+        BufferedImage image = decoded.icon(png);
         if (image != null) g.drawImage(image, (int)Math.round(x), (int)Math.round(y), size, size, null);
     }
 
@@ -1997,15 +2217,25 @@ public final class DynamicMinimapRenderer {
         public final BufferedImage image;
         public final int present;
         public final int total;
-        /** Change signature of the chunk images drawn (same value terrainSignature gives). */
+        /** Missing chunks skipped because their world chunk was not loaded (no request made). */
+        public final int unloaded;
+        /** Fold of {@link #chunkHashes} (the old single-value signature; kept for stats). */
         public final long signature;
+        /**
+         * Hash of each chunk image drawn, in grid order (0 = missing; null without an image
+         * source). Never mutated after renderTerrain returns, so it can be handed between threads.
+         */
+        public final long[] chunkHashes;
 
-        Terrain(byte[] png, BufferedImage image, int present, int total, long signature) {
+        Terrain(byte[] png, BufferedImage image, int present, int total, int unloaded,
+                long signature, long[] chunkHashes) {
             this.png = png;
             this.image = image;
             this.present = present;
             this.total = total;
+            this.unloaded = unloaded;
             this.signature = signature;
+            this.chunkHashes = chunkHashes;
         }
 
         public boolean complete() {
