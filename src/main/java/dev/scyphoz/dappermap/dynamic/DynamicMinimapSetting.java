@@ -117,6 +117,14 @@ public final class DynamicMinimapSetting {
         return (this.showCompassLetters ? 1 : 0) | (this.showCompassDashes ? 2 : 0) | (this.showCardinalDashes ? 4 : 0);
     }
 
+    /**
+     * A marker size given for the default 220 px map, grown in proportion for larger maps (never
+     * shrunk below it), so every marker keeps the same size relative to the map at any Map Size.
+     */
+    public int scaledMarkerSize(int baseSize) {
+        return Math.max(baseSize, Math.round(baseSize * this.sizePixels / 220.0F));
+    }
+
     public boolean isCircle() {
         return this.shape == 1;
     }

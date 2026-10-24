@@ -81,9 +81,9 @@ public final class DynamicCreatureIcons {
     private static final Color DISC = new Color(70, 78, 96, 235);
     private static final Color INITIALS = new Color(242, 242, 248, 255);
 
-    /** Icon size for the current map: 20 units at the default 220 px map, up to 32 at 360 px. */
+    /** Icon size for the current map: 20 units at the default 220 px map, up to 33 at 360 px. */
     public static int markerSize(DynamicMinimapSetting settings) {
-        return Math.max(MARKER_SIZE, Math.min(32, Math.round(MARKER_SIZE * settings.sizePixels / 220.0F)));
+        return settings.scaledMarkerSize(MARKER_SIZE); // Same growth as every other marker.
     }
 
     /** Pale "off" phase of the attacking pulse: the attacking colour blended 60% towards white. */

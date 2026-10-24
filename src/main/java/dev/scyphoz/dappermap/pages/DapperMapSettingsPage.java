@@ -388,17 +388,12 @@ public final class DapperMapSettingsPage
             if (this.closed) { this.previewQueued.set(false); return; }
             try {
                 // Text over the preview is native labels (Hytale's font), built here off the world
-                // thread. The Position tab's whole-screen preview is too small for readable text.
-                byte[] png;
-                String textMarkup = "";
-                if (position) {
-                    png = DynamicMinimapRenderer.renderPositionPreview(draft, snapshot);
-                } else {
-                    var rendered = DynamicMinimapRenderer.renderSettingsPreview(draft, snapshot);
-                    png = rendered == null ? null : rendered.png();
-                    if (rendered != null) textMarkup = previewTextMarkup(rendered.texts());
-                }
-                String texts = textMarkup;
+                // thread, for both the close-up preview and the Position tab's whole-screen one.
+                var rendered = position
+                        ? DynamicMinimapRenderer.renderPositionPreview(draft, snapshot)
+                        : DynamicMinimapRenderer.renderSettingsPreview(draft, snapshot);
+                byte[] png = rendered == null ? null : rendered.png();
+                String texts = rendered == null ? "" : previewTextMarkup(rendered.texts());
                 var prepared = DynamicAssetPublisher.prepare(path, png);
                 world.execute(() -> {
                     this.previewQueued.set(false);
@@ -483,7 +478,8 @@ public final class DapperMapSettingsPage
             int top = (int)Math.round(text.y() * PREVIEW_SCALE_Y);
             int width = Math.max(1, (int)Math.round(text.width() * PREVIEW_SCALE_X));
             int height = Math.max(1, (int)Math.round(text.height() * PREVIEW_SCALE_Y));
-            int font = Math.max(5, (int)Math.round(text.fontSize() * PREVIEW_SCALE_Y));
+            // At least 4: the Position tab draws the whole HUD small (smaller text is unreadable).
+            int font = Math.max(4, (int)Math.round(text.fontSize() * PREVIEW_SCALE_Y));
             double spacing = Math.round(text.letterSpacing() * PREVIEW_SCALE_X * 10.0D) / 10.0D;
             out.append("Label #").append(text.id()).append(" { Anchor: (Left: ").append(left)
                     .append(", Top: ").append(top).append(", Width: ").append(width)

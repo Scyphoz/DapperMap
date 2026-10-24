@@ -1863,7 +1863,10 @@ public final class DynamicMinimapSession {
             double markerX = dx * cos - dz * sin + (double)bufferPixels / 2.0D;
             double markerZ = dx * sin + dz * cos + (double)bufferPixels / 2.0D;
 
-            int size = Math.max(8, marker.size);
+            // Creature and player icons arrive already sized for the map (markerSize); dots and
+            // world-map, BetterMap and death markers are sized for 220 px and grow with the map here.
+            int size = Math.max(8, marker.style == Style.CREATURE || marker.style == Style.PLAYER
+                    ? marker.size : this.settings.scaledMarkerSize(marker.size));
             // Compass alert: during the "on" half of the pulse the marker shows its alert look and
             // grows a little about the same centre (edge clamping keeps using its normal size).
             boolean alertOn = this.pulseOn && this.alerting(marker, projectionTime);
@@ -2151,7 +2154,7 @@ public final class DynamicMinimapSession {
             // Move radially inward so the marker still indicates its true direction.
             // Badge size and inset match DynamicMinimapRenderer.cardinalLetterCentre.
             boolean dashes = settings.showCardinalDashes;
-            double badgeInset = (dashes ? 27 : DynamicMinimapRenderer.cardinalBadgeSize(false) / 2.0D + 0.5D) * uiScale;
+            double badgeInset = (dashes ? 25 : DynamicMinimapRenderer.cardinalBadgeSize(false) / 2.0D + 0.5D) * uiScale;
             double clearance = DynamicMinimapRenderer.cardinalBadgeSize(dashes) / 2.0D * uiScale + markerSize / 2.0D + 1;
             // Cardinal k sits at bearing -90° + k·90° + angle; its unit vector follows from one
             // cos/sin pair: (sin, -cos), (cos, sin), (-sin, cos), (-cos, -sin).

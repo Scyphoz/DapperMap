@@ -894,7 +894,8 @@ public final class DynamicMinimapRenderer {
      * The Position-tab preview's HUD image: the settings preview trimmed to its visible pixels,
      * plus the extent its scale is based on. Independent of the HUD X/Y position.
      */
-    private record PositionPreviewBase(BufferedImage hud, int scaleReference) {}
+    /** {@code texts}: the HUD's native labels, in the trimmed {@code hud} image's pixels. */
+    private record PositionPreviewBase(BufferedImage hud, int scaleReference, java.util.List<PreviewText> texts) {}
 
     /** A cached base, valid for one snapshot and one draft (compared without its X/Y position). */
     private record CachedPositionBase(LiveSnapshot snapshot, DynamicMinimapSetting settings, PositionPreviewBase base) {}
@@ -1017,7 +1018,7 @@ public final class DynamicMinimapRenderer {
      * The HUD image is the same settings preview used by the other tabs, scaled and placed from
      * the draft X/Y percentages. Position-only edits reuse the HUD image of the previous call.
      */
-    public static byte[] renderPositionPreview(DynamicMinimapSetting settings, LiveSnapshot snapshot) {
+    public static SettingsPreview renderPositionPreview(DynamicMinimapSetting settings, LiveSnapshot snapshot) {
         if (snapshot == null) return null;
         DynamicMinimapSetting draft = settings.copy();
         PositionPreviewBase base = null;
@@ -1056,13 +1057,17 @@ public final class DynamicMinimapRenderer {
     }
 
     private static PositionPreviewBase positionPreviewBase(DynamicMinimapSetting settings, LiveSnapshot snapshot) {
-        BufferedImage hud = settingsPreviewImage(settings, snapshot, null);
+        java.util.List<PreviewText> stageTexts = new java.util.ArrayList<>(14);
+        BufferedImage hud = settingsPreviewImage(settings, snapshot, stageTexts);
         if (hud == null) return null;
         // The preview stage is a transparent canvas with the HUD centred inside it. Position the
         // visible HUD bounds, not that canvas; otherwise its transparent margins keep corner
         // selections near the centre.
         int[] bounds = visibleBounds(hud);
         if (bounds != null) hud = hud.getSubimage(bounds[0], bounds[1], bounds[2] - bounds[0] + 1, bounds[3] - bounds[1] + 1);
+        // Labels move with the trim: stage pixels -> trimmed HUD pixels (composePositionPreview places them).
+        java.util.List<PreviewText> texts = bounds == null ? stageTexts
+                : moveTexts(stageTexts, -bounds[0], -bounds[1], 1.0D, 1.0D);
         int scaleReference = Math.max(hud.getWidth(), hud.getHeight());
         if (!settings.infoPanelShown()) {
             // The disabled-panel map is deliberately smaller so its scale matches the enabled
@@ -1077,11 +1082,23 @@ public final class DynamicMinimapRenderer {
                         referenceBounds[3] - referenceBounds[1] + 1);
             }
         }
-        return new PositionPreviewBase(hud, scaleReference);
+        return new PositionPreviewBase(hud, scaleReference, texts);
     }
 
-    /** The 360x286 screen with the HUD placed at the draft's X/Y percentages, as PNG. */
-    private static byte[] composePositionPreview(PositionPreviewBase base, DynamicMinimapSetting settings) {
+    /** Labels shifted by (dx, dy) and then scaled about the origin (x' = (x + dx) * scale). */
+    private static java.util.List<PreviewText> moveTexts(java.util.List<PreviewText> texts, double dx, double dy,
+                                                         double scaleX, double scaleY) {
+        java.util.List<PreviewText> moved = new java.util.ArrayList<>(texts.size());
+        for (PreviewText t : texts) {
+            moved.add(new PreviewText(t.id(), t.text(), (t.x() + dx) * scaleX, (t.y() + dy) * scaleY,
+                    t.width() * scaleX, t.height() * scaleY, t.fontSize() * scaleY, t.colour(), t.bold(),
+                    t.letterSpacing() * scaleX, t.alignment()));
+        }
+        return moved;
+    }
+
+    /** The 360x286 screen with the HUD placed at the draft's X/Y percentages, as PNG plus its labels. */
+    private static SettingsPreview composePositionPreview(PositionPreviewBase base, DynamicMinimapSetting settings) {
         try {
             BufferedImage hud = base.hud();
             int width = 360;
@@ -1109,7 +1126,12 @@ public final class DynamicMinimapRenderer {
             g.drawLine(12, height / 2, width - 12, height / 2);
             g.drawImage(hud, x, y, widgetWidth, widgetHeight, null);
             g.dispose();
-            return toPng(screen);
+            byte[] png = toPng(screen);
+            if (png == null) return null;
+            // The HUD's labels, scaled and placed exactly like its image on the small screen.
+            double scaleX = (double)widgetWidth / hud.getWidth(), scaleY = (double)widgetHeight / hud.getHeight();
+            return new SettingsPreview(png, java.util.List.copyOf(
+                    moveTexts(base.texts(), x / scaleX, y / scaleY, scaleX, scaleY)));
         } catch (Exception ignored) {
             return null;
         }
@@ -1136,17 +1158,17 @@ public final class DynamicMinimapRenderer {
     }
 
     /**
-     * Side of a cardinal letter's badge in frame units (220 = the whole frame). Letters sit in a
-     * 22-unit badge inside the ring, or a smaller 18-unit one out on the rim when the cardinal
-     * dashes are hidden.
+     * Side of a cardinal letter's badge in frame units (220 = the whole frame): 18 units, both
+     * inside the ring beside the large dashes and out on the rim when those dashes are hidden.
+     * The edge-marker clamp keeps clear of badges of this size.
      */
     public static double cardinalBadgeSize(boolean cardinalDashes) {
-        return cardinalDashes ? 22.0D : 18.0D;
+        return 18.0D;
     }
 
-    /** Letter size in frame units for the matching badge (as the old raster letters). */
+    /** Letter size in frame units for the badge. */
     public static double cardinalFontSize(boolean cardinalDashes) {
-        return cardinalDashes ? 15.0D : 13.0D;
+        return 13.0D;
     }
 
     /**
@@ -1160,7 +1182,7 @@ public final class DynamicMinimapRenderer {
         double dx = Math.cos(bearing), dy = Math.sin(bearing);
         double divisor = circle ? 1 : Math.max(Math.abs(dx), Math.abs(dy));
         // Inside the ring beside the large dash, or (dashes hidden) out on the rim where the dash was.
-        double inset = cardinalDashes ? 27.0D : cardinalBadgeSize(false) / 2.0D + 0.5D;
+        double inset = cardinalDashes ? 25.0D : cardinalBadgeSize(false) / 2.0D + 0.5D;
         double radius = (center - inset) / divisor;
         return new double[]{(center + dx * radius) / STATIC_ASSET_LOGICAL_SIZE,
                 (center + dy * radius) / STATIC_ASSET_LOGICAL_SIZE};
