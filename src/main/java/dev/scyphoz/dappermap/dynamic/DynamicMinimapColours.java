@@ -7,7 +7,7 @@ import java.util.Arrays;
 public final class DynamicMinimapColours {
     public enum Key {
         EDGE("edge", "Frame", "Aperture Edge", "The main edge of the DapperMap aperture.", 0x7B6CFF),
-        TICKS("ticks", "Frame", "Survey Marks", "The fine marks around the map aperture.", 0x57D8D0),
+        TICKS("ticks", "Frame", "Cardinal Marks", "The dashes and cardinal marks around the map edge.", 0x57D8D0),
         CARDINAL_TEXT("cardinal-text", "Text", "Compass Directions", "The N, E, S and W labels on the minimap.", 0x57D8D0),
         PANEL("panel", "Panel", "Information Panel", "The translucent panel holding map information.", 0x111426),
         BRAND_TEXT("brand-text", "Text", "DapperMap Label", "The DapperMap instrument label.", 0xB8AEFF),

@@ -72,6 +72,8 @@ public final class DapperMapSettingsPage
     private volatile boolean closed = false;
     private final java.util.concurrent.atomic.AtomicBoolean previewQueued = new java.util.concurrent.atomic.AtomicBoolean();
     private String lastPreviewPath;
+    /** Preview label markup the client has in #PreviewText (empty: none). World thread. */
+    private String lastPreviewTexts = "";
     /** Next of the 16 preview slot paths to overwrite with a new image (world thread). */
     private int nextPreviewSlot = 0;
     /** When the last preview render was admitted; renders are paced to PREVIEW_MIN_INTERVAL_MS. */
@@ -162,6 +164,7 @@ public final class DapperMapSettingsPage
                 store.getComponent(ref, Player.getComponentType()));
 
         builder.append("Pages/DapperMapSettings.ui");
+        this.lastPreviewTexts = ""; // A fresh page has an empty #PreviewText.
         builder.set("#PlayerTopAccent.Visible", !this.adminMode);
         builder.set("#AdminTopAccent.Visible", this.adminMode);
         // The Server Limits tab exists only on the admin page.
@@ -343,6 +346,7 @@ public final class DapperMapSettingsPage
         int request = ++this.previewRequest;
         if (!settings.enabled) {
             ui.set("#PreviewHudImage.Visible", false);
+            ui.set("#PreviewText.Visible", false);
             ui.set("#PreviewDisabled.Text", "MINIMAP DISABLED");
             ui.set("#PreviewDisabled.Visible", true);
             return;
@@ -350,12 +354,14 @@ public final class DapperMapSettingsPage
         if (this.previewSnapshot == null) this.previewSnapshot = this.sessions.capturePreview(this.playerRef.getUuid());
         if (this.previewSnapshot == null) {
             ui.set("#PreviewHudImage.Visible", false);
+            ui.set("#PreviewText.Visible", false);
             ui.set("#PreviewDisabled.Text", "LIVE HUD PREVIEW UNAVAILABLE");
             ui.set("#PreviewDisabled.Visible", true);
             return;
         }
         if (this.previewRevision == 0) {
             ui.set("#PreviewHudImage.Visible", false);
+            ui.set("#PreviewText.Visible", false);
             ui.set("#PreviewDisabled.Text", "PREPARING HUD PREVIEW");
             ui.set("#PreviewDisabled.Visible", true);
         }
@@ -381,9 +387,18 @@ public final class DapperMapSettingsPage
         if (!DynamicMinimapSession.renderAsync(() -> {
             if (this.closed) { this.previewQueued.set(false); return; }
             try {
-                byte[] png = position
-                        ? DynamicMinimapRenderer.renderPositionPreview(draft, snapshot)
-                        : DynamicMinimapRenderer.renderSettingsPreview(draft, snapshot);
+                // Text over the preview is native labels (Hytale's font), built here off the world
+                // thread. The Position tab's whole-screen preview is too small for readable text.
+                byte[] png;
+                String textMarkup = "";
+                if (position) {
+                    png = DynamicMinimapRenderer.renderPositionPreview(draft, snapshot);
+                } else {
+                    var rendered = DynamicMinimapRenderer.renderSettingsPreview(draft, snapshot);
+                    png = rendered == null ? null : rendered.png();
+                    if (rendered != null) textMarkup = previewTextMarkup(rendered.texts());
+                }
+                String texts = textMarkup;
                 var prepared = DynamicAssetPublisher.prepare(path, png);
                 world.execute(() -> {
                     this.previewQueued.set(false);
@@ -402,6 +417,13 @@ public final class DapperMapSettingsPage
                         update.set("#PreviewHudImage.AssetPath", this.lastPreviewPath);
                         update.set("#PreviewHudImage.Visible", true);
                         update.set("#PreviewDisabled.Visible", false);
+                        // Labels are re-sent only when their text, place or style changed.
+                        if (!texts.equals(this.lastPreviewTexts)) {
+                            this.lastPreviewTexts = texts;
+                            update.clear("#PreviewText");
+                            if (!texts.isEmpty()) update.appendInline("#PreviewText", texts);
+                        }
+                        update.set("#PreviewText.Visible", true);
                         this.sendUpdate(update, new UIEventBuilder(), false);
                     }
                 });
@@ -443,6 +465,38 @@ public final class DapperMapSettingsPage
         }
         // A corrected value is a change, so a pending "reset to defaults" no longer applies as-is.
         if (changed) this.draftResetsPlayerOverride = false;
+    }
+
+    /** Stage (360x286) to on-page preview (272x216) scale, as #PreviewHudImage/#PreviewText are sized. */
+    private static final double PREVIEW_SCALE_X = 272.0D / DynamicMinimapRenderer.PREVIEW_STAGE_WIDTH;
+    private static final double PREVIEW_SCALE_Y = 216.0D / DynamicMinimapRenderer.PREVIEW_STAGE_HEIGHT;
+
+    /**
+     * Markup for the preview's native labels (children of #PreviewText, which covers the image).
+     * One Label per text, in page units; empty when there are none.
+     */
+    private static String previewTextMarkup(List<DynamicMinimapRenderer.PreviewText> texts) {
+        if (texts == null || texts.isEmpty()) return "";
+        StringBuilder out = new StringBuilder(texts.size() * 190);
+        for (var text : texts) {
+            int left = (int)Math.round(text.x() * PREVIEW_SCALE_X);
+            int top = (int)Math.round(text.y() * PREVIEW_SCALE_Y);
+            int width = Math.max(1, (int)Math.round(text.width() * PREVIEW_SCALE_X));
+            int height = Math.max(1, (int)Math.round(text.height() * PREVIEW_SCALE_Y));
+            int font = Math.max(5, (int)Math.round(text.fontSize() * PREVIEW_SCALE_Y));
+            double spacing = Math.round(text.letterSpacing() * PREVIEW_SCALE_X * 10.0D) / 10.0D;
+            out.append("Label #").append(text.id()).append(" { Anchor: (Left: ").append(left)
+                    .append(", Top: ").append(top).append(", Width: ").append(width)
+                    .append(", Height: ").append(height).append("); Text: \"")
+                    .append(dev.scyphoz.dappermap.util.DapperMapUtil.escapeUiText(text.text())).append("\"; Style: (FontSize: ").append(font)
+                    .append(", TextColor: ").append(text.colour());
+            if (text.bold()) out.append(", RenderBold: true");
+            if (spacing > 0.0D) out.append(", LetterSpacing: ").append(spacing);
+            out.append(", HorizontalAlignment: ").append(switch (text.alignment()) {
+                        case 1 -> "Center"; case 2 -> "End"; default -> "Start"; })
+                    .append(", VerticalAlignment: Center); } ");
+        }
+        return out.toString();
     }
 
     private static String previewSlotPath(String slug, int slot) {
@@ -588,6 +642,8 @@ public final class DapperMapSettingsPage
             case "clock_format" -> "clock";
             case "worldmap", "bettermap", "bettermap_markers", "bettermap_caves" -> "integration";
             case "move_minimap" -> "position";
+            // Compass ring markings share the Bearing ("compass") node: no new node to grant.
+            case "compass_letters", "compass_dashes", "cardinal_dashes" -> "compass";
             default -> id;
         };
     }
@@ -1070,6 +1126,9 @@ public final class DapperMapSettingsPage
             case "coordinates" -> settings.showCoordinates = !settings.showCoordinates;
             case "compass" -> settings.showCompass = !settings.showCompass;
             case "biome" -> settings.showBiome = !settings.showBiome;
+            case "compass_letters" -> settings.showCompassLetters = !settings.showCompassLetters;
+            case "compass_dashes" -> settings.showCompassDashes = !settings.showCompassDashes;
+            case "cardinal_dashes" -> settings.showCardinalDashes = !settings.showCardinalDashes;
             case "bettermap" -> settings.betterMapEnabled = !settings.betterMapEnabled;
             case "bettermap_markers" -> settings.betterMapMarkersEnabled = !settings.betterMapMarkersEnabled;
             case "bettermap_caves" -> settings.betterMapCaveModeEnabled = !settings.betterMapCaveModeEnabled;
@@ -1099,6 +1158,7 @@ public final class DapperMapSettingsPage
             case "players", "entities", "death", "worldmap", "height", "info_panel",
                  "clock", "coordinates", "compass", "biome", "bettermap",
                  "bettermap_markers", "bettermap_caves",
+                 "compass_letters", "compass_dashes", "cardinal_dashes",
                  "shape", "rotation", "clock_format" -> true;
             default -> false;
         };
@@ -1117,6 +1177,9 @@ public final class DapperMapSettingsPage
             case "coordinates" -> settings.showCoordinates;
             case "compass" -> settings.showCompass;
             case "biome" -> settings.showBiome;
+            case "compass_letters" -> settings.showCompassLetters;
+            case "compass_dashes" -> settings.showCompassDashes;
+            case "cardinal_dashes" -> settings.showCardinalDashes;
             case "bettermap" -> settings.betterMapEnabled;
             case "bettermap_markers" -> settings.betterMapMarkersEnabled;
             case "bettermap_caves" -> settings.betterMapCaveModeEnabled;
@@ -1157,6 +1220,9 @@ public final class DapperMapSettingsPage
             case "clock_format" -> "Choose a 12-hour or 24-hour clock.";
             case "compass" -> "Show the direction you are facing.";
             case "biome" -> "Show the name of the biome you are in.";
+            case "compass_letters" -> "Show the N, E, S and W letters around the map edge.";
+            case "compass_dashes" -> "Show the small dashes around the map edge.";
+            case "cardinal_dashes" -> "Show the large N, E, S and W dashes. When hidden, the letters take their place.";
             case "bettermap" -> BetterMapIntegration.isAvailable()
                     ? "Enable BetterMap waypoints and cave terrain. Surface maps use shared Hytale images."
                     : "BetterMap is not installed or could not be detected.";
@@ -1230,6 +1296,9 @@ public final class DapperMapSettingsPage
             case "coordinates" -> settings.showCoordinates = Boolean.parseBoolean(value);
             case "compass" -> settings.showCompass = Boolean.parseBoolean(value);
             case "biome" -> settings.showBiome = Boolean.parseBoolean(value);
+            case "compass_letters" -> settings.showCompassLetters = Boolean.parseBoolean(value);
+            case "compass_dashes" -> settings.showCompassDashes = Boolean.parseBoolean(value);
+            case "cardinal_dashes" -> settings.showCardinalDashes = Boolean.parseBoolean(value);
             case "bettermap" -> settings.betterMapEnabled = Boolean.parseBoolean(value);
             case "bettermap_markers" -> settings.betterMapMarkersEnabled = Boolean.parseBoolean(value);
             case "bettermap_caves" -> settings.betterMapCaveModeEnabled = Boolean.parseBoolean(value);
@@ -1309,7 +1378,9 @@ public final class DapperMapSettingsPage
                 entries.add(entry("24-hour", "true"));
                 entries.add(entry("12-hour", "false"));
             }
-            case "players", "entities", "death", "worldmap", "height", "coordinates", "clock", "compass", "biome", "bettermap", "bettermap_markers", "bettermap_caves" -> {
+            case "players", "entities", "death", "worldmap", "height", "coordinates", "clock", "compass", "biome",
+                 "bettermap", "bettermap_markers", "bettermap_caves",
+                 "compass_letters", "compass_dashes", "cardinal_dashes" -> {
                 entries.add(entry("Enabled", "true"));
                 entries.add(entry("Disabled", "false"));
             }
@@ -1492,6 +1563,9 @@ public final class DapperMapSettingsPage
             case "coordinates" -> Boolean.toString(settings.showCoordinates);
             case "compass" -> Boolean.toString(settings.showCompass);
             case "biome" -> Boolean.toString(settings.showBiome);
+            case "compass_letters" -> Boolean.toString(settings.showCompassLetters);
+            case "compass_dashes" -> Boolean.toString(settings.showCompassDashes);
+            case "cardinal_dashes" -> Boolean.toString(settings.showCardinalDashes);
             case "bettermap" -> Boolean.toString(settings.betterMapEnabled);
             case "bettermap_markers" -> Boolean.toString(settings.betterMapMarkersEnabled);
             case "bettermap_caves" -> Boolean.toString(settings.betterMapCaveModeEnabled);
@@ -1539,7 +1613,8 @@ public final class DapperMapSettingsPage
             case "section_4", "section_5", "worldmap", "bettermap", "bettermap_markers",
                  "bettermap_caves" -> Tab.INTEGRATIONS;
             case "info_panel", "panel_position", "panel_alignment", "section_3",
-                 "coordinates", "clock", "clock_format", "compass", "biome" -> Tab.INTERFACE;
+                 "coordinates", "clock", "clock_format", "compass", "biome",
+                 "section_compass", "compass_letters", "compass_dashes", "cardinal_dashes" -> Tab.INTERFACE;
             case "section_limits", "limit_speed", "limit_resolution", "limit_zoom", "limit_creatures" -> Tab.SERVER;
             default -> Tab.DISPLAY;
         };
@@ -1581,6 +1656,11 @@ public final class DapperMapSettingsPage
                 new Row("clock", "World Time", Kind.DROPDOWN),
                 new Row("clock_format", "Clock Format", Kind.DROPDOWN),
                 new Row("biome", "Region", Kind.DROPDOWN),
+                // Compass ring around the map (not part of the Info Panel, so never disabled by it).
+                new Row("section_compass", "COMPASS RING", Kind.HEADER),
+                new Row("compass_letters", "Compass Letters", Kind.DROPDOWN),
+                new Row("compass_dashes", "Compass Dashes", Kind.DROPDOWN),
+                new Row("cardinal_dashes", "Cardinal Dashes", Kind.DROPDOWN),
                 new Row("section_4", "HYTALE", Kind.HEADER),
                 new Row("worldmap", "Hytale World Map Markers", Kind.DROPDOWN),
                 new Row("section_5", "BETTERMAP", Kind.HEADER),

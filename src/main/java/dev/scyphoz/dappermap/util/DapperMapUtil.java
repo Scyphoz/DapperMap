@@ -429,4 +429,16 @@ public final class DapperMapUtil {
     public static boolean jsonDisabled(JsonObject node) {
         return Boolean.FALSE.equals(jsonBool(node.get("Enabled")));
     }
+
+    /** Text for a quoted UI markup string: quotes and backslashes escaped, control characters as spaces. */
+    public static String escapeUiText(String value) {
+        if (value == null) return "";
+        StringBuilder escaped = new StringBuilder(value.length());
+        for (int i = 0; i < value.length(); i++) {
+            char c = value.charAt(i);
+            if (c == '\\' || c == '"') escaped.append('\\');
+            escaped.append(c < 32 ? ' ' : c);
+        }
+        return escaped.toString();
+    }
 }

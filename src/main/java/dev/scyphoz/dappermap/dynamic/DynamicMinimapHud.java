@@ -106,7 +106,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
 
     private record InitialOverlayKey(int size, int shape, int resolution, boolean panel, int position,
                                      int alignment, boolean coords, boolean compass, boolean clock,
-                                     boolean biome, DynamicMinimapColours colours) {}
+                                     boolean biome, DynamicMinimapColours colours, int markings) {}
     /** First overlay per HUD set-up; least recently used dropped beyond 32 (was cleared wholesale at 16). */
     private static final java.util.Map<InitialOverlayKey, DynamicMinimapRenderer.NativeHudParts> INITIAL_OVERLAYS =
             java.util.Collections.synchronizedMap(new java.util.LinkedHashMap<>(32, 0.75F, true) {
@@ -120,7 +120,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
                 // Alignment 0: the panel image is text-free, so alignment never changes it.
                 settings.textureResolution, settings.infoPanelShown(), settings.infoPanelPosition,
                 0, settings.showCoordinates, settings.showCompass,
-                settings.showClock, settings.showBiome, settings.colours);
+                settings.showClock, settings.showBiome, settings.colours, settings.compassMarkings());
     }
 
     /** The first overlay for these settings, rendered on a miss. Render pool (or a rare fallback). */
@@ -159,6 +159,12 @@ public final class DynamicMinimapHud extends CustomUIHud {
     private String displayedOverlayPath;
     private String displayedFramePath;
     private String framePath;
+    /** Heading of the compass frame the client shows; the N/E/S/W labels are placed for it. */
+    private double displayedFrameAngle = 0.0D;
+    /** True when the client's markup has the N/E/S/W labels (letters on at the last rebuild). */
+    private boolean cardinalLabelsInMarkup;
+    /** Heading bucket the N/E/S/W labels were last placed at (-1: none). */
+    private int cardinalBucketShown = -1;
     /** Fixed bezel under the compass ring: sent once per shape/size/resolution/colours. */
     private String bezelPath;
     private String displayedBezelPath;
@@ -507,11 +513,12 @@ public final class DynamicMinimapHud extends CustomUIHud {
         if (this.overlayRenderQueued) this.overlayDirty = true;
         ++this.overlayGeneration; // Reject a delayed independent overlay at an older heading.
         this.framePath = path;
-        UICommandBuilder builder = new UICommandBuilder();
-        if (!path.equals(this.displayedFramePath)) {
-            builder.set("#WayfinderMmRoot #WayfinderMmFrame.AssetPath", path);
-            this.update(false, builder);
-        }
+        UICommandBuilder builder = new AnchorCommandBuilder();
+        boolean changed = !path.equals(this.displayedFramePath);
+        if (changed) builder.set("#WayfinderMmRoot #WayfinderMmFrame.AssetPath", path);
+        // N/E/S/W labels move with the ring, in the same batch as its new image.
+        changed |= this.cardinalFrameShown(builder, angle);
+        if (changed) this.update(false, builder);
         this.displayedFramePath = path;
         return true;
     }
@@ -753,6 +760,23 @@ public final class DynamicMinimapHud extends CustomUIHud {
     }
 
     /**
+     * Shows or hides the compass ring's N/E/S/W letters, small edge dashes and large cardinal
+     * dashes. The ring image is redrawn and the layout rebuilt once (the letters are labels).
+     */
+    public void setCompassMarkings(boolean letters, boolean edgeDashes, boolean cardinalDashes) {
+        if (this.settings.showCompassLetters == letters && this.settings.showCompassDashes == edgeDashes
+                && this.settings.showCardinalDashes == cardinalDashes) return;
+        this.settings.showCompassLetters = letters;
+        this.settings.showCompassDashes = edgeDashes;
+        this.settings.showCardinalDashes = cardinalDashes;
+        if (this.built) {
+            this.overlayRevision++;
+            this.overlayPublishPending = true;
+            this.rebuildPositionLayout();
+        }
+    }
+
+    /**
      * Updates which optional information components are present in the readout.
      * The readout subtree is rebuilt only when visibility actually changes, so
      * disabled rows disappear and the remaining rows reclaim their space.
@@ -849,6 +873,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
             builder.remove("#WayfinderMmRoot");
             this.update(false, builder);
             this.built = false;
+            this.cardinalLabelsInMarkup = false; // Removed with the root.
             this.overlayGeneration++;
             this.overlayDirty = false;
             this.terrainShown = false;
@@ -1016,6 +1041,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
                 .append(", Height: ").append(this.displaySize(this.logicalUiSize)).append("); AssetPath: \"")
                 .append(this.displayedFramePath != null ? this.displayedFramePath : this.framePath)
                 .append("\"; Visible: true; } ");
+        this.appendCardinalLabels(out); // Over the ring's badges, under edge markers and the locator.
         this.appendEdgeLayer(out);
         // Locator goes after the frame and edge-marker layer: UI elements draw in markup
         // order, so this keeps it above any marker at the player's position.
@@ -1052,8 +1078,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
      * information-panel side.
      */
     private boolean readoutEnabled(int row) {
-        return switch (row) { case 0 -> this.settings.showCoordinates; case 1 -> this.settings.showCompass;
-            case 2 -> this.settings.showClock; default -> this.settings.showBiome; };
+        return DynamicMinimapRenderer.readoutShown(this.settings, row);
     }
 
     /**
@@ -1090,7 +1115,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
             int left = 8 + (position == DynamicMinimapSetting.INFO_RIGHT ? curve : 0);
             int right = 8 + (position == DynamicMinimapSetting.INFO_LEFT ? curve : 0);
             // Heading above the value: static text, only sent with layout rebuilds.
-            this.appendPanelLabel(out, "WayfinderMmHeading" + i, READOUT_HEADINGS[i], panelX + left,
+            this.appendPanelLabel(out, "WayfinderMmHeading" + i, DynamicMinimapRenderer.READOUT_HEADINGS[i], panelX + left,
                     READOUT_WIDTH - left - right, cursor + 3, cursor + 18, 9, 0.95F, false,
                     this.settings.colours.hex(INFO_HEADERS), alignment);
             out.append("Label #WayfinderMmReadout").append(i).append(" { Anchor: (Left: ")
@@ -1098,7 +1123,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
                     .append(this.displayCoordinate(cursor + 19)).append(", Width: ")
                     .append(this.displaySize(READOUT_WIDTH - left - right)).append(", Height: ")
                     .append(this.displayCoordinate(cursor + 38) - this.displayCoordinate(cursor + 19))
-                    .append("); Text: \"").append(escapeUiText(values[i]))
+                    .append("); Text: \"").append(DapperMapUtil.escapeUiText(values[i]))
                     .append("\"; Style: (FontSize: ").append(this.displaySize(11)).append(", TextColor: ")
                     .append(this.settings.colours.hex(colours[i])).append(", HorizontalAlignment: ")
                     .append(alignment).append(", VerticalAlignment: Center); } ");
@@ -1106,8 +1131,59 @@ public final class DynamicMinimapHud extends CustomUIHud {
         }
     }
 
-    /** Info-panel headings, indexed like the readouts (coords, compass, clock, biome). */
-    private static final String[] READOUT_HEADINGS = {"COORDINATES", "BEARING", "WORLD TIME", "REGION"};
+    /**
+     * N/E/S/W as native labels (Hytale's font) over the compass ring's badges, placed for the
+     * heading of the frame the client shows. Player-up turns move them with Anchor sets only.
+     */
+    private void appendCardinalLabels(StringBuilder out) {
+        this.cardinalLabelsInMarkup = this.settings.showCompassLetters;
+        this.cardinalBucketShown = -1;
+        if (!this.cardinalLabelsInMarkup) return;
+        double angle = this.displayedFrameAngle;
+        this.cardinalBucketShown = DynamicMinimapRenderer.rotationBucket(angle);
+        boolean dashes = this.settings.showCardinalDashes;
+        int font = this.displaySize((int)Math.round(DynamicMinimapRenderer.cardinalFontSize(dashes)
+                * this.logicalUiSize / (double)DynamicMinimapRenderer.STATIC_ASSET_LOGICAL_SIZE));
+        String colour = this.settings.colours.hex(CARDINAL_TEXT);
+        for (int i = 0; i < 4; i++) {
+            int[] box = this.cardinalBox(i, angle);
+            out.append("Label #WayfinderMmCardinal").append(i).append(" { Anchor: (Left: ").append(box[0])
+                    .append(", Top: ").append(box[1]).append(", Width: ").append(box[2])
+                    .append(", Height: ").append(box[2]).append("); Text: \"")
+                    .append(DynamicMinimapRenderer.CARDINAL_LETTERS[i])
+                    .append("\"; Style: (FontSize: ").append(font).append(", TextColor: ").append(colour)
+                    .append(", RenderBold: true, HorizontalAlignment: Center, VerticalAlignment: Center); } ");
+        }
+    }
+
+    /** Display-space {left, top, side} of cardinal label {@code index} at a frame heading. */
+    private int[] cardinalBox(int index, double angle) {
+        boolean dashes = this.settings.showCardinalDashes;
+        double[] centre = DynamicMinimapRenderer.cardinalLetterCentre(index, angle, this.settings.isCircle(), dashes);
+        int side = (int)Math.round(DynamicMinimapRenderer.cardinalBadgeSize(dashes) * this.logicalUiSize / (double)DynamicMinimapRenderer.STATIC_ASSET_LOGICAL_SIZE);
+        int left = (int)Math.round(centre[0] * this.logicalUiSize - side / 2.0D);
+        int top = (int)Math.round(centre[1] * this.logicalUiSize - side / 2.0D);
+        return new int[]{this.mapOriginX() + this.displayCoordinate(left),
+                this.mapOriginY() + this.displayCoordinate(top), this.displaySize(side)};
+    }
+
+    /**
+     * Records the heading of the compass frame now shown and, when the labels are on the client
+     * and the heading bucket changed, adds their four Anchor sets to {@code builder}. Returns
+     * true when anything was added. North-up maps never change bucket, so they never send any.
+     */
+    private boolean cardinalFrameShown(UICommandBuilder builder, double angle) {
+        this.displayedFrameAngle = angle;
+        if (builder == null || !this.built || !this.cardinalLabelsInMarkup) return false;
+        int bucket = DynamicMinimapRenderer.rotationBucket(angle);
+        if (bucket == this.cardinalBucketShown) return false;
+        this.cardinalBucketShown = bucket;
+        for (int i = 0; i < 4; i++) {
+            int[] box = this.cardinalBox(i, angle);
+            setAnchor(builder, "#WayfinderMmRoot #WayfinderMmCardinal" + i + ".Anchor", box[0], box[1], box[2], box[2]);
+        }
+        return true;
+    }
 
     /**
      * Appends one static native label to the info panel (brand or heading). Logical
@@ -1128,16 +1204,6 @@ public final class DynamicMinimapHud extends CustomUIHud {
         if (bold) out.append(", RenderBold: true");
         if (spacing > 0.0F) out.append(", LetterSpacing: ").append(spacing);
         out.append(", HorizontalAlignment: ").append(alignment).append(", VerticalAlignment: Center); } ");
-    }
-
-    private static String escapeUiText(String value) {
-        StringBuilder escaped = new StringBuilder(value.length());
-        for (int i = 0; i < value.length(); i++) {
-            char c = value.charAt(i);
-            if (c == '\\' || c == '"') escaped.append('\\');
-            escaped.append(c < 32 ? ' ' : c);
-        }
-        return escaped.toString();
     }
 
     private String buildMapMarkup() {
@@ -1240,6 +1306,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
                 + "-h" + this.readoutHeight()
                 + "-" + this.settings.colours.frameKey()
                 + this.settings.colours.hex(PANEL).substring(1)
+                + "-m" + this.settings.compassMarkings()
                 + "-v" + (this.overlayRevision & 15) + ".png";
         this.framePath = this.overlayPath.replace("-v", "-frame-v");
         this.bezelPath = this.overlayPath.replace("-v", "-bezel-v");
@@ -1318,7 +1385,14 @@ public final class DynamicMinimapHud extends CustomUIHud {
         // The same bezel content is never re-sent (publishPart matches it by hash).
         String bezelPath = publishPart(this.bezelPublications, bezel);
         if (readoutPath != null) this.displayedOverlayPath = this.overlayPath = readoutPath;
-        if (framePath != null) this.displayedFramePath = this.framePath = framePath;
+        if (framePath != null) {
+            this.displayedFramePath = this.framePath = framePath;
+            // Labels follow this frame: placed by the layout rebuild that normally follows, or
+            // moved here when none is due (the sets are flushed before any later rebuild).
+            UICommandBuilder labels = new AnchorCommandBuilder();
+            if (this.cardinalFrameShown(this.layoutRebuildPending ? null : labels, this.frameAngle))
+                this.update(false, labels);
+        }
         if (bezelPath != null) this.displayedBezelPath = this.bezelPath = bezelPath;
         return true;
     }
@@ -1397,7 +1471,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
                         String publishedPath = this.publishPart(this.overlayPublications, prepared);
                         String publishedFrame = this.publishPart(this.framePublications, preparedFrame);
                         String publishedBezel = this.publishPart(this.bezelPublications, preparedBezel);
-                        UICommandBuilder builder = new UICommandBuilder();
+                        UICommandBuilder builder = new AnchorCommandBuilder();
                         boolean changed = false;
                         if (publishedBezel != null) {
                             this.bezelPath = publishedBezel;
@@ -1422,6 +1496,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
                                 changed = true;
                             }
                             this.displayedFramePath = publishedFrame;
+                            changed |= this.cardinalFrameShown(builder, angle); // Labels follow the ring.
                         }
                         if (changed) this.update(false, builder);
                     }

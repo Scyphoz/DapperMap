@@ -286,6 +286,9 @@ public final class DynamicMinimapSettingsStore {
         if (all || s.showClock != b.showClock) field(out, "showClock", s.showClock);
         if (all || s.showCompass != b.showCompass) field(out, "showCompass", s.showCompass);
         if (all || s.showBiome != b.showBiome) field(out, "showBiome", s.showBiome);
+        if (all || s.showCompassLetters != b.showCompassLetters) field(out, "showCompassLetters", s.showCompassLetters);
+        if (all || s.showCompassDashes != b.showCompassDashes) field(out, "showCompassDashes", s.showCompassDashes);
+        if (all || s.showCardinalDashes != b.showCardinalDashes) field(out, "showCardinalDashes", s.showCardinalDashes);
         if (all || s.betterMapEnabled != b.betterMapEnabled) field(out, "betterMapEnabled", s.betterMapEnabled);
         if (all || s.betterMapMarkersEnabled != b.betterMapMarkersEnabled) field(out, "betterMapMarkersEnabled", s.betterMapMarkersEnabled);
         if (all || s.betterMapCaveModeEnabled != b.betterMapCaveModeEnabled) field(out, "betterMapCaveModeEnabled", s.betterMapCaveModeEnabled);
@@ -396,6 +399,10 @@ public final class DynamicMinimapSettingsStore {
                 if ((bool = extractBool(json, "showClock")) != null) settings.showClock = bool;
                 if ((bool = extractBool(json, "showCompass")) != null) settings.showCompass = bool;
                 if ((bool = extractBool(json, "showBiome")) != null) settings.showBiome = bool;
+                // Files without these compass ring keys keep the inherited defaults (all shown).
+                if ((bool = extractBool(json, "showCompassLetters")) != null) settings.showCompassLetters = bool;
+                if ((bool = extractBool(json, "showCompassDashes")) != null) settings.showCompassDashes = bool;
+                if ((bool = extractBool(json, "showCardinalDashes")) != null) settings.showCardinalDashes = bool;
                 if ((bool = extractBool(json, "betterMapEnabled")) != null) settings.betterMapEnabled = bool;
                 if ((bool = extractBool(json, "betterMapMarkersEnabled")) != null) settings.betterMapMarkersEnabled = bool;
                 if ((bool = extractBool(json, "betterMapCaveModeEnabled")) != null) settings.betterMapCaveModeEnabled = bool;

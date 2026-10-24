@@ -77,7 +77,13 @@ public final class SettingPermissions {
             target.clock24Hour = source.clock24Hour;
         }
         if (allowed.test("coordinates")) target.showCoordinates = source.showCoordinates;
-        if (allowed.test("compass")) target.showCompass = source.showCompass;
+        if (allowed.test("compass")) {
+            target.showCompass = source.showCompass;
+            // Compass ring markings share the existing "compass" node (no new node to grant).
+            target.showCompassLetters = source.showCompassLetters;
+            target.showCompassDashes = source.showCompassDashes;
+            target.showCardinalDashes = source.showCardinalDashes;
+        }
         if (allowed.test("biome")) target.showBiome = source.showBiome;
         if (allowed.test("integration")) {
             target.showWorldMapMarkers = source.showWorldMapMarkers;

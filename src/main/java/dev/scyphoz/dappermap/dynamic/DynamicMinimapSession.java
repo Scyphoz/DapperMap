@@ -245,6 +245,8 @@ public final class DynamicMinimapSession {
     private int builtInterfaceScale = -1;
     private int builtTextureResolution = -1;
     private int builtRotationMode = -1;
+    /** Compass ring markings (DynamicMinimapSetting.compassMarkings bits) the HUD was last given. */
+    private int builtCompassMarkings = -1;
     private boolean builtShowCoordinates;
     private boolean builtShowCompass;
     private boolean builtShowClock;
@@ -974,6 +976,15 @@ public final class DynamicMinimapSession {
                 this.lastSignatureMs = 0L;
                 this.bufferComplete = false;
             }
+            if (this.settings.compassMarkings() != this.builtCompassMarkings) {
+                // Letters, edge dashes or cardinal dashes switched: redraw the ring once.
+                this.builtCompassMarkings = this.settings.compassMarkings();
+                // Edge markers keep clear of the letters only where they are: re-place them now.
+                this.edgeTracker.clear();
+                this.lastMarkerMs = 0L;
+                this.hud.setCompassMarkings(this.settings.showCompassLetters,
+                        this.settings.showCompassDashes, this.settings.showCardinalDashes);
+            }
             if (!this.settings.colours.equals(this.renderedColours)) {
                 this.renderedColours = this.settings.colours;
                 java.util.Arrays.fill(this.selfArrowDelivered, false);
@@ -1152,6 +1163,7 @@ public final class DynamicMinimapSession {
         return "UI/DapperMap/compass-" + this.slug + "-" + (settings.isCircle() ? "c" : "s")
                 + settings.sizePixels + "-r" + settings.textureResolution
                 + (settings.infoPanelShown() ? "p" : "n") + "-" + settings.colours.frameKey()
+                + "-m" + settings.compassMarkings() // Ring markings are part of the artwork.
                 + "-" + rotationBucket + ".png";
     }
 
@@ -1250,6 +1262,7 @@ public final class DynamicMinimapSession {
             this.builtInfoPanelTextAlignment = snap.infoPanelTextAlignment;
             this.builtInterfaceScale = snap.interfaceScalePercent;
             this.builtTextureResolution = snap.textureResolution;
+            this.builtCompassMarkings = snap.compassMarkings();
             this.builtRotationMode = -1;
             this.lastMapRotationBucket = -1;
             this.rotationSource = null;
@@ -1436,6 +1449,7 @@ public final class DynamicMinimapSession {
                         || this.settings.sizePixels != renderSettings.sizePixels
                         || this.settings.shape != renderSettings.shape
                         || this.settings.infoPanelShown() != renderSettings.infoPanelShown() // Picks the frame variant.
+                        || this.settings.compassMarkings() != renderSettings.compassMarkings() // Ring drawn for old markings.
                         || !this.settings.colours.equals(renderSettings.colours)) {
                     return;
                 }
@@ -1564,6 +1578,7 @@ public final class DynamicMinimapSession {
                         || this.settings.shape != renderSettings.shape
                         || this.settings.textureResolution != renderSettings.textureResolution
                         || this.settings.infoPanelShown() != renderSettings.infoPanelShown() // Picks the frame variant.
+                        || this.settings.compassMarkings() != renderSettings.compassMarkings() // Ring drawn for old markings.
                         || !this.settings.colours.equals(renderSettings.colours)) {
                     return;
                 }
@@ -2115,7 +2130,9 @@ public final class DynamicMinimapSession {
         }
         /**
          * Pulls a marker position (visible map coordinates) in along its bearing from the map
-         * centre so it sits inside the aperture edge, and stays clear of the N/E/S/W badges.
+         * centre so it sits inside the aperture edge, and stays clear of the N/E/S/W badges
+         * (only when the letters are shown: inside the ring beside the large dashes, or out on
+         * the rim when those dashes are hidden). With no letters, markers sit right at the edge.
          */
         static double[] clamp(DynamicMinimapSetting settings, double x, double z, int markerSize, double angle) {
             double center = settings.sizePixels / 2.0D;
@@ -2129,16 +2146,20 @@ public final class DynamicMinimapSession {
             double perimeter = Math.max(1, center - 11 * uiScale - markerSize / 2.0D - 1);
             double radius = Math.min(distance, settings.isCircle() ? perimeter
                     : perimeter / Math.max(Math.abs(directionX), Math.abs(directionZ)));
+            if (!settings.showCompassLetters) return new double[]{center + directionX * radius, center + directionZ * radius};
             // Intersect the bearing ray with expanded upright cardinal badge boxes.
             // Move radially inward so the marker still indicates its true direction.
-            double clearance = 11 * uiScale + markerSize / 2.0D + 1;
+            // Badge size and inset match DynamicMinimapRenderer.cardinalLetterCentre.
+            boolean dashes = settings.showCardinalDashes;
+            double badgeInset = (dashes ? 27 : DynamicMinimapRenderer.cardinalBadgeSize(false) / 2.0D + 0.5D) * uiScale;
+            double clearance = DynamicMinimapRenderer.cardinalBadgeSize(dashes) / 2.0D * uiScale + markerSize / 2.0D + 1;
             // Cardinal k sits at bearing -90° + k·90° + angle; its unit vector follows from one
             // cos/sin pair: (sin, -cos), (cos, sin), (-sin, cos), (-cos, -sin).
             double cos = Math.cos(angle), sin = Math.sin(angle);
             for (int cardinal = 0; cardinal < 4; cardinal++) {
                 double badgeDirectionX = switch (cardinal) { case 0 -> sin; case 1 -> cos; case 2 -> -sin; default -> -cos; };
                 double badgeDirectionZ = switch (cardinal) { case 0 -> -cos; case 1 -> sin; case 2 -> cos; default -> -sin; };
-                double badgeRadius = (center - 27 * uiScale)
+                double badgeRadius = (center - badgeInset)
                         / (settings.isCircle() ? 1 : Math.max(Math.abs(badgeDirectionX), Math.abs(badgeDirectionZ)));
                 double badgeX = badgeDirectionX * badgeRadius, badgeZ = badgeDirectionZ * badgeRadius;
                 // Ray distances where the bearing enters and leaves this badge's box (slab method).

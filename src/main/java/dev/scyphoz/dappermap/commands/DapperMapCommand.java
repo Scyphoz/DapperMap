@@ -90,6 +90,9 @@ public class DapperMapCommand extends AbstractPlayerCommand {
         addString(parent, scope, "coordinates", "Toggle coordinates", ON_OFF, "coords");
         addString(parent, scope, "compass", "Toggle Bearing readout", ON_OFF, "bearing");
         addString(parent, scope, "biome", "Toggle Region readout", ON_OFF, "region");
+        addString(parent, scope, "compass-letters", "Show or hide the N, E, S, W letters on the map edge", ON_OFF, "cardinal-letters", "nesw");
+        addString(parent, scope, "compass-dashes", "Show or hide the small dashes around the map edge", ON_OFF, "edge-dashes", "ticks");
+        addString(parent, scope, "cardinal-dashes", "Show or hide the large N, E, S, W dashes", ON_OFF, "cardinal-ticks");
         addInt(parent, scope, "size", "Set map size");
         addInt(parent, scope, "scale", "Set interface scale", "interface-scale", "interfacescale");
         addInt(parent, scope, "height-range", "Set creature height range", "heightrange", "vrange");
@@ -170,6 +173,14 @@ public class DapperMapCommand extends AbstractPlayerCommand {
                     if (!setPlayerHelmets(settings, value)) { context.sendMessage(Message.raw("Usage: /mm player-helmets shown|hidden")); return; }
                     this.sessions.applySettings(playerRef, settings);
                     context.sendMessage(Message.raw("DapperMap player icon helmets: " + playerHelmetsName(settings) + "."));
+                    break;
+                case "compass-letters":
+                case "compass-dashes":
+                case "cardinal-dashes":
+                    if (!setCompassMarking(settings, subcommand, value)) { context.sendMessage(Message.raw("Usage: /mm " + subcommand + " on|off")); return; }
+                    this.sessions.applySettings(playerRef, settings);
+                    context.sendMessage(Message.raw("DapperMap " + compassMarkingName(subcommand) + " "
+                            + (compassMarking(settings, subcommand) ? "on." : "off.")));
                     break;
                 case "on":
                     settings.enabled = true;
@@ -428,6 +439,7 @@ public class DapperMapCommand extends AbstractPlayerCommand {
             case "creature-filter" -> { changed=setCreatureFilter(settings,value); usage="admin creature-filter all|hostile"; }
             case "player-markers" -> { changed=setPlayerStyle(settings,value); usage="admin player-markers icons|dots"; }
             case "player-helmets" -> { changed=setPlayerHelmets(settings,value); usage="admin player-helmets shown|hidden"; }
+            case "compass-letters", "compass-dashes", "cardinal-dashes" -> { changed=setCompassMarking(settings,key,value); usage="admin " + key + " on|off"; }
             case "status" -> { context.sendMessage(Message.raw("DapperMap admin defaults: " + status(settings)));
                 context.sendMessage(Message.raw("Server limits: " + (config.hasLimits() ? config.describeLimits() : "none")
                         + "; load shedding " + (config.isLoadShedding() ? "on" : "off") + ".")); return; }
@@ -752,6 +764,38 @@ public class DapperMapCommand extends AbstractPlayerCommand {
         return settings.playerIconHelmets ? "shown" : "hidden";
     }
 
+    /**
+     * Compass ring markings for both scopes: compass-letters (N/E/S/W), compass-dashes (the small
+     * edge dashes) and cardinal-dashes (the large N/E/S/W dashes), each on|off.
+     */
+    private static boolean setCompassMarking(DynamicMinimapSetting settings, String name, String value) {
+        Boolean shown = parseOnOff(value);
+        if (shown == null) return false;
+        switch (name) {
+            case "compass-letters" -> settings.showCompassLetters = shown;
+            case "compass-dashes" -> settings.showCompassDashes = shown;
+            case "cardinal-dashes" -> settings.showCardinalDashes = shown;
+            default -> { return false; }
+        }
+        return true;
+    }
+
+    private static boolean compassMarking(DynamicMinimapSetting settings, String name) {
+        return switch (name) {
+            case "compass-letters" -> settings.showCompassLetters;
+            case "compass-dashes" -> settings.showCompassDashes;
+            default -> settings.showCardinalDashes;
+        };
+    }
+
+    private static String compassMarkingName(String name) {
+        return switch (name) {
+            case "compass-letters" -> "compass letters";
+            case "compass-dashes" -> "compass dashes";
+            default -> "cardinal dashes";
+        };
+    }
+
     private static boolean setPanelAlignment(DynamicMinimapSetting settings, String value) {
         switch (value) {
             case "left": settings.infoPanelTextAlignment = DynamicMinimapSetting.INFO_ALIGN_LEFT; return true;
@@ -963,10 +1007,17 @@ public class DapperMapCommand extends AbstractPlayerCommand {
                 + ", coordinates=" + settings.showCoordinates
                 + ", compass=" + settings.showCompass
                 + ", biome=" + settings.showBiome
+                + ", compass-letters=" + onOff(settings.showCompassLetters)
+                + ", compass-dashes=" + onOff(settings.showCompassDashes)
+                + ", cardinal-dashes=" + onOff(settings.showCardinalDashes)
                 + ", integrations[native=" + settings.showWorldMapMarkers
                 + ", bettermap=" + settings.betterMapEnabled
                 + ", markers=" + settings.betterMapMarkersEnabled
                 + ", caves=" + settings.betterMapCaveModeEnabled + "]";
+    }
+
+    private static String onOff(boolean value) {
+        return value ? "on" : "off";
     }
 
     private static void showHelp(CommandContext context) {
@@ -986,6 +1037,7 @@ public class DapperMapCommand extends AbstractPlayerCommand {
         context.sendMessage(Message.raw("/mm height on|off | /mm height-range <4..256>"));
         context.sendMessage(Message.raw("/mm coordinates on|off | /mm clock on|off|12|24"));
         context.sendMessage(Message.raw("/mm compass on|off | /mm biome on|off"));
+        context.sendMessage(Message.raw("/mm compass-letters on|off | /mm compass-dashes on|off | /mm cardinal-dashes on|off"));
         context.sendMessage(Message.raw("/mm integration native on|off | bettermap enable|disable"));
         context.sendMessage(Message.raw("/mm integration bettermap markers|caves on|off"));
         context.sendMessage(Message.raw("/mm colours list | /mm colour <target> <#RRGGBB|R G B>"));
@@ -1053,6 +1105,8 @@ public class DapperMapCommand extends AbstractPlayerCommand {
                     case "panel-alignment" -> "panel";
                     case "creature-limit", "creature-markers", "creature-filter",
                          "player-markers", "player-helmets" -> "markers";
+                    // Compass ring markings share the Bearing node (as on the settings page).
+                    case "compass-letters", "compass-dashes", "cardinal-dashes" -> "compass";
                     default -> name.toLowerCase(java.util.Locale.ROOT);
                 }));
             }

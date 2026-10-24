@@ -145,6 +145,7 @@ $C.@PageOverlay {
             Group { Anchor: (Height: 8); }
             Group #PreviewStage { Anchor: (Height: 428); LayoutMode: Full;
               AssetImage #PreviewHudImage { Anchor: (Left: 2, Top: 66, Width: 272, Height: 216); Visible: true; }
+              Group #PreviewText { Anchor: (Left: 2, Top: 66, Width: 272, Height: 216); LayoutMode: Full; Visible: false; }
               Label #PreviewDisabled { Visible: false; Anchor: (Full: 0); Text: "MINIMAP DISABLED"; Style: (FontSize: 10, TextColor: #8491a4, HorizontalAlignment: Center, VerticalAlignment: Center); }
             }
             Group { FlexWeight: 1; }

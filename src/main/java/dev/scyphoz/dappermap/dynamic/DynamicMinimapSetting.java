@@ -81,6 +81,12 @@ public final class DynamicMinimapSetting {
     public boolean showClock = true;
     public boolean showCompass = true;
     public boolean showBiome = true;
+    /** Compass ring: N/E/S/W letters (native game text drawn over the frame). */
+    public boolean showCompassLetters = true;
+    /** Compass ring: the small dashes around the map edge (not the large cardinal dashes). */
+    public boolean showCompassDashes = true;
+    /** Compass ring: the large dashes at N/E/S/W. When off, the letters move out to their place. */
+    public boolean showCardinalDashes = true;
     /** Master switch for DapperMap's BetterMap waypoint and cave integrations. */
     public boolean betterMapEnabled = true;
     public boolean betterMapMarkersEnabled = true;
@@ -104,6 +110,11 @@ public final class DynamicMinimapSetting {
      */
     public boolean infoPanelShown() {
         return this.infoPanelEnabled && (this.showCoordinates || this.showCompass || this.showClock || this.showBiome);
+    }
+
+    /** Compass ring parts as bits (1 letters, 2 small dashes, 4 cardinal dashes): keys frame caches and paths. */
+    public int compassMarkings() {
+        return (this.showCompassLetters ? 1 : 0) | (this.showCompassDashes ? 2 : 0) | (this.showCardinalDashes ? 4 : 0);
     }
 
     public boolean isCircle() {
@@ -154,6 +165,9 @@ public final class DynamicMinimapSetting {
         this.showClock = source.showClock;
         this.showCompass = source.showCompass;
         this.showBiome = source.showBiome;
+        this.showCompassLetters = source.showCompassLetters;
+        this.showCompassDashes = source.showCompassDashes;
+        this.showCardinalDashes = source.showCardinalDashes;
         this.betterMapEnabled = source.betterMapEnabled;
         this.betterMapMarkersEnabled = source.betterMapMarkersEnabled;
         this.betterMapCaveModeEnabled = source.betterMapCaveModeEnabled;
