@@ -22,6 +22,32 @@ public final class DynamicMinimapSetting {
     public static final int INFO_ALIGN_LEFT = 0;
     public static final int INFO_ALIGN_CENTER = 1;
     public static final int INFO_ALIGN_RIGHT = 2;
+
+    // Value ranges, shared by normalize(), the admin limits, commands, the settings page and the HUD.
+    public static final int ZOOM_MIN = 16, ZOOM_MAX = 256;
+    public static final int SIZE_MIN = 120, SIZE_MAX = 360;
+    public static final int SCALE_MIN = 75, SCALE_MAX = 160;
+    public static final int RESOLUTION_MIN = 256, RESOLUTION_MAX = 1024;
+    public static final int HEIGHT_RANGE_MIN = 4, HEIGHT_RANGE_MAX = 256;
+    /** HUD position percentages: 0 = left/top edge, 100 = right/bottom edge. */
+    public static final int POSITION_MIN = 0, POSITION_MAX = 100;
+    /** Update speeds: 0 very fast .. 3 slow (DapperMapConfig.SPEED_NAMES). */
+    public static final int SPEED_FASTEST = 0, SPEED_SLOWEST = 3;
+    /** Creature marker limits a player can choose (the largest is "no limit" for admins). */
+    public static final int[] CREATURE_LIMITS = {16, 32, 64};
+    /** Texture resolutions offered by the settings page; every one has a pre-published clip mask. */
+    public static final int[] TEXTURE_RESOLUTIONS = {256, 320, 384, 448, 512, 1024};
+
+    // Command and status names, indexed by each setting's value.
+    public static final String[] SHAPE_NAMES = {"square", "circle"};
+    public static final String[] ROTATION_NAMES = {"north", "player"};
+    public static final String[] PANEL_POSITION_NAMES = {"below", "above", "left", "right"};
+    public static final String[] PANEL_ALIGNMENT_NAMES = {"left", "centre", "right"};
+
+    /** True for one of {@link #CREATURE_LIMITS}. */
+    public static boolean isCreatureLimit(int value) {
+        return value == 16 || value == 32 || value == 64;
+    }
     public volatile DynamicMinimapColours colours = DynamicMinimapColours.defaults();
     public volatile boolean enabled = true;
     public int rotationMode = 0;
@@ -97,7 +123,7 @@ public final class DynamicMinimapSetting {
     public static DynamicMinimapSetting fromConfig(DapperMapConfig config) {
         DynamicMinimapSetting settings = new DynamicMinimapSetting();
         settings.enabled = config.isEnabledByDefault();
-        settings.zoomBlocks = Math.max(16, config.getDefaultRadiusBlocks());
+        settings.zoomBlocks = Math.max(ZOOM_MIN, config.getDefaultRadiusBlocks());
         settings.showCoordinates = config.isShowCoordinates();
         settings.normalize();
         return settings;
@@ -191,24 +217,22 @@ public final class DynamicMinimapSetting {
             this.shape = 1;
         }
 
-        this.zoomBlocks = clamp(this.zoomBlocks, 16, 256);
-        this.sizePixels = clamp(this.sizePixels, 120, 360);
-        this.textureResolution = clamp(this.textureResolution, 256, 1024);
-        this.interfaceScalePercent = clamp(this.interfaceScalePercent, 75, 160);
-        if (this.creatureMarkerLimit != 16 && this.creatureMarkerLimit != 32 && this.creatureMarkerLimit != 64) {
-            this.creatureMarkerLimit = 16;
-        }
-        this.mobVerticalRange = clamp(this.mobVerticalRange, 4, 256);
+        this.zoomBlocks = clamp(this.zoomBlocks, ZOOM_MIN, ZOOM_MAX);
+        this.sizePixels = clamp(this.sizePixels, SIZE_MIN, SIZE_MAX);
+        this.textureResolution = clamp(this.textureResolution, RESOLUTION_MIN, RESOLUTION_MAX);
+        this.interfaceScalePercent = clamp(this.interfaceScalePercent, SCALE_MIN, SCALE_MAX);
+        if (!isCreatureLimit(this.creatureMarkerLimit)) this.creatureMarkerLimit = CREATURE_LIMITS[0];
+        this.mobVerticalRange = clamp(this.mobVerticalRange, HEIGHT_RANGE_MIN, HEIGHT_RANGE_MAX);
         if (this.position < 0 || this.position > 3) {
             this.position = POS_TOP_RIGHT;
         }
 
-        this.hudPositionX = clamp(this.hudPositionX, 0, 100);
-        this.hudPositionY = clamp(this.hudPositionY, 0, 100);
+        this.hudPositionX = clamp(this.hudPositionX, POSITION_MIN, POSITION_MAX);
+        this.hudPositionY = clamp(this.hudPositionY, POSITION_MIN, POSITION_MAX);
         this.infoPanelPosition = clamp(this.infoPanelPosition, INFO_BELOW, INFO_RIGHT);
         this.infoPanelTextAlignment = clamp(this.infoPanelTextAlignment, INFO_ALIGN_LEFT, INFO_ALIGN_RIGHT);
 
-        this.updateSpeed = clamp(this.updateSpeed, 0, 3);
+        this.updateSpeed = clamp(this.updateSpeed, SPEED_FASTEST, SPEED_SLOWEST);
     }
 
     /**
@@ -217,34 +241,9 @@ public final class DynamicMinimapSetting {
      */
     public void applyLegacyPosition(int legacyPosition) {
         this.position = clamp(legacyPosition, POS_TOP_LEFT, POS_BOTTOM_RIGHT);
-
-        switch (this.position) {
-            case POS_TOP_LEFT -> {
-                this.hudPositionX = 0;
-                this.hudPositionY = 0;
-            }
-            case POS_BOTTOM_LEFT -> {
-                this.hudPositionX = 0;
-                this.hudPositionY = 100;
-            }
-            case POS_BOTTOM_RIGHT -> {
-                this.hudPositionX = 100;
-                this.hudPositionY = 100;
-            }
-            case POS_TOP_RIGHT -> {
-                this.hudPositionX = 100;
-                this.hudPositionY = 0;
-            }
-            default -> {
-                this.hudPositionX = 100;
-                this.hudPositionY = 0;
-            }
-        }
-    }
-
-    /** Presentation scale as a multiplier, e.g. 125 -> 1.25. */
-    public double interfaceScale() {
-        return (double)this.interfaceScalePercent / 100.0D;
+        // Corners 0..3: bit 0 = right, bit 1 = bottom.
+        this.hudPositionX = (this.position & 1) * POSITION_MAX;
+        this.hudPositionY = (this.position >> 1) * POSITION_MAX;
     }
 
     /** Convert a signed logical HUD coordinate into display-space units. */
@@ -261,49 +260,50 @@ public final class DynamicMinimapSetting {
         return Math.max(1, this.displayCoordinate(logicalValue));
     }
 
-    /** How often the map pans (ms) at the current update speed. */
-    public long panIntervalMs() {
-        return switch (this.updateSpeed) {
-            case 0 -> 40L;    // 25 Hz
-            case 1 -> 75L;    // ~13 Hz
-            case 3 -> 300L;   // ~3 Hz
-            default -> 150L;  // normal: ~7 Hz
-        };
+    // Timings (ms) per update speed: very fast, fast, normal, slow. One row per kind of work.
+    private static final long[][] SPEED_TIMINGS = {
+            {40L, 75L, 150L, 300L},     // PAN: map pan (25, ~13, ~7, ~3 Hz)
+            {50L, 100L, 250L, 500L},    // MARKERS: creature and player rescans (20, 10, 4, 2 Hz)
+            {150L, 300L, 750L, 1500L},  // SIGNATURE: terrain change probe
+            {300L, 600L, 1200L, 2500L}, // TERRAIN: shortest gap between terrain renders
+            {25L, 40L, 60L, 100L},      // ROTATION_POLL: heading polls (40 Hz scheduler ceiling .. 10 Hz)
+            {100L, 125L, 200L, 300L},   // ROTATION: player-up frame renders (10, 8, 5, ~3 Hz)
+            {125L, 150L, 250L, 500L}};  // OVERLAY: HUD overlay re-renders
+    private static final int PAN = 0, MARKERS = 1, SIGNATURE = 2, TERRAIN = 3, ROTATION_POLL = 4, ROTATION = 5, OVERLAY = 6;
+
+    /** Timing of one kind at the current speed; an out-of-range speed uses normal, as before. */
+    private long timing(int kind) {
+        int speed = this.updateSpeed;
+        return SPEED_TIMINGS[kind][speed >= SPEED_FASTEST && speed <= SPEED_SLOWEST ? speed : 2];
     }
+
+    /** How often the map pans (ms) at the current update speed. */
+    public long panIntervalMs() { return this.timing(PAN); }
 
     /** How often creature and player markers are rescanned (ms). */
-    public long markerIntervalMs() {
-        return switch (this.updateSpeed) {
-            case 0 -> 50L;    // 20 Hz
-            case 1 -> 100L;   // 10 Hz
-            case 3 -> 500L;   // 2 Hz
-            default -> 250L;  // normal: 4 Hz
-        };
-    }
+    public long markerIntervalMs() { return this.timing(MARKERS); }
 
     /** How often the terrain is probed for map changes (ms). */
-    public long signatureIntervalMs() {
-        return switch (this.updateSpeed) {
-            case 0 -> 150L;
-            case 1 -> 300L;
-            case 3 -> 1500L;
-            default -> 750L;
-        };
-    }
+    public long signatureIntervalMs() { return this.timing(SIGNATURE); }
 
     /** Shortest gap between terrain renders (ms). */
-    public long terrainIntervalMs() {
-        return switch (this.updateSpeed) {
-            case 0 -> 300L;
-            case 1 -> 600L;
-            case 3 -> 2500L;
-            default -> 1200L;
-        };
-    }
+    public long terrainIntervalMs() { return this.timing(TERRAIN); }
+
+    /**
+     * How often the heading is polled (ms). Heading-only updates are intentionally faster than
+     * terrain stitching, keeping player-up rotation readable without stitching more often.
+     */
+    public long rotationPollIntervalMs() { return this.timing(ROTATION_POLL); }
+
+    /** Shortest gap between player-up frame renders (ms): limits PNG uploads, not position polling. */
+    public long rotationIntervalMs() { return this.timing(ROTATION); }
+
+    /** Shortest gap between HUD overlay re-renders (ms). */
+    public long overlayIntervalMs() { return this.timing(OVERLAY); }
 
     /** "very-fast" | "fast" | "normal" | "slow" (the names used by commands and the config). */
     public String updateSpeedName() {
-        return DapperMapConfig.SPEED_NAMES[clamp(this.updateSpeed, 0, DapperMapConfig.SPEED_NAMES.length - 1)];
+        return DapperMapConfig.SPEED_NAMES[clamp(this.updateSpeed, SPEED_FASTEST, SPEED_SLOWEST)];
     }
 
 }

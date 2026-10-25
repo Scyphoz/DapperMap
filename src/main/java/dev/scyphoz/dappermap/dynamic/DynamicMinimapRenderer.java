@@ -18,16 +18,15 @@ import java.awt.geom.RoundRectangle2D;
 import java.awt.image.BufferedImage;
 import java.awt.image.ImageObserver;
 import java.awt.Shape;
-import java.io.ByteArrayInputStream;
-import java.io.IOException;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.BiFunction;
 import java.util.function.LongPredicate;
-import javax.imageio.ImageIO;
 
 import dev.scyphoz.dappermap.service.DapperMapServerLoad;
 import dev.scyphoz.dappermap.util.DapperMapUtil;
+import static dev.scyphoz.dappermap.util.DapperMapUtil.argbPixels;
+import static dev.scyphoz.dappermap.util.DapperMapUtil.backingArgb;
 
 /** Pure rendering utilities for terrain, HUD chrome, previews and marker PNG assets. */
 public final class DynamicMinimapRenderer {
@@ -44,6 +43,8 @@ public final class DynamicMinimapRenderer {
      * stretched by Hytale to the selected HUD map size.
      */
     static final int STATIC_ASSET_LOGICAL_SIZE = 220;
+    /** Map aperture inside the frame, in frame units: inset from the edge and square-map corner radius. */
+    static final double APERTURE_INSET = 11.0D, APERTURE_CORNER = 10.0D;
     public static final int ROTATION_BUCKETS = 360;
     // No text is rasterised: every letter the player reads (info panel, N/E/S/W) is a native
     // game label in Hytale's own font, drawn by the client over these images.
@@ -68,7 +69,7 @@ public final class DynamicMinimapRenderer {
      * remain presentation-only and never alter zoom/world coverage.
      */
     public static double pixelsPerBlock(DynamicMinimapSetting settings) {
-        return (double)settings.sizePixels / ((double)2.0F * (double)Math.max(16, settings.zoomBlocks));
+        return (double)settings.sizePixels / ((double)2.0F * (double)Math.max(DynamicMinimapSetting.ZOOM_MIN, settings.zoomBlocks));
     }
 
     public static int panMarginPixels(DynamicMinimapSetting settings) {
@@ -125,7 +126,6 @@ public final class DynamicMinimapRenderer {
         int present = 0;
         int total = 0;
         int unloaded = 0;
-        long signature = 0L;
         long[] chunkHashes = null;
         // The always-true filter needs no index work at all.
         boolean gated = chunkLoaded != null && chunkLoaded != ALWAYS_LOADED;
@@ -203,12 +203,11 @@ public final class DynamicMinimapRenderer {
                     // A chunk that cannot be read is left as background (and hashed as missing).
                 }
             }
-            signature = foldSignature(chunkHashes);
         }
 
         graphics.dispose();
-        if (present == 0) return new Terrain(null, null, 0, total, unloaded, signature, chunkHashes);
-        return new Terrain(encodePng ? terrainPng(terrain) : null, terrain, present, total, unloaded, signature, chunkHashes);
+        if (present == 0) return new Terrain(null, null, 0, total, unloaded, chunkHashes);
+        return new Terrain(encodePng ? terrainPng(terrain) : null, terrain, present, total, unloaded, chunkHashes);
     }
 
     /**
@@ -363,7 +362,7 @@ public final class DynamicMinimapRenderer {
         }
         int width() { return this.maxX - this.minX + 1; }
         int height() { return this.maxZ - this.minZ + 1; }
-        /** Row-major index (z rows, x columns), the order the signature is folded in. */
+        /** Row-major index (z rows, x columns): the order of the per-chunk hash arrays. */
         int indexOf(int chunkX, int chunkZ) { return (chunkZ - this.minZ) * width() + (chunkX - this.minX); }
     }
 
@@ -384,16 +383,6 @@ public final class DynamicMinimapRenderer {
         return hash == 0L ? 1L : hash;
     }
 
-    /**
-     * FNV-1a style fold of per-chunk hashes in row-major order. A missing chunk (0) folds as 1L,
-     * as it always has, so the signature keeps its previous value for the same images.
-     */
-    private static long foldSignature(long[] chunkHashes) {
-        long hash = 1469598103934665603L;
-        for (long chunkHash : chunkHashes) hash = (hash ^ (chunkHash == 0L ? 1L : chunkHash)) * 1099511628211L;
-        return hash;
-    }
-
     public static byte[] renderShapeMask(DynamicMinimapSetting settings) {
         String shape = settings.isCircle() ? "c" : "r";
         String key = shape + "@" + settings.textureResolution;
@@ -404,19 +393,15 @@ public final class DynamicMinimapRenderer {
 
         int textureSize = Math.max(1, settings.textureResolution);
         BufferedImage image = new BufferedImage(textureSize, textureSize, 2);
-        Graphics2D graphics = image.createGraphics();
-        graphics.setRenderingHint(
-                RenderingHints.KEY_ANTIALIASING,
-                RenderingHints.VALUE_ANTIALIAS_ON
-        );
+        Graphics2D graphics = DapperMapUtil.antialiased(image);
         graphics.setColor(Color.WHITE);
 
-        double inset = textureSize * 11.0D / STATIC_ASSET_LOGICAL_SIZE;
+        double inset = textureSize * APERTURE_INSET / STATIC_ASSET_LOGICAL_SIZE;
         double aperture = textureSize - 2 * inset;
         if (settings.isCircle()) {
             graphics.fill(new Ellipse2D.Double(inset, inset, aperture, aperture));
         } else {
-            double corner = textureSize * 10.0D / STATIC_ASSET_LOGICAL_SIZE;
+            double corner = textureSize * APERTURE_CORNER / STATIC_ASSET_LOGICAL_SIZE;
             graphics.fill(new RoundRectangle2D.Double(inset, inset, aperture, aperture, corner, corner));
         }
 
@@ -448,19 +433,11 @@ public final class DynamicMinimapRenderer {
         double scale = (double)textureSize / (double)logicalSize;
 
         BufferedImage image = new BufferedImage(textureSize, textureSize, BufferedImage.TYPE_INT_ARGB);
-        Graphics2D graphics = image.createGraphics();
-        graphics.setRenderingHint(
-                RenderingHints.KEY_ANTIALIASING,
-                RenderingHints.VALUE_ANTIALIAS_ON
-        );
+        Graphics2D graphics = DapperMapUtil.antialiased(image);
         graphics.scale(scale, scale);
 
         if (bezel) {
-            if (settings.isCircle()) {
-                drawApertureCircleFrame(graphics, logicalSize, colours);
-            } else {
-                drawApertureSquareFrame(graphics, logicalSize, colours);
-            }
+            drawTexturedBezel(graphics, logicalSize, settings.isCircle(), colours);
         }
 
         if (compass) drawTexturedCompass(graphics, logicalSize, settings.isCircle(), bucketAngle(bucket), colours,
@@ -490,8 +467,7 @@ public final class DynamicMinimapRenderer {
                 ? 0 : Math.max(0, (height - panelHeight) / 2));
 
         BufferedImage image = new BufferedImage(Math.max(1, width), Math.max(1, height), BufferedImage.TYPE_INT_ARGB);
-        Graphics2D graphics = image.createGraphics();
-        graphics.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+        Graphics2D graphics = DapperMapUtil.antialiased(image);
 
         Color panel = settings.colours.awt(PANEL, 168);
         Color edge = settings.colours.awt(EDGE, 235);
@@ -594,10 +570,6 @@ public final class DynamicMinimapRenderer {
         return frameLayerPng(settings, size, angle, false, false);
     }
 
-    /** The fixed bezel (no compass ring), cropped to the map. One per shape/size/resolution/colours. */
-    public static byte[] renderNativeHudBezel(DynamicMinimapSetting settings, int size) {
-        return frameLayerPng(settings, size, 0.0D, true, false);
-    }
 
     /** Crop to the map and retain the previous logical-size frame pixels. */
     private static byte[] frameLayerPng(DynamicMinimapSetting settings, int size, double angle, boolean bezel,
@@ -654,8 +626,7 @@ public final class DynamicMinimapRenderer {
             // Chrome is an intermediate raster, not a transfer asset. Paint onto
             // it directly instead of encoding, decoding and expanding a PNG.
             BufferedImage overlay = renderHudChromeImage(settings, mapSize, sidePanelWidth, panelHeight, gap);
-            Graphics2D graphics = overlay.createGraphics();
-            graphics.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            Graphics2D graphics = DapperMapUtil.antialiased(overlay);
             graphics.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
 
             boolean side = settings.infoPanelPosition == DynamicMinimapSetting.INFO_LEFT
@@ -679,9 +650,9 @@ public final class DynamicMinimapRenderer {
     }
 
 
-    /** The player HUD's terrain, telemetry and visible marker assets frozen when settings open. */
-    /** {@code creature}: a creature icon or dot; {@code iconKey}: its creature type (icons only). */
+    /** One preview marker. {@code creature}: a creature icon or dot; {@code iconKey}: its creature type (icons only). */
     public record PreviewMarker(byte[] image, int x, int y, int size, boolean creature, String iconKey) { }
+    /** The player HUD's terrain, telemetry and visible marker assets frozen when settings open. */
     public record LiveSnapshot(byte[] terrain, int mapSize, int bufferSize, int panX, int panY,
                                double selfAngle, double frameAngle, String coords,
                                String compass, String clock, String biome,
@@ -717,7 +688,7 @@ public final class DynamicMinimapRenderer {
         if (snapshot == null || snapshot.terrain() == null) return null;
         DynamicMinimapSetting preview = settings.copy();
         preview.normalize();
-        int mapSize = Math.max(120, Math.min(360, preview.sizePixels));
+        int mapSize = DapperMapUtil.clamp(preview.sizePixels, DynamicMinimapSetting.SIZE_MIN, DynamicMinimapSetting.SIZE_MAX);
         int panelWidth = 148;
         int gap = preview.isCircle() ? 8 : 16;
         int panelHeight = 24 + 12;
@@ -734,8 +705,7 @@ public final class DynamicMinimapRenderer {
         DecodedPreview decoded = decodedPreview(snapshot);
         try {
             BufferedImage hud = new BufferedImage(overlay.getWidth(), overlay.getHeight(), BufferedImage.TYPE_INT_ARGB);
-            Graphics2D g = hud.createGraphics();
-            g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            Graphics2D g = DapperMapUtil.antialiased(hud);
             boolean side = preview.infoPanelPosition == DynamicMinimapSetting.INFO_LEFT
                     || preview.infoPanelPosition == DynamicMinimapSetting.INFO_RIGHT;
             int mapX = !preview.infoPanelShown() ? 0 : (preview.infoPanelPosition == DynamicMinimapSetting.INFO_LEFT ? panelWidth + gap
@@ -745,10 +715,10 @@ public final class DynamicMinimapRenderer {
                     : Math.max(0, (hud.getHeight() - mapSize) / 2)));
 
             Shape oldClip = g.getClip();
-            double apertureInset = mapSize * 11.0D / STATIC_ASSET_LOGICAL_SIZE;
+            double apertureInset = mapSize * APERTURE_INSET / STATIC_ASSET_LOGICAL_SIZE;
             double apertureSize = mapSize - 2 * apertureInset;
             if (preview.isCircle()) g.setClip(new Ellipse2D.Double(mapX + apertureInset, mapY + apertureInset, apertureSize, apertureSize));
-            else g.setClip(new RoundRectangle2D.Double(mapX + apertureInset, mapY + apertureInset, apertureSize, apertureSize, mapSize * 10.0D / STATIC_ASSET_LOGICAL_SIZE, mapSize * 10.0D / STATIC_ASSET_LOGICAL_SIZE));
+            else g.setClip(new RoundRectangle2D.Double(mapX + apertureInset, mapY + apertureInset, apertureSize, apertureSize, mapSize * APERTURE_CORNER / STATIC_ASSET_LOGICAL_SIZE, mapSize * APERTURE_CORNER / STATIC_ASSET_LOGICAL_SIZE));
             BufferedImage terrain = decoded.terrain(snapshot.terrain());
             if (terrain != null) {
                 double ratio = (double)mapSize / snapshot.mapSize();
@@ -828,7 +798,7 @@ public final class DynamicMinimapRenderer {
                         byte[] image = keys.isEmpty() ? null
                                 : DynamicCreatureIcons.previewIcon(keys.get(i % keys.size()), rgb);
                         int size = image != null ? iconSize : dotSize;
-                        if (image == null) image = renderDot(rgb, preview.colours);
+                        if (image == null) image = renderDot(rgb);
                         drawPreviewAsset(g, decoded, image,
                                 mapX + samples.get(i)[0] - size / 2.0,
                                 mapY + samples.get(i)[1] - size / 2.0, size);
@@ -893,8 +863,8 @@ public final class DynamicMinimapRenderer {
     /**
      * The Position-tab preview's HUD image: the settings preview trimmed to its visible pixels,
      * plus the extent its scale is based on. Independent of the HUD X/Y position.
+     * {@code texts}: the HUD's native labels, in the trimmed {@code hud} image's pixels.
      */
-    /** {@code texts}: the HUD's native labels, in the trimmed {@code hud} image's pixels. */
     private record PositionPreviewBase(BufferedImage hud, int scaleReference, java.util.List<PreviewText> texts) {}
 
     /** A cached base, valid for one snapshot and one draft (compared without its X/Y position). */
@@ -931,22 +901,22 @@ public final class DynamicMinimapRenderer {
         DecodedPreview(LiveSnapshot snapshot) { this.snapshot = snapshot; }
 
         /** The snapshot terrain, decoded once (a racing first decode is harmless). */
-        BufferedImage terrain(byte[] png) throws IOException {
+        BufferedImage terrain(byte[] png) {
             BufferedImage image = this.terrain;
             if (image == null) {
-                image = ImageIO.read(new ByteArrayInputStream(png));
+                image = DapperMapUtil.decodeImage(png);
                 this.terrain = image;
                 if (image != null) trimDecodedPreviews(); // Its size is only known now.
             }
             return image;
         }
 
-        BufferedImage icon(byte[] png) throws IOException {
+        BufferedImage icon(byte[] png) {
             synchronized (this.icons) {
                 BufferedImage image = this.icons.get(png);
                 if (image != null) return image;
             }
-            BufferedImage image = ImageIO.read(new ByteArrayInputStream(png)); // Decoded outside the lock.
+            BufferedImage image = DapperMapUtil.decodeImage(png); // Decoded outside the lock.
             if (image != null) {
                 synchronized (this.icons) {
                     if (this.icons.size() < ICON_LIMIT) this.icons.put(png, image);
@@ -1038,24 +1008,6 @@ public final class DynamicMinimapRenderer {
         return composePositionPreview(base, draft);
     }
 
-    /** Visible bounds {minX, minY, maxX, maxY} of an image (alpha above 0), or null when empty. */
-    private static int[] visibleBounds(BufferedImage image) {
-        int width = image.getWidth(), height = image.getHeight();
-        int[] pixels = argbPixels(image);
-        int minX = width, minY = height, maxX = -1, maxY = -1;
-        for (int y = 0; y < height; y++) {
-            int rowStart = y * width;
-            for (int x = 0; x < width; x++) {
-                if ((pixels[rowStart + x] >>> 24) == 0) continue;
-                if (x < minX) minX = x;
-                if (x > maxX) maxX = x;
-                if (y < minY) minY = y;
-                maxY = y;
-            }
-        }
-        return maxX >= minX && maxY >= minY ? new int[]{minX, minY, maxX, maxY} : null;
-    }
-
     private static PositionPreviewBase positionPreviewBase(DynamicMinimapSetting settings, LiveSnapshot snapshot) {
         java.util.List<PreviewText> stageTexts = new java.util.ArrayList<>(14);
         BufferedImage hud = settingsPreviewImage(settings, snapshot, stageTexts);
@@ -1063,8 +1015,9 @@ public final class DynamicMinimapRenderer {
         // The preview stage is a transparent canvas with the HUD centred inside it. Position the
         // visible HUD bounds, not that canvas; otherwise its transparent margins keep corner
         // selections near the centre.
-        int[] bounds = visibleBounds(hud);
-        if (bounds != null) hud = hud.getSubimage(bounds[0], bounds[1], bounds[2] - bounds[0] + 1, bounds[3] - bounds[1] + 1);
+        // Visible bounds {minX, minY, maxX + 1, maxY + 1} (any alpha above 0).
+        int[] bounds = DapperMapUtil.opaqueBounds(hud, 0);
+        if (bounds != null) hud = hud.getSubimage(bounds[0], bounds[1], bounds[2] - bounds[0], bounds[3] - bounds[1]);
         // Labels move with the trim: stage pixels -> trimmed HUD pixels (composePositionPreview places them).
         java.util.List<PreviewText> texts = bounds == null ? stageTexts
                 : moveTexts(stageTexts, -bounds[0], -bounds[1], 1.0D, 1.0D);
@@ -1076,10 +1029,10 @@ public final class DynamicMinimapRenderer {
             reference.infoPanelEnabled = true;
             if (!reference.infoPanelShown()) reference.showCoordinates = true; // A panel to measure.
             BufferedImage referenceHud = settingsPreviewImage(reference, snapshot, null);
-            int[] referenceBounds = referenceHud == null ? null : visibleBounds(referenceHud);
+            int[] referenceBounds = referenceHud == null ? null : DapperMapUtil.opaqueBounds(referenceHud, 0);
             if (referenceBounds != null) {
-                scaleReference = Math.max(referenceBounds[2] - referenceBounds[0] + 1,
-                        referenceBounds[3] - referenceBounds[1] + 1);
+                scaleReference = Math.max(referenceBounds[2] - referenceBounds[0],
+                        referenceBounds[3] - referenceBounds[1]);
             }
         }
         return new PositionPreviewBase(hud, scaleReference, texts);
@@ -1109,13 +1062,12 @@ public final class DynamicMinimapRenderer {
             int widgetWidth = Math.max(1, (int) Math.round(hud.getWidth() * widgetScale));
             int widgetHeight = Math.max(1, (int) Math.round(hud.getHeight() * widgetScale));
             int x = inset + (int) Math.round((width - inset * 2 - widgetWidth)
-                    * Math.max(0, Math.min(100, settings.hudPositionX)) / 100.0D);
+                    * DapperMapUtil.clamp(settings.hudPositionX, DynamicMinimapSetting.POSITION_MIN, DynamicMinimapSetting.POSITION_MAX) / 100.0D);
             int y = inset + (int) Math.round((height - inset * 2 - widgetHeight)
-                    * Math.max(0, Math.min(100, settings.hudPositionY)) / 100.0D);
+                    * DapperMapUtil.clamp(settings.hudPositionY, DynamicMinimapSetting.POSITION_MIN, DynamicMinimapSetting.POSITION_MAX) / 100.0D);
 
             BufferedImage screen = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
-            Graphics2D g = screen.createGraphics();
-            g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            Graphics2D g = DapperMapUtil.antialiased(screen);
             g.setColor(new Color(10, 11, 24, 222));
             g.fillRoundRect(1, 1, width - 2, height - 2, 18, 18);
             g.setColor(new Color(110, 101, 151, 92));
@@ -1138,7 +1090,7 @@ public final class DynamicMinimapRenderer {
     }
 
     private static void drawPreviewAsset(Graphics2D g, DecodedPreview decoded, byte[] png,
-                                         double x, double y, int size) throws IOException {
+                                         double x, double y, int size) {
         if (png == null) return;
         BufferedImage image = decoded.icon(png);
         if (image != null) g.drawImage(image, (int)Math.round(x), (int)Math.round(y), size, size, null);
@@ -1162,14 +1114,10 @@ public final class DynamicMinimapRenderer {
      * inside the ring beside the large dashes and out on the rim when those dashes are hidden.
      * The edge-marker clamp keeps clear of badges of this size.
      */
-    public static double cardinalBadgeSize(boolean cardinalDashes) {
-        return 18.0D;
-    }
+    public static final double CARDINAL_BADGE_SIZE = 18.0D;
 
     /** Letter size in frame units for the badge. */
-    public static double cardinalFontSize(boolean cardinalDashes) {
-        return 13.0D;
-    }
+    public static final double CARDINAL_FONT_SIZE = 13.0D;
 
     /**
      * Centre of cardinal letter {@code index} (0 N, 1 E, 2 S, 3 W) as a fraction (x, y) of the
@@ -1182,7 +1130,7 @@ public final class DynamicMinimapRenderer {
         double dx = Math.cos(bearing), dy = Math.sin(bearing);
         double divisor = circle ? 1 : Math.max(Math.abs(dx), Math.abs(dy));
         // Inside the ring beside the large dash, or (dashes hidden) out on the rim where the dash was.
-        double inset = cardinalDashes ? 25.0D : cardinalBadgeSize(false) / 2.0D + 0.5D;
+        double inset = cardinalDashes ? 25.0D : CARDINAL_BADGE_SIZE / 2.0D + 0.5D;
         double radius = (center - inset) / divisor;
         return new double[]{(center + dx * radius) / STATIC_ASSET_LOGICAL_SIZE,
                 (center + dy * radius) / STATIC_ASSET_LOGICAL_SIZE};
@@ -1200,8 +1148,8 @@ public final class DynamicMinimapRenderer {
         java.util.function.DoubleUnaryOperator sy = value -> offsetY + value * scaleY;
         if (settings.showCompassLetters) {
             boolean dashes = settings.showCardinalDashes;
-            double box = cardinalBadgeSize(dashes) * mapSize / STATIC_ASSET_LOGICAL_SIZE;
-            double font = cardinalFontSize(dashes) * mapSize / STATIC_ASSET_LOGICAL_SIZE;
+            double box = CARDINAL_BADGE_SIZE * mapSize / STATIC_ASSET_LOGICAL_SIZE;
+            double font = CARDINAL_FONT_SIZE * mapSize / STATIC_ASSET_LOGICAL_SIZE;
             String colour = settings.colours.hex(CARDINAL_TEXT);
             for (int i = 0; i < 4; i++) {
                 double[] centre = cardinalLetterCentre(i, snapshot.frameAngle(), settings.isCircle(), dashes);
@@ -1285,42 +1233,53 @@ public final class DynamicMinimapRenderer {
             case DynamicMinimapSetting.INFO_RIGHT -> {
                 edge.moveTo(x0, y0 + corner);
                 edge.lineTo(x0, cy - spread);
-                edge.curveTo(x0 + inset * 0.35D, cy - spread * 0.55D,
-                        x0 + inset, cy - spread * 0.35D, x0 + inset, cy);
-                edge.curveTo(x0 + inset, cy + spread * 0.35D,
-                        x0 + inset * 0.35D, cy + spread * 0.55D, x0, cy + spread);
+                appendMapCurve(edge, true, x0, cy, inset, spread, -1);
                 edge.lineTo(x0, y1 - corner);
             }
             case DynamicMinimapSetting.INFO_LEFT -> {
                 edge.moveTo(x1, y0 + corner);
                 edge.lineTo(x1, cy - spread);
-                edge.curveTo(x1 - inset * 0.35D, cy - spread * 0.55D,
-                        x1 - inset, cy - spread * 0.35D, x1 - inset, cy);
-                edge.curveTo(x1 - inset, cy + spread * 0.35D,
-                        x1 - inset * 0.35D, cy + spread * 0.55D, x1, cy + spread);
+                appendMapCurve(edge, true, x1, cy, -inset, spread, -1);
                 edge.lineTo(x1, y1 - corner);
             }
             case DynamicMinimapSetting.INFO_BELOW -> {
                 edge.moveTo(x0 + corner, y0);
                 edge.lineTo(cx - spread, y0);
-                edge.curveTo(cx - spread * 0.55D, y0 + inset * 0.35D,
-                        cx - spread * 0.35D, y0 + inset, cx, y0 + inset);
-                edge.curveTo(cx + spread * 0.35D, y0 + inset,
-                        cx + spread * 0.55D, y0 + inset * 0.35D, cx + spread, y0);
+                appendMapCurve(edge, false, y0, cx, inset, spread, -1);
                 edge.lineTo(x1 - corner, y0);
             }
             case DynamicMinimapSetting.INFO_ABOVE -> {
                 edge.moveTo(x0 + corner, y1);
                 edge.lineTo(cx - spread, y1);
-                edge.curveTo(cx - spread * 0.55D, y1 - inset * 0.35D,
-                        cx - spread * 0.35D, y1 - inset, cx, y1 - inset);
-                edge.curveTo(cx + spread * 0.35D, y1 - inset,
-                        cx + spread * 0.55D, y1 - inset * 0.35D, cx + spread, y1);
+                appendMapCurve(edge, false, y1, cx, -inset, spread, -1);
                 edge.lineTo(x1 - corner, y1);
             }
             default -> { return; }
         }
         graphics.draw(edge);
+    }
+
+    /**
+     * The shallow inward curve where a circular map meets its info panel, shared by the panel
+     * outline and its map-facing accent. {@code edge}: the panel side facing the map (x for a
+     * side panel, y for one above or below; {@code vertical} true for a side panel). The curve
+     * bulges by {@code inset} (signed, into the panel) about {@code centre} and runs from
+     * centre + from*spread to centre - from*spread ({@code from} is 1 or -1).
+     */
+    private static void appendMapCurve(Path2D.Double path, boolean vertical, double edge, double centre,
+                                       double inset, double spread, int from) {
+        double reach = from * spread; // Signed half-length of the curve.
+        if (vertical) {
+            path.curveTo(edge + inset * 0.35D, centre + reach * 0.55D,
+                    edge + inset, centre + reach * 0.35D, edge + inset, centre);
+            path.curveTo(edge + inset, centre - reach * 0.35D,
+                    edge + inset * 0.35D, centre - reach * 0.55D, edge, centre - reach);
+        } else {
+            path.curveTo(centre + reach * 0.55D, edge + inset * 0.35D,
+                    centre + reach * 0.35D, edge + inset, centre, edge + inset);
+            path.curveTo(centre - reach * 0.35D, edge + inset,
+                    centre - reach * 0.55D, edge + inset * 0.35D, centre - reach, edge);
+        }
     }
 
     private static Path2D.Double panelShellPath(DynamicMinimapSetting settings,
@@ -1345,35 +1304,27 @@ public final class DynamicMinimapRenderer {
                 || settings.infoPanelPosition == DynamicMinimapSetting.INFO_RIGHT
                 ? panelHeight : panelWidth) * 0.34D);
 
+        // The rounded panel outline, with the inward curve on the side facing the map.
         if (settings.infoPanelPosition == DynamicMinimapSetting.INFO_RIGHT) {
             path.moveTo(x0 + corner, y0);
             path.lineTo(x1 - corner, y0); path.quadTo(x1, y0, x1, y0 + corner);
             path.lineTo(x1, y1 - corner); path.quadTo(x1, y1, x1 - corner, y1);
             path.lineTo(x0 + corner, y1); path.quadTo(x0, y1, x0, y1 - corner);
             path.lineTo(x0, cy + spread);
-            path.curveTo(x0 + inset * 0.35D, cy + spread * 0.55D,
-                    x0 + inset, cy + spread * 0.35D, x0 + inset, cy);
-            path.curveTo(x0 + inset, cy - spread * 0.35D,
-                    x0 + inset * 0.35D, cy - spread * 0.55D, x0, cy - spread);
+            appendMapCurve(path, true, x0, cy, inset, spread, 1);
             path.lineTo(x0, y0 + corner); path.quadTo(x0, y0, x0 + corner, y0);
         } else if (settings.infoPanelPosition == DynamicMinimapSetting.INFO_LEFT) {
             path.moveTo(x0 + corner, y0);
             path.lineTo(x1 - corner, y0); path.quadTo(x1, y0, x1, y0 + corner);
             path.lineTo(x1, cy - spread);
-            path.curveTo(x1 - inset * 0.35D, cy - spread * 0.55D,
-                    x1 - inset, cy - spread * 0.35D, x1 - inset, cy);
-            path.curveTo(x1 - inset, cy + spread * 0.35D,
-                    x1 - inset * 0.35D, cy + spread * 0.55D, x1, cy + spread);
+            appendMapCurve(path, true, x1, cy, -inset, spread, -1);
             path.lineTo(x1, y1 - corner); path.quadTo(x1, y1, x1 - corner, y1);
             path.lineTo(x0 + corner, y1); path.quadTo(x0, y1, x0, y1 - corner);
             path.lineTo(x0, y0 + corner); path.quadTo(x0, y0, x0 + corner, y0);
         } else if (settings.infoPanelPosition == DynamicMinimapSetting.INFO_BELOW) {
             path.moveTo(x0 + corner, y0);
             path.lineTo(cx - spread, y0);
-            path.curveTo(cx - spread * 0.55D, y0 + inset * 0.35D,
-                    cx - spread * 0.35D, y0 + inset, cx, y0 + inset);
-            path.curveTo(cx + spread * 0.35D, y0 + inset,
-                    cx + spread * 0.55D, y0 + inset * 0.35D, cx + spread, y0);
+            appendMapCurve(path, false, y0, cx, inset, spread, -1);
             path.lineTo(x1 - corner, y0); path.quadTo(x1, y0, x1, y0 + corner);
             path.lineTo(x1, y1 - corner); path.quadTo(x1, y1, x1 - corner, y1);
             path.lineTo(x0 + corner, y1); path.quadTo(x0, y1, x0, y1 - corner);
@@ -1383,10 +1334,7 @@ public final class DynamicMinimapRenderer {
             path.lineTo(x1 - corner, y0); path.quadTo(x1, y0, x1, y0 + corner);
             path.lineTo(x1, y1 - corner); path.quadTo(x1, y1, x1 - corner, y1);
             path.lineTo(cx + spread, y1);
-            path.curveTo(cx + spread * 0.55D, y1 - inset * 0.35D,
-                    cx + spread * 0.35D, y1 - inset, cx, y1 - inset);
-            path.curveTo(cx - spread * 0.35D, y1 - inset,
-                    cx - spread * 0.55D, y1 - inset * 0.35D, cx - spread, y1);
+            appendMapCurve(path, false, y1, cx, -inset, spread, 1);
             path.lineTo(x0 + corner, y1); path.quadTo(x0, y1, x0, y1 - corner);
             path.lineTo(x0, y0 + corner); path.quadTo(x0, y0, x0 + corner, y0);
         }
@@ -1397,7 +1345,7 @@ public final class DynamicMinimapRenderer {
     /** Dot PNGs by colour: identical for every player, so each colour is drawn and encoded once. */
     private static final PngCache DOT_CACHE = new PngCache(64, 512 * 1024);
 
-    public static byte[] renderDot(int rgb, DynamicMinimapColours colours) {
+    public static byte[] renderDot(int rgb) {
         byte[] cached = DOT_CACHE.get(rgb);
         if (cached != null) return cached;
         byte[] png = drawDot(rgb);
@@ -1407,8 +1355,7 @@ public final class DynamicMinimapRenderer {
 
     private static byte[] drawDot(int rgb) {
         BufferedImage image = new BufferedImage(32, 32, 2);
-        Graphics2D graphics = image.createGraphics();
-        graphics.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+        Graphics2D graphics = DapperMapUtil.antialiased(image);
         int center = 16;
         int radius = 12;
         graphics.setColor(withAlpha(FIXED_MARKER_OUTLINE, 200));
@@ -1424,8 +1371,7 @@ public final class DynamicMinimapRenderer {
         byte[] cached = ARROW_CACHE.get(key);
         if (cached != null) return cached;
         BufferedImage image = new BufferedImage(40, 40, 2);
-        Graphics2D graphics = image.createGraphics();
-        graphics.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+        Graphics2D graphics = DapperMapUtil.antialiased(image);
         double radius = 12.8;
         Path2D.Double arrow = new Path2D.Double();
         arrow.moveTo((double)0.0F, -radius);
@@ -1790,14 +1736,6 @@ public final class DynamicMinimapRenderer {
     }
 
     /** Logo-style bevel and emissive trim; fixed bezel, independently moving compass. */
-    private static void drawApertureCircleFrame(Graphics2D graphics, int size, DynamicMinimapColours colours) {
-        drawTexturedBezel(graphics, size, true, colours);
-    }
-
-    private static void drawApertureSquareFrame(Graphics2D graphics, int size, DynamicMinimapColours colours) {
-        drawTexturedBezel(graphics, size, false, colours);
-    }
-
     private static void drawTexturedBezel(Graphics2D g, int size, boolean circle, DynamicMinimapColours colours) {
         Shape rim = circle ? new Ellipse2D.Double(11, 11, size - 22, size - 22)
                 : new RoundRectangle2D.Double(11, 11, size - 22, size - 22, 15, 15);
@@ -1849,7 +1787,7 @@ public final class DynamicMinimapRenderer {
             drawRadialTick(g, (int)center, (int)center, outer, inner, bearing, width, colours.awt(COMPASS_DASHES, 245));
         }
         if (!letters && !cardinalDashes) return;
-        double badgeSize = cardinalBadgeSize(cardinalDashes);
+        double badgeSize = CARDINAL_BADGE_SIZE;
         for (int i = 0; i < 4; i++) {
             double bearing = -Math.PI / 2 + i * Math.PI / 2 + angle;
             double dx = Math.cos(bearing), dy = Math.sin(bearing);
@@ -1932,31 +1870,6 @@ public final class DynamicMinimapRenderer {
 
     /** Most translucent colours kept exact (the map background and its rotated corners). */
     private static final int MAX_TRANSLUCENT = 16;
-
-    /**
-     * Backing pixel array of a plain TYPE_INT_ARGB image (one bank, no offsets, not a sub-image),
-     * else null. Its values are exactly what getRGB returns (non-premultiplied ARGB).
-     */
-    private static int[] backingArgb(BufferedImage image) {
-        if (image.getType() != BufferedImage.TYPE_INT_ARGB) return null;
-        java.awt.image.WritableRaster raster = image.getRaster();
-        if (raster.getMinX() != 0 || raster.getMinY() != 0
-                || raster.getSampleModelTranslateX() != 0 || raster.getSampleModelTranslateY() != 0) return null;
-        if (!(raster.getDataBuffer() instanceof java.awt.image.DataBufferInt buffer)
-                || buffer.getNumBanks() != 1 || buffer.getOffset() != 0) return null;
-        if (!(raster.getSampleModel() instanceof java.awt.image.SinglePixelPackedSampleModel model)
-                || model.getScanlineStride() != image.getWidth()) return null;
-        int[] data = buffer.getData();
-        return data.length >= image.getWidth() * image.getHeight() ? data : null;
-    }
-
-    /** All pixels as ARGB in row order: the backing array when possible (treat as read-only), else a copy. */
-    private static int[] argbPixels(BufferedImage image) {
-        int[] backing = backingArgb(image);
-        if (backing != null) return backing;
-        int width = image.getWidth(), height = image.getHeight();
-        return image.getRGB(0, 0, width, height, null, 0, width);
-    }
 
     /** 5-bit-per-channel histogram bin of an opaque colour. */
     private static int colourBin(int argb) {
@@ -2115,10 +2028,6 @@ public final class DynamicMinimapRenderer {
      * histogram and split by median cut; translucent colours are kept exact. No dithering: flat
      * areas stay flat, which keeps the PNG small. Render pool only.
      */
-    static BufferedImage reduceColours(BufferedImage source, int colours) {
-        return reduceColours(source, argbPixels(source), colours);
-    }
-
     private static BufferedImage reduceColours(BufferedImage source, int[] argb, int colours) {
         ColourReduction reduction = buildReduction(argb, colours, 0);
         return reduction == null ? null : reduction.apply(argb, source.getWidth(), source.getHeight());
@@ -2245,34 +2154,16 @@ public final class DynamicMinimapRenderer {
         return hash;
     }
 
-    public static final class Terrain {
-        /** North-up PNG (null for player-up renders, which use {@link #image}). */
-        public final byte[] png;
-        /** The stitched raster, or null when no chunk was drawn. */
-        public final BufferedImage image;
-        public final int present;
-        public final int total;
-        /** Missing chunks skipped because their world chunk was not loaded (no request made). */
-        public final int unloaded;
-        /** Fold of {@link #chunkHashes} (the old single-value signature; kept for stats). */
-        public final long signature;
-        /**
-         * Hash of each chunk image drawn, in grid order (0 = missing; null without an image
-         * source). Never mutated after renderTerrain returns, so it can be handed between threads.
-         */
-        public final long[] chunkHashes;
-
-        Terrain(byte[] png, BufferedImage image, int present, int total, int unloaded,
-                long signature, long[] chunkHashes) {
-            this.png = png;
-            this.image = image;
-            this.present = present;
-            this.total = total;
-            this.unloaded = unloaded;
-            this.signature = signature;
-            this.chunkHashes = chunkHashes;
-        }
-
+    /**
+     * One stitched terrain buffer.
+     *
+     * @param png         north-up PNG (null for player-up renders, which use {@code image})
+     * @param image       the stitched raster, or null when no chunk was drawn
+     * @param unloaded    missing chunks skipped because their world chunk was not loaded (no request made)
+     * @param chunkHashes hash of each chunk image drawn, in grid order (0 = missing; null without an
+     *                    image source). Never mutated after renderTerrain returns, so it can be handed between threads.
+     */
+    public record Terrain(byte[] png, BufferedImage image, int present, int total, int unloaded, long[] chunkHashes) {
         public boolean complete() {
             return this.total > 0 && this.present >= this.total;
         }

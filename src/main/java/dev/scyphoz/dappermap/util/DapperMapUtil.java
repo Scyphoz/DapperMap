@@ -12,7 +12,13 @@ import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import javax.imageio.ImageIO;
@@ -21,7 +27,7 @@ import javax.imageio.stream.MemoryCacheImageOutputStream;
 /**
  * Small helpers shared across DapperMap. Each one previously existed as a private copy in two
  * or more classes; keeping a single version here means a fix or optimisation lands everywhere.
- * Every method is stateless and thread-safe.
+ * Every static method is thread-safe; {@link ScanCache} instances belong to one thread.
  */
 public final class DapperMapUtil {
     private static final char[] HEX_DIGITS = "0123456789ABCDEF".toCharArray();
@@ -54,9 +60,100 @@ public final class DapperMapUtil {
         return new String(digits);
     }
 
+    /** Position of {@code value} in {@code names}, or -1 (exact, case-sensitive match). */
+    public static int indexOf(String[] names, String value) {
+        for (int i = 0; i < names.length; i++) if (names[i].equals(value)) return i;
+        return -1;
+    }
+
+    /** {@code names[index]}, or the first name when the index is out of range. */
+    public static String nameAt(String[] names, int index) {
+        return index >= 0 && index < names.length ? names[index] : names[0];
+    }
+
     /** A player's UUID without dashes, used in their per-player asset paths ("anon" when unknown). */
     public static String playerSlug(UUID uuid) {
         return uuid == null ? "anon" : uuid.toString().replace("-", "");
+    }
+
+    /** Folds {@code text} into a 64-bit FNV-1a hash (start from {@link #FNV64_OFFSET}). */
+    public static long fnv64(long hash, CharSequence text) {
+        for (int i = 0; i < text.length(); i++) hash = (hash ^ text.charAt(i)) * 0x100000001b3L;
+        return hash;
+    }
+
+    /** FNV-1a 64-bit offset basis, the start value for {@link #fnv64}. */
+    public static final long FNV64_OFFSET = 0xcbf29ce484222325L;
+
+    /**
+     * An asset path with forward slashes and no leading slash, or null when it is blank or
+     * contains "..". Only ever used to look assets up, never to build file paths.
+     */
+    public static String cleanAssetPath(String path) {
+        if (path == null || path.isBlank() || path.contains("..")) return null;
+        String clean = path.replace('\\', '/');
+        while (clean.startsWith("/")) clean = clean.substring(1);
+        return clean;
+    }
+
+    // ------------------------------------------------------------------------------------
+    // Bounded maps and caches
+    // ------------------------------------------------------------------------------------
+
+    /**
+     * Access-ordered map that drops its least recently used entry beyond {@code limit}.
+     * {@code synchronize}: wrap it for use from several threads (otherwise guard it yourself).
+     */
+    public static <K, V> Map<K, V> lruMap(int limit, boolean synchronize) {
+        Map<K, V> map = new LinkedHashMap<>(Math.min(64, limit), 0.75F, true) {
+            @Override protected boolean removeEldestEntry(Map.Entry<K, V> eldest) { return size() > limit; }
+        };
+        return synchronize ? Collections.synchronizedMap(map) : map;
+    }
+
+    /**
+     * Puts into a cache that is simply emptied when it reaches {@code limit} entries (cheap
+     * bounding for caches whose entries are all easy to rebuild). Replacing a key never empties it.
+     */
+    public static <K, V> void putBounded(Map<K, V> map, K key, V value, int limit) {
+        if (map.size() >= limit && !map.containsKey(key)) map.clear();
+        map.put(key, value);
+    }
+
+    /**
+     * Per-scan cache that keeps only the entries used in the latest scan: look up the previous
+     * scan's entry with {@link #previous}, record this scan's with {@link #keep}, then call
+     * {@link #endScan}. Not thread-safe: one owner thread (the world thread for marker scans).
+     */
+    public static final class ScanCache<K, V> {
+        private Map<K, V> current = new HashMap<>();
+        private Map<K, V> next = new HashMap<>();
+
+        /** The entry kept by the previous scan, or null. */
+        public V previous(K key) { return this.current.get(key); }
+
+        /** Keeps an entry for the next scan. */
+        public void keep(K key, V value) { this.next.put(key, value); }
+
+        /** Keeps the previous scan's entry (if any) without recomputing it. */
+        public void carry(K key) {
+            V value = this.current.get(key);
+            if (value != null) this.next.put(key, value);
+        }
+
+        /** Ends a scan: entries not kept in it are dropped. */
+        public void endScan() {
+            Map<K, V> swap = this.current;
+            this.current = this.next;
+            this.next = swap;
+            this.next.clear();
+        }
+
+        /** Forgets every entry. */
+        public void clear() {
+            this.current.clear();
+            this.next.clear();
+        }
     }
 
     // ------------------------------------------------------------------------------------
@@ -338,11 +435,109 @@ public final class DapperMapUtil {
         }
     }
 
+    /** A decoded PNG (or other ImageIO image), or null when it is missing or unreadable. */
+    public static BufferedImage decodeImage(byte[] bytes) {
+        if (bytes == null || bytes.length == 0) return null;
+        try {
+            return ImageIO.read(new java.io.ByteArrayInputStream(bytes));
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    /** Graphics for {@code image} with anti-aliasing on; the caller disposes it. */
+    public static java.awt.Graphics2D antialiased(BufferedImage image) {
+        java.awt.Graphics2D graphics = image.createGraphics();
+        graphics.setRenderingHint(java.awt.RenderingHints.KEY_ANTIALIASING, java.awt.RenderingHints.VALUE_ANTIALIAS_ON);
+        return graphics;
+    }
+
+    /**
+     * Backing pixel array of a plain TYPE_INT_ARGB image (one bank, no offsets, not a sub-image),
+     * else null. Its values are exactly what getRGB returns (non-premultiplied ARGB).
+     */
+    public static int[] backingArgb(BufferedImage image) {
+        if (image.getType() != BufferedImage.TYPE_INT_ARGB) return null;
+        java.awt.image.WritableRaster raster = image.getRaster();
+        if (raster.getMinX() != 0 || raster.getMinY() != 0
+                || raster.getSampleModelTranslateX() != 0 || raster.getSampleModelTranslateY() != 0) return null;
+        if (!(raster.getDataBuffer() instanceof java.awt.image.DataBufferInt buffer)
+                || buffer.getNumBanks() != 1 || buffer.getOffset() != 0) return null;
+        if (!(raster.getSampleModel() instanceof java.awt.image.SinglePixelPackedSampleModel model)
+                || model.getScanlineStride() != image.getWidth()) return null;
+        int[] data = buffer.getData();
+        return data.length >= image.getWidth() * image.getHeight() ? data : null;
+    }
+
+    /** All pixels as ARGB in row order: the backing array when possible (treat as read-only), else a copy. */
+    public static int[] argbPixels(BufferedImage image) {
+        int[] backing = backingArgb(image);
+        if (backing != null) return backing;
+        int width = image.getWidth(), height = image.getHeight();
+        return image.getRGB(0, 0, width, height, null, 0, width);
+    }
+
+    /**
+     * Bounds {minX, minY, maxX + 1, maxY + 1} of the pixels whose alpha is above
+     * {@code minAlpha}, or null when there are none. Reads the pixels once (not getRGB per pixel).
+     */
+    public static int[] opaqueBounds(BufferedImage image, int minAlpha) {
+        int width = image.getWidth(), height = image.getHeight();
+        int[] pixels = argbPixels(image);
+        int minX = width, minY = height, maxX = -1, maxY = -1;
+        for (int y = 0; y < height; y++) {
+            int rowStart = y * width;
+            for (int x = 0; x < width; x++) {
+                if ((pixels[rowStart + x] >>> 24) <= minAlpha) continue;
+                if (x < minX) minX = x;
+                if (x > maxX) maxX = x;
+                if (y < minY) minY = y;
+                maxY = y;
+            }
+        }
+        return maxX < 0 ? null : new int[]{minX, minY, maxX + 1, maxY + 1};
+    }
+
+    /**
+     * A PNG with every pixel's colour multiplied by {@code rgb} (alpha kept), or null when the
+     * source can't be decoded. Used for tinted world-map and BetterMap marker icons; callers cache it.
+     */
+    public static byte[] tintPng(byte[] source, int rgb) {
+        BufferedImage image = decodeImage(source);
+        if (image == null) return null;
+        try {
+            int tintR = (rgb >>> 16) & 0xFF, tintG = (rgb >>> 8) & 0xFF, tintB = rgb & 0xFF;
+            int width = image.getWidth(), height = image.getHeight();
+            int[] pixels = image.getRGB(0, 0, width, height, null, 0, width);
+            for (int i = 0; i < pixels.length; i++) {
+                int argb = pixels[i];
+                int r = ((argb >>> 16) & 0xFF) * tintR / 255;
+                int g = ((argb >>> 8) & 0xFF) * tintG / 255;
+                int b = (argb & 0xFF) * tintB / 255;
+                pixels[i] = (argb & 0xFF000000) | (r << 16) | (g << 8) | b;
+            }
+            BufferedImage tinted = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
+            tinted.setRGB(0, 0, width, height, pixels, 0, width);
+            return encodePng(tinted, 2048);
+        } catch (RuntimeException ignored) {
+            return null;
+        }
+    }
+
+    /** RGB (0xRRGGBB) of a protocol colour, as sent by tint components and the colour picker. */
+    public static int rgb(com.hypixel.hytale.protocol.Color colour) {
+        return (Byte.toUnsignedInt(colour.red) << 16) | (Byte.toUnsignedInt(colour.green) << 8)
+                | Byte.toUnsignedInt(colour.blue);
+    }
+
     // ------------------------------------------------------------------------------------
     // Rate-limited failure logging (the per-tick paths catch everything to keep running)
     // ------------------------------------------------------------------------------------
 
+    /** DapperMap's one logger (every class logs through the helpers below). */
     private static final com.hypixel.hytale.logger.HytaleLogger LOGGER = com.hypixel.hytale.logger.HytaleLogger.get("DapperMap");
+    /** Keys already logged by {@link #logInfoOnce}; bounded, so a flood of new keys stops logging. */
+    private static final Set<String> LOGGED_ONCE = ConcurrentHashMap.newKeySet();
     private static final java.util.concurrent.ConcurrentHashMap<String, Long> FAILURES_LOGGED = new java.util.concurrent.ConcurrentHashMap<>();
     private static final java.util.concurrent.atomic.AtomicLong FAILURES = new java.util.concurrent.atomic.AtomicLong();
 
@@ -367,6 +562,31 @@ public final class DapperMapUtil {
 
     /** Failures counted by {@link #logFailure} since startup (for /dappermap admin stats). */
     public static long failureCount() { return FAILURES.get(); }
+
+    /** Logs an information line as it is (no formatting). */
+    public static void logInfo(String message) {
+        LOGGER.at(java.util.logging.Level.INFO).log(message);
+    }
+
+    /**
+     * Logs a printf-style information line once per {@code key} per server run (at most 512 keys),
+     * e.g. a missing marker icon or a creature with no model face.
+     */
+    public static void logInfoOnce(String key, String format, Object... args) {
+        if (LOGGED_ONCE.size() < 512 && LOGGED_ONCE.add(key)) {
+            LOGGER.at(java.util.logging.Level.INFO).logVarargs(format, args);
+        }
+    }
+
+    /**
+     * True for the rejection a stopped world gives when work is posted to it (the server wraps
+     * it in SkipSentryException). Callers drop that work quietly.
+     */
+    public static boolean isStoppedWorld(Throwable failure) {
+        return failure instanceof IllegalThreadStateException
+                || (failure instanceof com.hypixel.hytale.logger.sentry.SkipSentryException
+                && failure.getCause() instanceof IllegalThreadStateException);
+    }
 
     /** Content hash of a common asset (kept by the registry; nothing is read), or null. */
     public static String commonAssetHash(String name) {
@@ -430,6 +650,33 @@ public final class DapperMapUtil {
         return Boolean.FALSE.equals(jsonBool(node.get("Enabled")));
     }
 
+    /** Test applied to each object node by {@link #jsonAny}; {@code depth} is the node's depth. */
+    @FunctionalInterface
+    public interface JsonTest {
+        boolean test(JsonObject node, int depth);
+    }
+
+    /**
+     * True when {@code test} matches any object node in the tree, searched depth first through
+     * arrays and object values. Each array element and object value is one level deeper; nodes
+     * deeper than {@code maxDepth} are not visited. {@code skipDisabled}: a node with
+     * {@code "Enabled": false} (and everything under it) is skipped.
+     */
+    public static boolean jsonAny(JsonElement element, int depth, int maxDepth, boolean skipDisabled, JsonTest test) {
+        if (element == null || depth > maxDepth) return false;
+        if (element.isJsonArray()) {
+            for (JsonElement child : element.getAsJsonArray())
+                if (jsonAny(child, depth + 1, maxDepth, skipDisabled, test)) return true;
+        } else if (element.isJsonObject()) {
+            JsonObject node = element.getAsJsonObject();
+            if (skipDisabled && jsonDisabled(node)) return false;
+            if (test.test(node, depth)) return true;
+            for (var entry : node.entrySet())
+                if (jsonAny(entry.getValue(), depth + 1, maxDepth, skipDisabled, test)) return true;
+        }
+        return false;
+    }
+
     /** Text for a quoted UI markup string: quotes and backslashes escaped, control characters as spaces. */
     public static String escapeUiText(String value) {
         if (value == null) return "";
@@ -440,5 +687,27 @@ public final class DapperMapUtil {
             escaped.append(c < 32 ? ' ' : c);
         }
         return escaped.toString();
+    }
+
+    /** CustomUI horizontal alignment for 0 start, 1 centre, 2 end (anything else is start). */
+    public static String alignmentName(int alignment) {
+        return switch (alignment) { case 1 -> "Center"; case 2 -> "End"; default -> "Start"; };
+    }
+
+    /**
+     * Appends one native Label (in display units) to UI markup: anchor box, escaped text, font
+     * size and colour, optional bold and letter spacing (only when above 0), and alignment.
+     * Shared by the HUD's info panel and compass letters and the settings preview.
+     */
+    public static void appendLabel(StringBuilder out, String id, int left, int top, int width, int height,
+                                   String text, int fontSize, String colour, boolean bold,
+                                   double letterSpacing, String alignment) {
+        out.append("Label #").append(id).append(" { Anchor: (Left: ").append(left)
+                .append(", Top: ").append(top).append(", Width: ").append(width)
+                .append(", Height: ").append(height).append("); Text: \"").append(escapeUiText(text))
+                .append("\"; Style: (FontSize: ").append(fontSize).append(", TextColor: ").append(colour);
+        if (bold) out.append(", RenderBold: true");
+        if (letterSpacing > 0.0D) out.append(", LetterSpacing: ").append(letterSpacing);
+        out.append(", HorizontalAlignment: ").append(alignment).append(", VerticalAlignment: Center); } ");
     }
 }

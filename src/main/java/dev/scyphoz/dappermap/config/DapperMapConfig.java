@@ -4,7 +4,16 @@ import com.hypixel.hytale.codec.Codec;
 import com.hypixel.hytale.codec.KeyedCodec;
 import com.hypixel.hytale.codec.builder.BuilderCodec;
 import dev.scyphoz.dappermap.dynamic.DynamicMinimapSetting;
+import dev.scyphoz.dappermap.util.DapperMapUtil;
+import static dev.scyphoz.dappermap.dynamic.DynamicMinimapSetting.RESOLUTION_MAX;
+import static dev.scyphoz.dappermap.dynamic.DynamicMinimapSetting.RESOLUTION_MIN;
+import static dev.scyphoz.dappermap.dynamic.DynamicMinimapSetting.SPEED_FASTEST;
+import static dev.scyphoz.dappermap.dynamic.DynamicMinimapSetting.SPEED_SLOWEST;
+import static dev.scyphoz.dappermap.dynamic.DynamicMinimapSetting.ZOOM_MAX;
+import static dev.scyphoz.dappermap.dynamic.DynamicMinimapSetting.ZOOM_MIN;
 import static dev.scyphoz.dappermap.util.DapperMapUtil.clamp;
+import java.util.function.ObjIntConsumer;
+import java.util.function.ToIntFunction;
 
 /**
  * Server-wide values persisted by Hytale's codec-backed plugin configuration
@@ -27,12 +36,117 @@ public class DapperMapConfig {
     /** When false, player commands/settings require explicit permission grants. */
     private boolean grantPlayerSettingsByDefault = true;
 
-    // Admin limits. Defaults are the widest allowed values, i.e. no limit.
-    /** Fastest update speed players may use: 0 very fast (no limit) .. 3 slow. */
-    private int fastestUpdateSpeed = 0;
-    private int maxTextureResolution = 1024;
-    private int maxZoomRadius = 256;
-    private int maxCreatureLimit = 64;
+    /**
+     * The server limits on expensive player settings, one entry each. The config file, the
+     * {@code admin limit} command, status text and both settings pages all read this table.
+     */
+    public enum Limit {
+        // Speed is a minimum index (higher = slower); the others are maximums.
+        SPEED("FastestUpdateSpeed", "speed", "speed", "speed", "speed", "fastest speed", "",
+                SPEED_FASTEST, SPEED_SLOWEST, SPEED_FASTEST, true, s -> s.updateSpeed, (s, v) -> s.updateSpeed = v),
+        RESOLUTION("MaxTextureResolution", "resolution", "resolution", "texture_resolution", "resolution", "max resolution", " px",
+                RESOLUTION_MIN, RESOLUTION_MAX, RESOLUTION_MAX, false, s -> s.textureResolution, (s, v) -> s.textureResolution = v),
+        ZOOM("MaxZoomRadius", "zoom", "zoom", "zoom", "zoom", "max zoom", " blocks",
+                ZOOM_MIN, ZOOM_MAX, ZOOM_MAX, false, s -> s.zoomBlocks, (s, v) -> s.zoomBlocks = v),
+        CREATURES("MaxCreatureLimit", "creatures", "creature-limit", "creature_limit", "creature limit", "max creature limit", "",
+                16, 64, 64, false, s -> s.creatureMarkerLimit, (s, v) -> s.creatureMarkerLimit = v);
+
+        /** Key in dappermap_minimap.json. */
+        public final String configKey;
+        /** Name in {@code /dappermap admin limit <name>}; the admin page row is "limit_" + this. */
+        public final String command;
+        /** The player setting command it limits (e.g. "creature-limit"). */
+        public final String settingCommand;
+        /** The player settings-page row it limits. */
+        public final String pageRow;
+        /** Labels in "limits applied" and "all limits" text. */
+        public final String appliedLabel, statusLabel;
+        /** Unit after a value (" px", " blocks"); speeds are shown by name. */
+        public final String unit;
+        public final int min, max;
+        /** The value that limits nothing (the widest setting). */
+        public final int noLimit;
+        /** True when players may not go below the limit (speed), false when they may not go above it. */
+        public final boolean minimum;
+        private final ToIntFunction<DynamicMinimapSetting> getter;
+        private final ObjIntConsumer<DynamicMinimapSetting> setter;
+        private static final Limit[] ALL = values();
+
+        Limit(String configKey, String command, String settingCommand, String pageRow, String appliedLabel,
+              String statusLabel, String unit, int min, int max, int noLimit, boolean minimum,
+              ToIntFunction<DynamicMinimapSetting> getter, ObjIntConsumer<DynamicMinimapSetting> setter) {
+            this.configKey = configKey;
+            this.command = command;
+            this.settingCommand = settingCommand;
+            this.pageRow = pageRow;
+            this.appliedLabel = appliedLabel;
+            this.statusLabel = statusLabel;
+            this.unit = unit;
+            this.min = min;
+            this.max = max;
+            this.noLimit = noLimit;
+            this.minimum = minimum;
+            this.getter = getter;
+            this.setter = setter;
+        }
+
+        /** Brings a stored value into range (creature limits round down to 16, 32 or 64). */
+        public int clamp(int value) {
+            if (this == CREATURES) return value >= 64 ? 64 : value >= 32 ? 32 : 16;
+            return DapperMapUtil.clamp(value, this.min, this.max);
+        }
+
+        /** True when a player's own value goes past this limit. */
+        public boolean exceeds(int playerValue, int limit) {
+            return this.minimum ? playerValue < limit : playerValue > limit;
+        }
+
+        /** "fast", "512 px", "128 blocks" or "32". */
+        public String text(int value) {
+            return this == SPEED ? SPEED_NAMES[this.clamp(value)] : value + this.unit;
+        }
+
+        /** Parses a command value ("fast", "512"); -1 when it isn't one this limit accepts. */
+        public int parse(String value) {
+            if (this == SPEED) return DapperMapUtil.indexOf(SPEED_NAMES, value);
+            try {
+                int parsed = Integer.parseInt(value);
+                boolean valid = parsed >= this.min && parsed <= this.max
+                        && (this != CREATURES || DynamicMinimapSetting.isCreatureLimit(parsed));
+                return valid ? parsed : -1;
+            } catch (NumberFormatException notANumber) {
+                return -1;
+            }
+        }
+
+        public int get(DynamicMinimapSetting settings) { return this.getter.applyAsInt(settings); }
+
+        /** By {@code admin limit} name; null when unknown. */
+        public static Limit byCommand(String name) {
+            for (Limit limit : ALL) if (limit.command.equals(name)) return limit;
+            return null;
+        }
+
+        /** By the player setting command it limits; null for settings without a limit. */
+        public static Limit bySettingCommand(String name) {
+            for (Limit limit : ALL) if (limit.settingCommand.equals(name)) return limit;
+            return null;
+        }
+
+        /** By player settings-page row id; null for rows without a limit. */
+        public static Limit byPageRow(String id) {
+            for (Limit limit : ALL) if (limit.pageRow.equals(id)) return limit;
+            return null;
+        }
+
+        /** By admin settings-page row id ("limit_zoom"); null for other rows. */
+        public static Limit byAdminRow(String id) {
+            return id.startsWith("limit_") ? byCommand(id.substring("limit_".length())) : null;
+        }
+    }
+
+    // Admin limits, indexed by Limit ordinal. Defaults are the widest values, i.e. no limit.
+    private final int[] limits = {SPEED_FASTEST, RESOLUTION_MAX, ZOOM_MAX, 64};
 
     // Adaptive load shedding (off by default).
     private boolean loadShedding = false;
@@ -73,23 +187,37 @@ public class DapperMapConfig {
     // Admin limits
     // ------------------------------------------------------------------------------------
 
-    public int getFastestUpdateSpeed() { return clamp(this.fastestUpdateSpeed, 0, 3); }
-    public int getMaxTextureResolution() { return clamp(this.maxTextureResolution, 256, 1024); }
-    public int getMaxZoomRadius() { return clamp(this.maxZoomRadius, 16, 256); }
-    public int getMaxCreatureLimit() { return creatureLimit(this.maxCreatureLimit); }
+    /** One limit's current value (validated). */
+    public int limit(Limit limit) {
+        return limit.clamp(this.limits[limit.ordinal()]);
+    }
 
-    /** Sets the four limits (validated); callers save the config afterwards. */
-    public void setLimits(int fastestUpdateSpeed, int maxTextureResolution, int maxZoomRadius, int maxCreatureLimit) {
-        this.fastestUpdateSpeed = clamp(fastestUpdateSpeed, 0, 3);
-        this.maxTextureResolution = clamp(maxTextureResolution, 256, 1024);
-        this.maxZoomRadius = clamp(maxZoomRadius, 16, 256);
-        this.maxCreatureLimit = creatureLimit(maxCreatureLimit);
+    /** True when this limit holds players back (it isn't the widest value). */
+    public boolean isLimited(Limit limit) {
+        return this.limit(limit) != limit.noLimit;
+    }
+
+    /** All limits, indexed by Limit ordinal (a copy; the settings page edits it as its draft). */
+    public int[] limits() {
+        int[] values = new int[Limit.ALL.length];
+        for (Limit limit : Limit.ALL) values[limit.ordinal()] = this.limit(limit);
+        return values;
+    }
+
+    /** Sets one limit (validated); callers save the config afterwards. */
+    public void setLimit(Limit limit, int value) {
+        this.limits[limit.ordinal()] = limit.clamp(value);
+    }
+
+    /** Sets every limit from {@link #limits()}-ordered values; callers save the config afterwards. */
+    public void setLimits(int[] values) {
+        for (Limit limit : Limit.ALL) this.setLimit(limit, values[limit.ordinal()]);
     }
 
     /** True when at least one limit is narrower than the full range. */
     public boolean hasLimits() {
-        return this.getFastestUpdateSpeed() > 0 || this.getMaxTextureResolution() < 1024
-                || this.getMaxZoomRadius() < 256 || this.getMaxCreatureLimit() < 64;
+        for (Limit limit : Limit.ALL) if (this.isLimited(limit)) return true;
+        return false;
     }
 
     /**
@@ -97,34 +225,28 @@ public class DapperMapConfig {
      * a session's own copy, so the player's saved choice returns when a limit is raised.
      */
     public DynamicMinimapSetting applyLimits(DynamicMinimapSetting settings) {
-        // Higher index = slower, so the limit is a minimum index.
-        settings.updateSpeed = Math.max(settings.updateSpeed, this.getFastestUpdateSpeed());
-        settings.textureResolution = Math.min(settings.textureResolution, this.getMaxTextureResolution());
-        settings.zoomBlocks = Math.min(settings.zoomBlocks, this.getMaxZoomRadius());
-        settings.creatureMarkerLimit = Math.min(settings.creatureMarkerLimit, this.getMaxCreatureLimit());
+        for (Limit limit : Limit.ALL) {
+            int value = this.limit(limit);
+            if (limit.exceeds(limit.get(settings), value)) limit.setter.accept(settings, value);
+        }
         return settings;
     }
 
     /** "speed fast, resolution 512 px" for the limits a player's own settings exceed; "" when none apply. */
     public String describeLimitsApplied(DynamicMinimapSetting settings) {
         StringBuilder out = new StringBuilder();
-        if (settings.updateSpeed < this.getFastestUpdateSpeed())
-            append(out, "speed " + SPEED_NAMES[this.getFastestUpdateSpeed()]);
-        if (settings.textureResolution > this.getMaxTextureResolution())
-            append(out, "resolution " + this.getMaxTextureResolution() + " px");
-        if (settings.zoomBlocks > this.getMaxZoomRadius())
-            append(out, "zoom " + this.getMaxZoomRadius() + " blocks");
-        if (settings.creatureMarkerLimit > this.getMaxCreatureLimit())
-            append(out, "creature limit " + this.getMaxCreatureLimit());
+        for (Limit limit : Limit.ALL) {
+            int value = this.limit(limit);
+            if (limit.exceeds(limit.get(settings), value)) append(out, limit.appliedLabel + " " + limit.text(value));
+        }
         return out.toString();
     }
 
     /** All four limits for status and help output. */
     public String describeLimits() {
-        return "fastest speed " + SPEED_NAMES[this.getFastestUpdateSpeed()]
-                + ", max resolution " + this.getMaxTextureResolution() + " px"
-                + ", max zoom " + this.getMaxZoomRadius() + " blocks"
-                + ", max creature limit " + this.getMaxCreatureLimit();
+        StringBuilder out = new StringBuilder();
+        for (Limit limit : Limit.ALL) append(out, limit.statusLabel + " " + limit.text(this.limit(limit)));
+        return out.toString();
     }
 
     // ------------------------------------------------------------------------------------
@@ -143,11 +265,6 @@ public class DapperMapConfig {
     private static void append(StringBuilder out, String text) {
         if (!out.isEmpty()) out.append(", ");
         out.append(text);
-    }
-
-    /** Creature limits are 16, 32 or 64; anything else rounds down to the nearest of those. */
-    private static int creatureLimit(int value) {
-        return value >= 64 ? 64 : value >= 32 ? 32 : 16;
     }
 
     // Map external configuration keys to the private Java fields above.
@@ -179,27 +296,27 @@ public class DapperMapConfig {
                 .add()
                 // Admin limits. FastestUpdateSpeed is stored by name (very-fast|fast|normal|slow).
                 .append(
-                        new KeyedCodec<>("FastestUpdateSpeed", Codec.STRING),
-                        (config, value, extraInfo) -> config.fastestUpdateSpeed = speedIndex(value),
-                        (config, extraInfo) -> SPEED_NAMES[config.getFastestUpdateSpeed()]
+                        new KeyedCodec<>(Limit.SPEED.configKey, Codec.STRING),
+                        (config, value, extraInfo) -> config.limits[Limit.SPEED.ordinal()] = speedIndex(value),
+                        (config, extraInfo) -> SPEED_NAMES[config.limit(Limit.SPEED)]
                 )
                 .add()
                 .append(
-                        new KeyedCodec<>("MaxTextureResolution", Codec.INTEGER),
-                        (config, value, extraInfo) -> config.maxTextureResolution = value,
-                        (config, extraInfo) -> config.getMaxTextureResolution()
+                        new KeyedCodec<>(Limit.RESOLUTION.configKey, Codec.INTEGER),
+                        (config, value, extraInfo) -> config.limits[Limit.RESOLUTION.ordinal()] = value,
+                        (config, extraInfo) -> config.limit(Limit.RESOLUTION)
                 )
                 .add()
                 .append(
-                        new KeyedCodec<>("MaxZoomRadius", Codec.INTEGER),
-                        (config, value, extraInfo) -> config.maxZoomRadius = value,
-                        (config, extraInfo) -> config.getMaxZoomRadius()
+                        new KeyedCodec<>(Limit.ZOOM.configKey, Codec.INTEGER),
+                        (config, value, extraInfo) -> config.limits[Limit.ZOOM.ordinal()] = value,
+                        (config, extraInfo) -> config.limit(Limit.ZOOM)
                 )
                 .add()
                 .append(
-                        new KeyedCodec<>("MaxCreatureLimit", Codec.INTEGER),
-                        (config, value, extraInfo) -> config.maxCreatureLimit = value,
-                        (config, extraInfo) -> config.getMaxCreatureLimit()
+                        new KeyedCodec<>(Limit.CREATURES.configKey, Codec.INTEGER),
+                        (config, value, extraInfo) -> config.limits[Limit.CREATURES.ordinal()] = value,
+                        (config, extraInfo) -> config.limit(Limit.CREATURES)
                 )
                 .add()
                 .append(

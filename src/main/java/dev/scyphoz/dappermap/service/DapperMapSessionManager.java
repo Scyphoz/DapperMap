@@ -1,6 +1,5 @@
 package dev.scyphoz.dappermap.service;
 
-import com.hypixel.hytale.server.core.entity.entities.Player;
 import com.hypixel.hytale.server.core.universe.PlayerRef;
 import dev.scyphoz.dappermap.DapperMap;
 import dev.scyphoz.dappermap.config.DapperMapConfig;
@@ -65,29 +64,24 @@ public class DapperMapSessionManager {
         }
     }
 
-    public void showIfEnabledByDefault(Player player, PlayerRef playerRef, DapperMapConfig config) {
+    public void showIfEnabledByDefault(PlayerRef playerRef, DapperMapConfig config) {
         DynamicMinimapSetting settings = this.getSettings(playerRef.getUuid(), config);
+        DynamicMinimapSession running = this.sessionsByPlayer.get(playerRef.getUuid());
+        boolean live = running != null && running.isRunning() && running.playerRef() == playerRef;
         // A world join may drop the client's dynamic images. A running session handles that
         // itself (resyncClient); otherwise forget the records so the next start re-sends them.
-        DynamicMinimapSession running = this.sessionsByPlayer.get(playerRef.getUuid());
-        if (running == null || !running.isRunning() || running.playerRef() != playerRef) {
-            DynamicAssetPublisher.clear(playerRef.getUuid());
-        }
+        if (!live) DynamicAssetPublisher.clear(playerRef.getUuid());
         if (settings.enabled) {
             // PlayerReadyEvent fires on every world join (and after Universe.resetPlayer). A running
             // session for the same PlayerRef follows the player across worlds itself, so rebuild its
             // client-side HUD in place instead of a full stop/start (blank map, asset resends).
-            DynamicMinimapSession live = this.sessionsByPlayer.get(playerRef.getUuid());
-            if (live != null && live.isRunning() && live.playerRef() == playerRef) {
-                live.resyncClient();
-                return;
-            }
-            this.start(playerRef, settings);
+            if (live) running.resyncClient();
+            else this.start(playerRef, settings);
         }
 
     }
 
-    public boolean toggle(Player player, PlayerRef playerRef, DapperMapConfig config) {
+    public boolean toggle(PlayerRef playerRef, DapperMapConfig config) {
         DynamicMinimapSetting settings = this.getSettings(playerRef.getUuid(), config);
         settings.enabled = !settings.enabled;
         if (settings.enabled) {
@@ -146,7 +140,7 @@ public class DapperMapSessionManager {
         if (this.adminSettingsStore != null) {
             // Load the admin file first (no-op once cached) so the store knows the mod defaults it
             // inherits and saves only what the admin changed; mod default changes then still apply.
-            DapperMapConfig config = DapperMap.getConfig() == null ? null : DapperMap.getConfig().get();
+            DapperMapConfig config = DapperMap.config();
             if (config != null) this.getAdminDefaults(config);
             this.adminSettingsStore.put(ADMIN_DEFAULTS_ID, settings.copy());
         }
@@ -182,9 +176,9 @@ public class DapperMapSessionManager {
      */
     public static DynamicMinimapSetting liveSettings(DynamicMinimapSetting settings) {
         DynamicMinimapSetting live = settings.copy();
-        DapperMapConfig config = DapperMap.getConfig() == null ? null : DapperMap.getConfig().get();
+        DapperMapConfig config = DapperMap.config();
         if (config != null) config.applyLimits(live);
-        live.updateSpeed = Math.min(3, live.updateSpeed + DapperMapServerLoad.sheddingLevel());
+        live.updateSpeed = Math.min(DynamicMinimapSetting.SPEED_SLOWEST, live.updateSpeed + DapperMapServerLoad.sheddingLevel());
         live.normalize();
         return live;
     }
@@ -223,13 +217,14 @@ public class DapperMapSessionManager {
     public int[] liveSpeedCounts() {
         int[] counts = new int[4];
         for (DynamicMinimapSession session : this.sessionsByPlayer.values())
-            counts[Math.max(0, Math.min(3, session.settings().updateSpeed))]++;
+            counts[dev.scyphoz.dappermap.util.DapperMapUtil.clamp(session.settings().updateSpeed,
+                    DynamicMinimapSetting.SPEED_FASTEST, DynamicMinimapSetting.SPEED_SLOWEST)]++;
         return counts;
     }
 
     /** Players with a running minimap whose own settings exceed at least one admin limit. */
     public int limitedPlayerCount() {
-        DapperMapConfig config = DapperMap.getConfig() == null ? null : DapperMap.getConfig().get();
+        DapperMapConfig config = DapperMap.config();
         if (config == null || !config.hasLimits()) return 0;
         int count = 0;
         for (UUID uuid : this.sessionsByPlayer.keySet()) {

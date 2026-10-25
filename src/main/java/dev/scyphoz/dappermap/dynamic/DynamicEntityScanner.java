@@ -43,6 +43,8 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
 import org.joml.Vector3d;
 import static dev.scyphoz.dappermap.dynamic.DynamicMinimapColours.Key.*;
+import dev.scyphoz.dappermap.util.DapperMapUtil;
+import static dev.scyphoz.dappermap.util.DapperMapUtil.jsonAny;
 import static dev.scyphoz.dappermap.util.DapperMapUtil.jsonDisabled;
 import static dev.scyphoz.dappermap.util.DapperMapUtil.jsonObject;
 import static dev.scyphoz.dappermap.util.DapperMapUtil.jsonString;
@@ -75,50 +77,20 @@ public final class DynamicEntityScanner {
                 ? new NearestNpcs(settings.creatureMarkerLimit, hostileOnly, playerX, playerZ) : null;
         double verticalRange = settings.limitMobHeight ? (double)settings.mobVerticalRange : (double)0.0F;
         if (settings.showEntities) {
-            List<Ref<EntityStore>> nearby = nearby(store, playerPosition, radius, verticalRange, true);
-            if (nearby != null) {
-                for (Ref<EntityStore> npcRef : nearby) {
-                    try {
-                        if (!npcRef.isValid()) continue;
-                        TransformComponent transform = store.getComponent(npcRef, TransformComponent.getComponentType());
-                        if (transform == null) continue;
-                        Vector3d position = transform.getPosition();
-                        double dx = position.x() - playerX, dz = position.z() - playerZ;
-                        if (dx * dx + dz * dz > radiusSq || (verticalRange > 0 && Math.abs(position.y() - playerY) > verticalRange)
-                                || !creatures.wouldAccept(position.x(), position.z())) continue;
-                        NPCEntity npc = store.getComponent(npcRef, NPCEntity.getComponentType());
-                        if (npc == null) continue;
-                        creatures.add(npcRef, npc, position.x(), position.z());
-                    } catch (RuntimeException ignored) { }
-                }
-            } else {
+            // Exact radius and height checks on current positions; only the nearest few are kept.
+            for (Ref<EntityStore> npcRef : nearbyOrScan(store, playerPosition, radius, verticalRange, true)) {
                 try {
-                    store.forEachChunk(NPCEntity.getComponentType(), (chunk, commandBuffer) -> {
-                        for(int i = 0; i < chunk.size(); ++i) {
-                            try {
-                                TransformComponent transform = chunk.getComponent(i, TransformComponent.getComponentType());
-                                if (transform != null) {
-                                    Vector3d position = transform.getPosition();
-                                    double dx = position.x() - playerX;
-                                    double dz = position.z() - playerZ;
-                                    if (!(dx * dx + dz * dz > radiusSq) && (!(verticalRange > (double)0.0F) || !(Math.abs(position.y() - playerY) > verticalRange))) {
-                                        if (!creatures.wouldAccept(position.x(), position.z())) continue;
-                                        NPCEntity npc = chunk.getComponent(i, NPCEntity.getComponentType());
-                                        if (npc != null) {
-                                            Ref<EntityStore> npcRef = chunk.getReferenceTo(i);
-                                            creatures.add(npcRef, npc, position.x(), position.z());
-                                        }
-                                    }
-                                }
-                            } catch (Exception ignored) {
-                                // One unreadable entity must not end the chunk scan.
-                            }
-                        }
-
-                    });
-                } catch (Exception ignored) {
-                    // Store not readable this tick: no creature markers this scan.
-                }
+                    if (!npcRef.isValid()) continue;
+                    TransformComponent transform = store.getComponent(npcRef, TransformComponent.getComponentType());
+                    if (transform == null) continue;
+                    Vector3d position = transform.getPosition();
+                    double dx = position.x() - playerX, dz = position.z() - playerZ;
+                    if (dx * dx + dz * dz > radiusSq || (verticalRange > 0 && Math.abs(position.y() - playerY) > verticalRange)
+                            || !creatures.wouldAccept(position.x(), position.z())) continue;
+                    NPCEntity npc = store.getComponent(npcRef, NPCEntity.getComponentType());
+                    if (npc == null) continue;
+                    creatures.add(npcRef, npc, position.x(), position.z());
+                } catch (RuntimeException ignored) { }
             }
         }
 
@@ -176,29 +148,8 @@ public final class DynamicEntityScanner {
 
         PlayerVisibility visibility = settings.showOtherPlayers ? PlayerVisibility.forViewer(store, playerRef) : null;
         if (visibility != null) {
-            // Nearby player entities: spatial index first, chunk scan as the fallback.
-            List<Ref<EntityStore>> others = nearby(store, playerPosition, radius, 0, false);
-            if (others == null) {
-                List<Ref<EntityStore>> found = new ArrayList<>();
-                try {
-                    store.forEachChunk(Player.getComponentType(), (chunk, commandBuffer) -> {
-                        for (int i = 0; i < chunk.size(); ++i) {
-                            try {
-                                TransformComponent transform = chunk.getComponent(i, TransformComponent.getComponentType());
-                                if (transform == null) continue;
-                                Vector3d position = transform.getPosition();
-                                double dx = position.x() - playerX, dz = position.z() - playerZ;
-                                if (dx * dx + dz * dz <= radiusSq) found.add(chunk.getReferenceTo(i));
-                            } catch (Exception ignored) {
-                                // One unreadable entity must not end the chunk scan.
-                            }
-                        }
-                    });
-                } catch (Exception ignored) {
-                    // Store not readable this tick: no player markers this scan.
-                }
-                others = found;
-            }
+            // Nearby player entities (spatial index, or a chunk scan as the fallback).
+            List<Ref<EntityStore>> others = nearbyOrScan(store, playerPosition, radius, 0, false);
             addPlayers(markers, others, store, settings, visibility, playerIcons, playerX, playerZ, radiusSq);
         } else if (playerIcons != null) {
             playerIcons.clear(); // Players hidden: don't keep their entity references alive.
@@ -418,6 +369,39 @@ public final class DynamicEntityScanner {
         }
     }
 
+    /**
+     * NPC ({@code npc}) or player entities near {@code position}: from the spatial index when
+     * available, otherwise (startup or an older server) every such entity within the horizontal
+     * radius, found by a chunk scan. Callers apply the exact radius and height checks.
+     */
+    private static List<Ref<EntityStore>> nearbyOrScan(Store<EntityStore> store, Vector3d position,
+                                                       double radius, double height, boolean npc) {
+        List<Ref<EntityStore>> indexed = nearby(store, position, radius, height, npc);
+        if (indexed != null) return indexed;
+        List<Ref<EntityStore>> found = new ArrayList<>();
+        double x = position.x(), z = position.z(), radiusSq = radius * radius;
+        com.hypixel.hytale.component.query.Query<EntityStore> type =
+                npc ? NPCEntity.getComponentType() : Player.getComponentType();
+        try {
+            store.forEachChunk(type, (chunk, commandBuffer) -> {
+                for (int i = 0; i < chunk.size(); ++i) {
+                    try {
+                        TransformComponent transform = chunk.getComponent(i, TransformComponent.getComponentType());
+                        if (transform == null) continue;
+                        Vector3d at = transform.getPosition();
+                        double dx = at.x() - x, dz = at.z() - z;
+                        if (dx * dx + dz * dz <= radiusSq) found.add(chunk.getReferenceTo(i));
+                    } catch (Exception ignored) {
+                        // One unreadable entity must not end the chunk scan.
+                    }
+                }
+            });
+        } catch (Exception ignored) {
+            // Store not readable this tick: no markers of this kind this scan.
+        }
+        return found;
+    }
+
     /** Hytale rebuilds the spatial indices every world tick, so indexed positions are at most one tick old. */
     private static final double INDEX_SLACK = 8.0;
 
@@ -446,7 +430,7 @@ public final class DynamicEntityScanner {
         private static final Comparator<Candidate> NEAREST = Comparator.comparingDouble(Candidate::distanceSquared);
         private final PriorityQueue<Candidate> candidates;
         NearestNpcs(int limit, boolean hostileOnly, double x, double z) {
-            this.shown = limit == 32 || limit == 64 ? limit : 16;
+            this.shown = DynamicMinimapSetting.isCreatureLimit(limit) ? limit : DynamicMinimapSetting.CREATURE_LIMITS[0];
             this.limit = hostileOnly ? Math.min(this.shown * HOSTILE_POOL_FACTOR, HOSTILE_POOL_MAX) : this.shown;
             this.x = x;
             this.z = z;
@@ -497,8 +481,7 @@ public final class DynamicEntityScanner {
          */
         static final long HIDDEN_TTL_MS = 2000L;
         private record Entry(DynamicMinimapColours.Key key, int engagement, long expiresAt) { }
-        private java.util.Map<Ref<EntityStore>, Entry> current = new java.util.HashMap<>();
-        private java.util.Map<Ref<EntityStore>, Entry> next = new java.util.HashMap<>();
+        private final DapperMapUtil.ScanCache<Ref<EntityStore>, Entry> entries = new DapperMapUtil.ScanCache<>();
 
         DynamicMinimapColours.Key classify(Ref<EntityStore> npcRef, NPCEntity npc, Ref<EntityStore> playerRef,
                                            ComponentAccessor<EntityStore> accessor, long now, long passiveTtl,
@@ -510,11 +493,9 @@ public final class DynamicEntityScanner {
             boolean executingAttack = raw.executingAttack;
             // The viewer-dependent "engaging ME" comparison stays per viewer.
             int engagement = engagement(playerRef, lockedTarget, executingAttack, raw.motionTarget);
-            Entry cached = this.current.get(npcRef);
+            Entry cached = this.entries.previous(npcRef);
             if (cached == null || cached.engagement() != engagement || now >= cached.expiresAt()) {
-                NpcThreatProfile profile;
-                try { profile = NpcThreatClassifier.profileFor(npc.getRoleIndex()); }
-                catch (RuntimeException | LinkageError ignored) { profile = NpcThreatProfile.UNKNOWN; }
+                NpcThreatProfile profile = profileOf(npc);
                 DynamicMinimapColours.Key key = colourFor(npcRef, npc, playerRef, accessor, lockedTarget,
                         executingAttack, profile);
                 // Provisional result: a creature's first check (its attitude towards the player
@@ -525,29 +506,18 @@ public final class DynamicEntityScanner {
                 long ttl = provisional ? 0L : key == HOSTILE || key == HOSTILE_ACTIVE ? TTL_MS : passiveTtl;
                 cached = new Entry(key, engagement, now + ttl);
             }
-            this.next.put(npcRef, cached);
+            this.entries.keep(npcRef, cached);
             return cached.key();
         }
 
         /** E3: keeps a pool member's entry for the next scan without classifying it. */
-        void carry(Ref<EntityStore> npcRef) {
-            Entry entry = this.current.get(npcRef);
-            if (entry != null) this.next.put(npcRef, entry);
-        }
+        void carry(Ref<EntityStore> npcRef) { this.entries.carry(npcRef); }
 
         /** Keeps only creatures seen in the scan just finished. */
-        void endScan() {
-            var swap = this.current;
-            this.current = this.next;
-            this.next = swap;
-            this.next.clear();
-        }
+        void endScan() { this.entries.endScan(); }
 
         /** Forgets every creature (creatures hidden, or the player changed world). */
-        void clear() {
-            this.current.clear();
-            this.next.clear();
-        }
+        void clear() { this.entries.clear(); }
 
         /** Bit 0: locked onto player; bit 1: executing an attack; bit 2: moving at player. */
         private static int engagement(Ref<EntityStore> playerRef, Ref<EntityStore> lockedTarget,
@@ -659,11 +629,14 @@ public final class DynamicEntityScanner {
     /** Full threat classification, reading the creature's locked target and attack state itself. */
     private static DynamicMinimapColours.Key colourFor(Ref<EntityStore> npcRef, NPCEntity npc,
                                                        Ref<EntityStore> playerRef, ComponentAccessor<EntityStore> commandBuffer) {
-        NpcThreatProfile profile;
-        try { profile = NpcThreatClassifier.profileFor(npc.getRoleIndex()); }
-        catch (RuntimeException | LinkageError ignored) { profile = NpcThreatProfile.UNKNOWN; }
         return colourFor(npcRef, npc, playerRef, commandBuffer,
-                getLockedTarget(npcRef, commandBuffer), isExecutingAttack(npcRef, commandBuffer), profile);
+                getLockedTarget(npcRef, commandBuffer), isExecutingAttack(npcRef, commandBuffer), profileOf(npc));
+    }
+
+    /** The creature's role threat profile (UNKNOWN when it can't be read). */
+    private static NpcThreatProfile profileOf(NPCEntity npc) {
+        try { return NpcThreatClassifier.profileFor(npc.getRoleIndex()); }
+        catch (RuntimeException | LinkageError ignored) { return NpcThreatProfile.UNKNOWN; }
     }
 
     /** True while the creature is executing an attack (false when unknown). */
@@ -837,8 +810,7 @@ public final class DynamicEntityScanner {
                 tree = new Tree(new WeakReference<>(root), capability, List.copyOf(attacks));
                 if (roleIndex >= 0) {
                     if (capability == Capability.NO_OFFENSE) {
-                        if (PASSIVE_ROLES.size() >= 4096) PASSIVE_ROLES.clear(); // Bounded.
-                        PASSIVE_ROLES.put(roleIndex, generation);
+                        DapperMapUtil.putBounded(PASSIVE_ROLES, roleIndex, generation, 4096);
                     } else PASSIVE_ROLES.remove(roleIndex);
                 }
             }
@@ -1097,12 +1069,8 @@ public final class DynamicEntityScanner {
                 case "Template_Predator" -> {
                     // Most predator variants (zombies, ghoul, werewolf, raptor, ...) don't set the
                     // flag themselves: fall back to the template's parameter default (false in 0.7.1).
-                    JsonElement raw = values.get("FleeIfNotThreatened");
-                    if (raw == null) raw = parameters.get("FleeIfNotThreatened");
-                    JsonElement flee = evaluate(raw, parameters, new HashSet<>());
-                    if (flee == null || !flee.isJsonPrimitive() || !flee.getAsJsonPrimitive().isBoolean())
-                        yield UNKNOWN;
-                    yield new NpcThreatProfile(flee.getAsBoolean() ? Kind.DEFENSIVE : Kind.AGGRESSIVE, true);
+                    Boolean flee = fleeIfNotThreatened(values, parameters);
+                    yield flee == null ? UNKNOWN : new NpcThreatProfile(flee ? Kind.DEFENSIVE : Kind.AGGRESSIVE, true);
                 }
                 case "Template_Intelligent", "Template_Flying_Aggressive", "Template_Swimming_Aggressive",
                      "Template_Animal_Neutral", "Template_Livestock" ->
@@ -1143,11 +1111,8 @@ public final class DynamicEntityScanner {
             if (!"Friendly".equals(dispositionName) && !"Revered".equals(dispositionName)
                     && offensive.contains("Combat") && playerFleeDecision(instructions, 0)
                     && hasChaseDecision(instructions, 0)) {
-                JsonElement raw = values.get("FleeIfNotThreatened");
-                if (raw == null) raw = parameters.get("FleeIfNotThreatened");
-                JsonElement flee = evaluate(raw, parameters, new HashSet<>());
-                if (flee != null && flee.isJsonPrimitive() && flee.getAsJsonPrimitive().isBoolean())
-                    kind = flee.getAsBoolean() ? Kind.DEFENSIVE : Kind.AGGRESSIVE;
+                Boolean flee = fleeIfNotThreatened(values, parameters);
+                if (flee != null) kind = flee ? Kind.DEFENSIVE : Kind.AGGRESSIVE;
             }
             return new NpcThreatProfile(kind, true, Set.copyOf(offensive));
         }
@@ -1171,73 +1136,47 @@ public final class DynamicEntityScanner {
             }
         }
 
+        // Role-tree searches (depth-limited to 64, through DapperMapUtil.jsonAny). The decision
+        // searches and hasType skip disabled nodes; the group and state-action searches don't.
+
+        /** An enabled "FleeIfNotThreatened" branch whose sensor includes players and whose actions enter Flee. */
         private static boolean playerFleeDecision(JsonElement element, int depth) {
-            if (element == null || depth > 64) return false;
-            if (element.isJsonArray()) {
-                for (JsonElement child : element.getAsJsonArray()) if (playerFleeDecision(child, depth + 1)) return true;
-            } else if (element.isJsonObject()) {
-                JsonObject node = element.getAsJsonObject();
-                if (jsonDisabled(node)) return false;
+            return jsonAny(element, depth, 64, true, (node, at) -> {
                 JsonObject enabled = jsonObject(node.get("Enabled"));
-                if (enabled != null && "FleeIfNotThreatened".equals(jsonString(enabled.get("Compute")))
-                        && hasPlayerGroup(node.get("Sensor"), depth + 1) && hasStateAction(node.get("Actions"), "Flee", depth + 1)) return true;
-                for (var entry : node.entrySet()) if (playerFleeDecision(entry.getValue(), depth + 1)) return true;
-            }
-            return false;
+                return enabled != null && "FleeIfNotThreatened".equals(jsonString(enabled.get("Compute")))
+                        && hasPlayerGroup(node.get("Sensor"), at + 1) && hasStateAction(node.get("Actions"), "Flee", at + 1);
+            });
         }
 
+        /** A "!FleeIfNotThreatened" branch with a Target sensor whose actions send Combat.Message. */
         private static boolean hasChaseDecision(JsonElement element, int depth) {
-            if (element == null || depth > 64) return false;
-            if (element.isJsonArray()) {
-                for (JsonElement child : element.getAsJsonArray()) if (hasChaseDecision(child, depth + 1)) return true;
-            } else if (element.isJsonObject()) {
-                JsonObject node = element.getAsJsonObject();
-                if (jsonDisabled(node)) return false;
+            return jsonAny(element, depth, 64, true, (node, at) -> {
                 JsonObject enabled = jsonObject(node.get("Enabled"));
-                if (enabled != null && "!FleeIfNotThreatened".equals(jsonString(enabled.get("Compute")))
-                        && hasType(node.get("Sensor"), "Target", depth + 1)
-                        && hasStateAction(node.get("Actions"), "Combat.Message", depth + 1)) return true;
-                for (var entry : node.entrySet()) if (hasChaseDecision(entry.getValue(), depth + 1)) return true;
-            }
-            return false;
+                return enabled != null && "!FleeIfNotThreatened".equals(jsonString(enabled.get("Compute")))
+                        && hasType(node.get("Sensor"), "Target", at + 1)
+                        && hasStateAction(node.get("Actions"), "Combat.Message", at + 1);
+            });
         }
 
+        /** An NPCGroup node whose IncludeGroups lists "Player". */
         private static boolean hasPlayerGroup(JsonElement element, int depth) {
-            if (element == null || depth > 64) return false;
-            if (element.isJsonArray()) {
-                for (JsonElement child : element.getAsJsonArray()) if (hasPlayerGroup(child, depth + 1)) return true;
-            } else if (element.isJsonObject()) {
-                JsonObject node = element.getAsJsonObject();
-                if ("NPCGroup".equals(jsonString(node.get("Type"))) && node.has("IncludeGroups") && node.get("IncludeGroups").isJsonArray())
-                    for (JsonElement group : node.getAsJsonArray("IncludeGroups")) if ("Player".equals(jsonString(group))) return true;
-                for (var entry : node.entrySet()) if (hasPlayerGroup(entry.getValue(), depth + 1)) return true;
-            }
-            return false;
+            return jsonAny(element, depth, 64, false, (node, at) -> {
+                if (!"NPCGroup".equals(jsonString(node.get("Type"))) || !node.has("IncludeGroups")
+                        || !node.get("IncludeGroups").isJsonArray()) return false;
+                for (JsonElement group : node.getAsJsonArray("IncludeGroups")) if ("Player".equals(jsonString(group))) return true;
+                return false;
+            });
         }
 
+        /** A State action that enters {@code state}. */
         private static boolean hasStateAction(JsonElement element, String state, int depth) {
-            if (element == null || depth > 64) return false;
-            if (element.isJsonArray()) {
-                for (JsonElement child : element.getAsJsonArray()) if (hasStateAction(child, state, depth + 1)) return true;
-            } else if (element.isJsonObject()) {
-                JsonObject node = element.getAsJsonObject();
-                if ("State".equals(jsonString(node.get("Type"))) && state.equals(jsonString(node.get("State")))) return true;
-                for (var entry : node.entrySet()) if (hasStateAction(entry.getValue(), state, depth + 1)) return true;
-            }
-            return false;
+            return jsonAny(element, depth, 64, false, (node, at) ->
+                    "State".equals(jsonString(node.get("Type"))) && state.equals(jsonString(node.get("State"))));
         }
 
+        /** An enabled node of the given "Type". */
         private static boolean hasType(JsonElement element, String type, int depth) {
-            if (element == null || depth > 64) return false;
-            if (element.isJsonArray()) {
-                for (JsonElement child : element.getAsJsonArray()) if (hasType(child, type, depth + 1)) return true;
-            } else if (element.isJsonObject()) {
-                JsonObject node = element.getAsJsonObject();
-                if (jsonDisabled(node)) return false;
-                if (type.equals(jsonString(node.get("Type")))) return true;
-                for (var entry : node.entrySet()) if (hasType(entry.getValue(), type, depth + 1)) return true;
-            }
-            return false;
+            return jsonAny(element, depth, 64, true, (node, at) -> type.equals(jsonString(node.get("Type"))));
         }
 
         boolean disengagingState(String state) {
@@ -1246,6 +1185,17 @@ public final class DynamicEntityScanner {
                     || state.equals("Panic") || state.startsWith("Panic.")
                     || state.equals("ReturnHome") || state.startsWith("ReturnHome.")
                     || state.equals("Combat.Maybe");
+        }
+
+        /**
+         * The role's resolved FleeIfNotThreatened flag (its own value, else the template's parameter
+         * default), or null when it isn't a plain boolean.
+         */
+        private static Boolean fleeIfNotThreatened(Map<String, JsonElement> values, Map<String, JsonElement> parameters) {
+            JsonElement raw = values.get("FleeIfNotThreatened");
+            if (raw == null) raw = parameters.get("FleeIfNotThreatened");
+            JsonElement flee = evaluate(raw, parameters, new HashSet<>());
+            return flee != null && flee.isJsonPrimitive() && flee.getAsJsonPrimitive().isBoolean() ? flee.getAsBoolean() : null;
         }
 
         private static void collectParameters(JsonObject json, Map<String, JsonElement> result) {
@@ -1392,15 +1342,9 @@ public final class DynamicEntityScanner {
         private static boolean containsType(JsonElement tree, String type) {
             return any(tree, node -> type.equals(jsonString(node.get("Type"))));
         }
+        /** Any node in an expanded tree (already bounded by expand's budget, so no depth limit). */
         private static boolean any(JsonElement element, java.util.function.Predicate<JsonObject> predicate) {
-            if (element == null || element.isJsonNull()) return false;
-            if (element.isJsonArray()) { for (JsonElement child : element.getAsJsonArray()) if (any(child, predicate)) return true; }
-            else if (element.isJsonObject()) {
-                JsonObject node = element.getAsJsonObject();
-                if (predicate.test(node)) return true;
-                for (var entry : node.entrySet()) if (any(entry.getValue(), predicate)) return true;
-            }
-            return false;
+            return jsonAny(element, 0, Integer.MAX_VALUE, false, (node, at) -> predicate.test(node));
         }
     }
 }

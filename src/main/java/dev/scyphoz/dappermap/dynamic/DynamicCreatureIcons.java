@@ -19,16 +19,13 @@ import java.awt.FontMetrics;
 import java.awt.Graphics2D;
 import java.awt.RenderingHints;
 import java.awt.image.BufferedImage;
-import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
-import javax.imageio.ImageIO;
 import dev.scyphoz.dappermap.util.DapperMapUtil;
 import static dev.scyphoz.dappermap.util.DapperMapUtil.jsonBool;
 import static dev.scyphoz.dappermap.util.DapperMapUtil.jsonNumber;
@@ -104,17 +101,11 @@ public final class DynamicCreatureIcons {
     /** A creature's uncoloured icon: 2x canvas PNG, and whether it is a face "sticker" or an initials disc. */
     private record Base(byte[] png, boolean sticker) { }
     /** Icon key -> uncoloured base (shared by all players). Bounded: ~10-15 KB each. */
-    private static final Map<String, Base> BASES = boundedMap(256);
+    private static final Map<String, Base> BASES = DapperMapUtil.lruMap(256, true);
     /** Icon key + edge colour -> finished, hashed PNG (shared; per-player paths via withPath). ~3-6 KB each. */
-    private static final Map<String, DynamicAssetPublisher.PreparedAsset> ICONS = boundedMap(512);
+    private static final Map<String, DynamicAssetPublisher.PreparedAsset> ICONS = DapperMapUtil.lruMap(512, true);
     /** Per-key locks while a base icon is built, so players meeting a new creature type together render it once. */
     private static final ConcurrentHashMap<String, Object> BUILDING = new ConcurrentHashMap<>();
-
-    private static <V> Map<String, V> boundedMap(int limit) {
-        return java.util.Collections.synchronizedMap(new LinkedHashMap<>(64, 0.75F, true) {
-            @Override protected boolean removeEldestEntry(Map.Entry<String, V> eldest) { return size() > limit; }
-        });
-    }
 
     private DynamicCreatureIcons() { }
 
@@ -125,8 +116,7 @@ public final class DynamicCreatureIcons {
     public static final class KeyCache {
         /** {@code generation}: the SOURCES generation the key was registered in (see {@link #sourcesGeneration}). */
         private record Entry(Model model, String key, int generation) { }
-        private Map<Ref<EntityStore>, Entry> current = new HashMap<>();
-        private Map<Ref<EntityStore>, Entry> next = new HashMap<>();
+        private final DapperMapUtil.ScanCache<Ref<EntityStore>, Entry> entries = new DapperMapUtil.ScanCache<>();
 
         String key(Ref<EntityStore> ref, NPCEntity npc, ComponentAccessor<EntityStore> accessor) {
             Model model = null;
@@ -134,34 +124,23 @@ public final class DynamicCreatureIcons {
                 ModelComponent component = accessor.getComponent(ref, ModelComponent.getComponentType());
                 model = component == null ? null : component.getModel();
             } catch (RuntimeException ignored) { }
-            Entry entry = this.current.get(ref);
+            Entry entry = this.entries.previous(ref);
             int generation = sourcesGeneration.get();
             // Re-register after SOURCES was cleared, so a creature that stayed in view keeps a resolvable key.
             if (entry == null || entry.model() != model || entry.generation() != generation)
                 entry = new Entry(model, register(npc.getRoleName(), model), generation);
-            this.next.put(ref, entry);
+            this.entries.keep(ref, entry);
             return entry.key();
         }
 
         /** Keeps a pool member's key for the next scan without reading its model (hostile-only pool). */
-        void carry(Ref<EntityStore> ref) {
-            Entry entry = this.current.get(ref);
-            if (entry != null) this.next.put(ref, entry);
-        }
+        void carry(Ref<EntityStore> ref) { this.entries.carry(ref); }
 
         /** Keeps only creatures seen in the scan just finished. */
-        void endScan() {
-            var swap = this.current;
-            this.current = this.next;
-            this.next = swap;
-            this.next.clear();
-        }
+        void endScan() { this.entries.endScan(); }
 
         /** Forgets every creature (creatures hidden, or the player changed world). */
-        void clear() {
-            this.current.clear();
-            this.next.clear();
-        }
+        void clear() { this.entries.clear(); }
     }
 
     // ---------------------------------------------------------------------------------
@@ -214,8 +193,7 @@ public final class DynamicCreatureIcons {
         static final long HELMET_RECHECK_MS = 750L;
         /** {@code withHelmet}: the setting the helmet was resolved for; {@code helmetAt}: when it was read. */
         private record Entry(Object skin, String helmet, boolean withHelmet, long helmetAt, String key, int generation) { }
-        private Map<Ref<EntityStore>, Entry> current = new HashMap<>();
-        private Map<Ref<EntityStore>, Entry> next = new HashMap<>();
+        private final DapperMapUtil.ScanCache<Ref<EntityStore>, Entry> entries = new DapperMapUtil.ScanCache<>();
 
         /**
          * Icon key for another player. {@code withHelmet}: the viewer's "Player Icons: Helmet"
@@ -228,7 +206,7 @@ public final class DynamicCreatureIcons {
                         com.hypixel.hytale.server.core.modules.entity.player.PlayerSkinComponent.getComponentType());
                 skin = component == null ? null : component.getPlayerSkin();
             } catch (RuntimeException | LinkageError ignored) { }
-            Entry entry = this.current.get(ref);
+            Entry entry = this.entries.previous(ref);
             int generation = sourcesGeneration.get();
             String helmet = null;
             long helmetAt = 0L;
@@ -248,23 +226,15 @@ public final class DynamicCreatureIcons {
                 entry = new Entry(skin, helmet, withHelmet, helmetAt, registerPlayer(username, skin, helmet), generation);
             else if (entry.helmetAt() != helmetAt)
                 entry = new Entry(skin, helmet, withHelmet, helmetAt, entry.key(), generation); // Same key, fresh read time.
-            this.next.put(ref, entry);
+            this.entries.keep(ref, entry);
             return entry.key();
         }
 
         /** Keeps only players seen in the scan just finished. */
-        void endScan() {
-            var swap = this.current;
-            this.current = this.next;
-            this.next = swap;
-            this.next.clear();
-        }
+        void endScan() { this.entries.endScan(); }
 
         /** Forgets every player (players hidden, or the viewer changed world). */
-        void clear() {
-            this.current.clear();
-            this.next.clear();
-        }
+        void clear() { this.entries.clear(); }
     }
 
     /**
@@ -317,12 +287,7 @@ public final class DynamicCreatureIcons {
      * World thread; called only when a player's skin or helmet changes.
      */
     static String registerPlayer(String username, com.hypixel.hytale.protocol.PlayerSkin skin, String helmetItemId) {
-        com.hypixel.hytale.server.core.cosmetics.CosmeticRegistry registry = null;
-        try {
-            var module = com.hypixel.hytale.server.core.cosmetics.CosmeticsModule.get();
-            registry = module == null ? null : module.getRegistry();
-        } catch (RuntimeException | LinkageError ignored) { }
-        return registerPlayer(registry, username, skin, helmetItemId == null ? null : helmetAttachment(helmetItemId));
+        return registerPlayer(cosmeticRegistry(), username, skin, helmetItemId == null ? null : helmetAttachment(helmetItemId));
     }
 
     /** A worn helmet: its model and texture, and the skin cosmetics it covers. */
@@ -431,14 +396,8 @@ public final class DynamicCreatureIcons {
                 ? variant.getGreyscaleTexture() : part.getGreyscaleTexture();
         // Gradient-tinted part (skin tone, hair colour, ...).
         if (part.getGradientSet() != null && greyscale != null) {
-            var set = registry.getGradientSets().get(part.getGradientSet());
-            var gradients = set == null ? null : set.getGradients();
-            if (gradients != null && !gradients.isEmpty()) {
-                var gradient = id.textureId != null ? gradients.get(id.textureId) : null;
-                if (gradient == null && skinTone != null) gradient = gradients.get(skinTone);
-                if (gradient == null) gradient = gradients.values().iterator().next();
-                return new Attachment(model, TextureRef.of(greyscale, gradient.getTexture(), baseColour(gradient.getBaseColor())));
-            }
+            String tinted = tintedTexture(registry, greyscale, part.getGradientSet(), id.textureId, skinTone);
+            if (tinted != null) return new Attachment(model, tinted);
         }
         // Fixed textures, chosen by id.
         var textures = variant != null && variant.getTextures() != null ? variant.getTextures() : part.getTextures();
@@ -507,23 +466,33 @@ public final class DynamicCreatureIcons {
                                   String texture, String gradientSet, String gradientId) {
         if (texture == null || gradientSet == null || registry == null) return texture;
         try {
-            var set = registry.getGradientSets().get(gradientSet);
-            var gradients = set == null ? null : set.getGradients();
-            if (gradients == null || gradients.isEmpty()) return texture;
-            var gradient = gradientId != null ? gradients.get(gradientId) : null;
-            if (gradient == null) gradient = gradients.values().iterator().next();
-            return TextureRef.of(texture, gradient.getTexture(), baseColour(gradient.getBaseColor()));
+            String tinted = tintedTexture(registry, texture, gradientSet, gradientId, null);
+            return tinted != null ? tinted : texture;
         } catch (RuntimeException unreadable) {
             return texture;
         }
     }
 
+    /**
+     * {@code texture} tinted by a gradient from {@code gradientSet}: the gradient named
+     * {@code gradientId}, else {@code fallbackId}, else the set's first. Null when the set has
+     * no gradients. Shared by skin parts and model attachments.
+     */
+    private static String tintedTexture(com.hypixel.hytale.server.core.cosmetics.CosmeticRegistry registry,
+                                        String texture, String gradientSet, String gradientId, String fallbackId) {
+        var set = registry.getGradientSets().get(gradientSet);
+        var gradients = set == null ? null : set.getGradients();
+        if (gradients == null || gradients.isEmpty()) return null;
+        var gradient = gradientId != null ? gradients.get(gradientId) : null;
+        if (gradient == null && fallbackId != null) gradient = gradients.get(fallbackId);
+        if (gradient == null) gradient = gradients.values().iterator().next();
+        return TextureRef.of(texture, gradient.getTexture(), baseColour(gradient.getBaseColor()));
+    }
+
     /** Stores a source under its key (64-bit FNV-1a of its description) and returns the key. */
     private static String remember(Source source) {
         // 64-bit FNV-1a of the description: short, stable and safe in an asset path.
-        long hash = 0xcbf29ce484222325L;
-        for (char c : source.toString().toCharArray()) hash = (hash ^ c) * 0x100000001b3L;
-        String key = Long.toHexString(hash);
+        String key = Long.toHexString(DapperMapUtil.fnv64(DapperMapUtil.FNV64_OFFSET, source.toString()));
         if (SOURCES.size() >= 4096 && !SOURCES.containsKey(key)) {
             SOURCES.clear(); // Bounded; keys re-register (KeyCache sees the new generation).
             sourcesGeneration.incrementAndGet(); // Atomic: world threads of different worlds may clear at once.
@@ -533,16 +502,16 @@ public final class DynamicCreatureIcons {
     }
 
     /**
-     * Per-player asset for an icon key with its threat-colour edge, building the shared base
-     * icon on first use and each colour variant only when that colour is needed. Render pool only.
-     */
-    /**
      * Returned by prepareAsset while another render thread is building this creature's base
      * icon. Not a failure: callers retry later without a back-off. Never sent to a client.
      */
     public static final DynamicAssetPublisher.PreparedAsset BUSY =
             DynamicAssetPublisher.prepare("UI/DapperMap/creature-busy.png", new byte[]{0});
 
+    /**
+     * Per-player asset for an icon key with its threat-colour edge, building the shared base
+     * icon on first use and each colour variant only when that colour is needed. Render pool only.
+     */
     public static DynamicAssetPublisher.PreparedAsset prepareAsset(String key, String playerSlug, int rgb) {
         return prepareAsset(key, playerSlug, rgb, PLAYER_ICON_PREFIX);
     }
@@ -666,7 +635,7 @@ public final class DynamicCreatureIcons {
      * asset pack update changes any of them. Render pool only.
      */
     static String contentHash(Source source) {
-        long hash = 0xcbf29ce484222325L;
+        long hash = DapperMapUtil.FNV64_OFFSET;
         hash = fnv(hash, DapperMapUtil.commonAssetHash(commonName(source.model())));
         hash = textureHash(hash, source.texture());
         for (Attachment part : source.attachments()) {
@@ -691,8 +660,7 @@ public final class DynamicCreatureIcons {
     }
 
     private static long fnv(long hash, String text) {
-        String value = text == null ? "-" : text;
-        for (int i = 0; i < value.length(); i++) hash = (hash ^ value.charAt(i)) * 0x100000001b3L;
+        hash = DapperMapUtil.fnv64(hash, text == null ? "-" : text);
         return (hash ^ '|') * 0x100000001b3L; // Separator: "ab"+"c" never equals "a"+"bc".
     }
 
@@ -811,34 +779,19 @@ public final class DynamicCreatureIcons {
         return base(face, initials(source));
     }
 
-    /** Finished icon for one edge colour (used by tests and prepareAsset). */
-    static byte[] renderIcon(Source source, int rgb) {
-        Base base = renderBase(source);
-        return base == null ? null : colourise(base, rgb);
-    }
-
-    /** Creature types already reported as falling back from a model face (logged once each). */
-    private static final java.util.Set<String> REPORTED = ConcurrentHashMap.newKeySet();
-    private static final com.hypixel.hytale.logger.HytaleLogger LOGGER =
-            com.hypixel.hytale.logger.HytaleLogger.get("DapperMap");
-
     /** Logs once per creature type when no model face could be drawn (helps check mod packs). */
     private static void reportFallback(Source source, boolean portrait) {
         if (isPlayer(source)) {
             // One line per server run for players: their skins all share the same parts.
-            if (REPORTED.size() < 256 && REPORTED.add(PLAYER_ROLE_PREFIX)) {
-                LOGGER.at(java.util.logging.Level.INFO).log(
-                        "DapperMap: could not draw a head icon for player '%s' (model '%s', %d skin parts); using initials.",
-                        source.role().substring(PLAYER_ROLE_PREFIX.length()), source.model(), source.attachments().size());
-            }
+            DapperMapUtil.logInfoOnce("player-head",
+                    "DapperMap: could not draw a head icon for player '%s' (model '%s', %d skin parts); using initials.",
+                    source.role().substring(PLAYER_ROLE_PREFIX.length()), source.model(), source.attachments().size());
             return;
         }
         String name = source.role() != null ? source.role() : String.valueOf(source.modelId());
-        if (REPORTED.size() < 256 && REPORTED.add(name)) {
-            LOGGER.at(java.util.logging.Level.INFO).log(
-                    "DapperMap: no model face for creature '%s' (model '%s'); using its %s icon.",
-                    name, source.model(), portrait ? "portrait" : "initials");
-        }
+        DapperMapUtil.logInfoOnce("creature:" + name,
+                "DapperMap: no model face for creature '%s' (model '%s'); using its %s icon.",
+                name, source.model(), portrait ? "portrait" : "initials");
     }
 
     // ---------------------------------------------------------------------------------
@@ -891,12 +844,7 @@ public final class DynamicCreatureIcons {
 
     /** Adds the threat-colour edge (sticker) or ring (initials disc), then downscales to ICON_PX. */
     static byte[] colourise(Base base, int rgb) {
-        BufferedImage canvas;
-        try {
-            canvas = ImageIO.read(new ByteArrayInputStream(base.png()));
-        } catch (Exception ignored) {
-            return null;
-        }
+        BufferedImage canvas = DapperMapUtil.decodeImage(base.png());
         if (canvas == null) return null;
         if (canvas.getType() != BufferedImage.TYPE_INT_ARGB) {
             BufferedImage converted = new BufferedImage(canvas.getWidth(), canvas.getHeight(), BufferedImage.TYPE_INT_ARGB);
@@ -924,7 +872,7 @@ public final class DynamicCreatureIcons {
 
     /** Crops to the visible pixels and centres them on a transparent square. */
     private static BufferedImage trimToSquare(BufferedImage image) {
-        int[] box = opaqueBounds(image);
+        int[] box = DapperMapUtil.opaqueBounds(image, 16);
         if (box == null) return null;
         int width = box[2] - box[0], height = box[3] - box[1], side = Math.max(width, height);
         BufferedImage square = new BufferedImage(side, side, BufferedImage.TYPE_INT_ARGB);
@@ -1034,33 +982,19 @@ public final class DynamicCreatureIcons {
             try {
                 ModelAsset asset = ModelAsset.getAssetMap().getAsset(source.modelId());
                 String icon = asset == null ? null : asset.getIcon();
-                if (icon != null && !icon.contains("..")) paths.add(icon.replace('\\', '/'));
+                if (icon != null) paths.add(icon); // readImage cleans the path (and rejects "..").
             } catch (RuntimeException ignored) { }
         }
         for (String path : paths) {
             BufferedImage image = readImage(path);
             if (image == null) continue;
-            int[] box = opaqueBounds(image);
+            int[] box = DapperMapUtil.opaqueBounds(image, 16);
             if (box == null) continue;
             int width = box[2] - box[0], height = box[3] - box[1];
             int side = Math.min(width, height);
             return image.getSubimage(box[0], box[1], side, side);
         }
         return null;
-    }
-
-    /** {minX, minY, maxX+1, maxY+1} of visible pixels, or null when fully transparent. */
-    private static int[] opaqueBounds(BufferedImage image) {
-        int minX = image.getWidth(), minY = image.getHeight(), maxX = -1, maxY = -1;
-        for (int y = 0; y < image.getHeight(); y++)
-            for (int x = 0; x < image.getWidth(); x++)
-                if ((image.getRGB(x, y) >>> 24) > 16) {
-                    if (x < minX) minX = x;
-                    if (y < minY) minY = y;
-                    if (x > maxX) maxX = x;
-                    if (y > maxY) maxY = y;
-                }
-        return maxX < 0 ? null : new int[]{minX, minY, maxX + 1, maxY + 1};
     }
 
     // ---------------------------------------------------------------------------------
@@ -1117,13 +1051,13 @@ public final class DynamicCreatureIcons {
             BufferedImage side = null;
             if (!hasLegs(nodes, 0)) {
                 side = render(source, null, nodes, texture, SIDE_YAW, SIDE_PITCH);
-                int[] box = side == null ? null : opaqueBounds(side);
+                int[] box = side == null ? null : DapperMapUtil.opaqueBounds(side, 16);
                 if (box != null && box[2] - box[0] >= LONG_BODY * (box[3] - box[1])) return side;
             }
             JsonObject head = findHead(nodes, 0);
             if (head != null) {
                 BufferedImage face = render(source, head, null, texture, HEAD_YAW, HEAD_PITCH);
-                int[] box = face == null ? null : opaqueBounds(face);
+                int[] box = face == null ? null : DapperMapUtil.opaqueBounds(face, 16);
                 if (box != null && Math.min(box[2] - box[0], box[3] - box[1])
                         >= THIN_HEAD * Math.max(box[2] - box[0], box[3] - box[1])) return face;
             }
@@ -1557,24 +1491,17 @@ public final class DynamicCreatureIcons {
 
     /** Common asset name for a model/texture path, or null for none or an unsafe path. */
     static String commonName(String path) {
-        if (path == null || path.isBlank() || path.contains("..")) return null;
+        String name = DapperMapUtil.cleanAssetPath(path);
         // Common asset names are relative to the Common folder; tolerate a leading "Common/".
-        String name = path.replace('\\', '/');
-        while (name.startsWith("/")) name = name.substring(1);
-        if (name.startsWith("Common/")) name = name.substring("Common/".length());
+        if (name != null && name.startsWith("Common/")) name = name.substring("Common/".length());
         return name;
     }
 
     static BufferedImage readImage(String path) {
         byte[] bytes = commonBytes(path);
         if (bytes == null) return null;
-        try {
-            BufferedImage image = ImageIO.read(new ByteArrayInputStream(bytes));
-            if (image == null || image.getWidth() > 4096 || image.getHeight() > 4096) return null;
-            return image;
-        } catch (Exception ignored) {
-            return null;
-        }
+        BufferedImage image = DapperMapUtil.decodeImage(bytes);
+        return image == null || image.getWidth() > 4096 || image.getHeight() > 4096 ? null : image;
     }
 
     /** Area-averaged downscale via successive halving, then a final bicubic step. */

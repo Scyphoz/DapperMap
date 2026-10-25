@@ -126,13 +126,6 @@ public final class DynamicMinimapSession {
         return true;
     }
 
-    /** The supplied server wraps stopped-world rejection in SkipSentryException. */
-    public static boolean isStoppedWorldException(RuntimeException failure) {
-        return failure instanceof IllegalThreadStateException
-                || (failure instanceof com.hypixel.hytale.logger.sentry.SkipSentryException
-                && failure.getCause() instanceof IllegalThreadStateException);
-    }
-
     private World currentWorld() {
         UUID worldUuid = this.playerRef.getWorldUuid();
         return worldUuid == null ? null : Universe.get().getWorld(worldUuid);
@@ -202,7 +195,7 @@ public final class DynamicMinimapSession {
             }));
         } catch (RuntimeException failure) {
             next.set(null);
-            if (!isStoppedWorldException(failure)) throw failure;
+            if (!DapperMapUtil.isStoppedWorld(failure)) throw failure;
         }
     }
 
@@ -237,20 +230,12 @@ public final class DynamicMinimapSession {
     private int builtSize = -1;
     private int builtShape = -1;
     private int builtZoom = -1;
-    private int builtHudPositionX = -1;
-    private int builtHudPositionY = -1;
-    private boolean builtInfoPanelEnabled;
-    private int builtInfoPanelPosition = -1;
-    private int builtInfoPanelTextAlignment = -1;
-    private int builtInterfaceScale = -1;
+    // Layout values (scale, info panel, position, alignment, info rows) need no copy here: the
+    // HUD setters return at once when nothing changed, so the tick calls them directly.
     private int builtTextureResolution = -1;
     private int builtRotationMode = -1;
     /** Compass ring markings (DynamicMinimapSetting.compassMarkings bits) the HUD was last given. */
     private int builtCompassMarkings = -1;
-    private boolean builtShowCoordinates;
-    private boolean builtShowCompass;
-    private boolean builtShowClock;
-    private boolean builtShowBiome;
     /** Creature marker style the cached markers were scanned with (dots / icons). */
     private boolean builtCreatureIcons;
     private boolean builtHostileOnly;
@@ -297,7 +282,8 @@ public final class DynamicMinimapSession {
     private final MarkerOrder markerOrder = new MarkerOrder();
     private record MarkerAssetKey(Style style, String source, int rgb) {}
     /** Icons sent to this client: least recently used dropped beyond 256 (clearing all made every marker blink). */
-    private final java.util.Map<MarkerAssetKey, String> markerAssets = lru(256, true);
+    // Synchronized: also read on the render pool (prepareThreatColours).
+    private final java.util.Map<MarkerAssetKey, String> markerAssets = DapperMapUtil.lruMap(256, true);
     private final java.util.concurrent.ConcurrentMap<MarkerAssetKey, DynamicAssetPublisher.PreparedAsset> preparedMarkerAssets = new java.util.concurrent.ConcurrentHashMap<>();
     private final java.util.concurrent.ConcurrentMap<MarkerAssetKey, Boolean> markerAssetsPending = new java.util.concurrent.ConcurrentHashMap<>();
     private volatile long markerAssetGeneration;
@@ -305,16 +291,7 @@ public final class DynamicMinimapSession {
     private final java.util.concurrent.ConcurrentMap<MarkerAssetKey, Long> failedMarkerAssets = new java.util.concurrent.ConcurrentHashMap<>();
     private static final long FAILED_ICON_RETRY_MS = 30000L;
     /** Last icon path shown per creature type, used while a new colour variant is prepared. */
-    private final java.util.Map<String, String> creatureIconFallback = lru(256, false);
-
-    /** Access-ordered map dropping its least recently used entry beyond {@code limit}. */
-    private static <K, V> java.util.Map<K, V> lru(int limit, boolean synchronize) {
-        java.util.Map<K, V> map = new java.util.LinkedHashMap<>(64, 0.75F, true) {
-            @Override protected boolean removeEldestEntry(java.util.Map.Entry<K, V> eldest) { return size() > limit; }
-        };
-        // markerAssets is also read on the render pool (prepareThreatColours).
-        return synchronize ? java.util.Collections.synchronizedMap(map) : map;
-    }
+    private final java.util.Map<String, String> creatureIconFallback = DapperMapUtil.lruMap(256, false);
     /** Attacking creature icons alternate between two edge colours at this interval (or slower). */
     private static final long PULSE_MS = 300L;
     private boolean pulseOn;
@@ -330,7 +307,7 @@ public final class DynamicMinimapSession {
     }
 
     private String markerIcon(DynamicMinimapMarker marker) {
-        return this.markerIcon(marker, marker.color == null ? 0xFFFFFF : marker.color.getRGB() & 0xFFFFFF);
+        return this.markerIcon(marker, marker.rgb());
     }
 
     /**
@@ -340,7 +317,7 @@ public final class DynamicMinimapSession {
      * player's) last shown icon is reused so it never blinks out. World thread only.
      */
     private String creatureIcon(DynamicMinimapMarker marker, int attackingRgb) {
-        int rgb = marker.color == null ? 0xFFFFFF : marker.color.getRGB() & 0xFFFFFF;
+        int rgb = marker.rgb();
         String path = null;
         if (this.pulseOn && rgb == attackingRgb) path = this.markerIcon(marker, DynamicCreatureIcons.pulseColour(rgb));
         if (path == null) path = this.markerIcon(marker, rgb);
@@ -389,7 +366,7 @@ public final class DynamicMinimapSession {
                     case NATIVE_WORLDMAP -> asset = NativeWorldMapIntegration.prepareIconAsset(
                             marker.assetPath, marker.color, this.slug);
                     // Creature face icons are built once per creature type and shared by all players.
-                    default -> asset = this.prepareCreatureAsset(marker.style, marker.assetPath, rgb, palette);
+                    default -> asset = this.prepareCreatureAsset(marker.style, marker.assetPath, rgb);
                 }
                 if (!this.canRenderHud(targetHud) || generation != this.markerAssetGeneration
                         || sourceWorld != currentWorld()) return;
@@ -398,8 +375,7 @@ public final class DynamicMinimapSession {
                 if (asset == DynamicCreatureIcons.BUSY) return;
                 if (asset == null) {
                     // Remember the failure for this generation instead of re-queuing it each tick.
-                    if (this.failedMarkerAssets.size() >= 256) this.failedMarkerAssets.clear();
-                    this.failedMarkerAssets.put(key, System.currentTimeMillis());
+                    DapperMapUtil.putBounded(this.failedMarkerAssets, key, System.currentTimeMillis(), 256);
                     return;
                 }
                 this.putPrepared(key, asset);
@@ -431,11 +407,10 @@ public final class DynamicMinimapSession {
     }
 
     /** Creature face icon (CREATURE), player head icon (PLAYER) or coloured dot (DOT) in {@code rgb}. Render pool only. */
-    private DynamicAssetPublisher.PreparedAsset prepareCreatureAsset(Style style, String iconKey, int rgb,
-                                                                     DynamicMinimapColours palette) {
+    private DynamicAssetPublisher.PreparedAsset prepareCreatureAsset(Style style, String iconKey, int rgb) {
         if (style == Style.CREATURE) return DynamicCreatureIcons.prepareAsset(iconKey, this.slug, rgb);
         if (style == Style.PLAYER) return DynamicCreatureIcons.preparePlayerAsset(iconKey, this.slug, rgb);
-        byte[] png = DynamicMinimapRenderer.renderDot(rgb, palette);
+        byte[] png = DynamicMinimapRenderer.renderDot(rgb);
         return DynamicAssetPublisher.prepare("UI/DapperMap/mk-" + this.slug + "-" + DapperMapUtil.hex6(rgb) + ".png", png);
     }
 
@@ -458,7 +433,7 @@ public final class DynamicMinimapSession {
             if (rgb == shownRgb || generation != this.markerAssetGeneration) continue;
             MarkerAssetKey key = new MarkerAssetKey(marker.style, marker.assetPath, rgb);
             if (this.markerAssets.containsKey(key) || this.preparedMarkerAssets.containsKey(key)) continue;
-            DynamicAssetPublisher.PreparedAsset asset = this.prepareCreatureAsset(marker.style, marker.assetPath, rgb, palette);
+            DynamicAssetPublisher.PreparedAsset asset = this.prepareCreatureAsset(marker.style, marker.assetPath, rgb);
             if (asset != null && asset != DynamicCreatureIcons.BUSY && generation == this.markerAssetGeneration)
                 this.putPrepared(key, asset);
         }
@@ -573,7 +548,29 @@ public final class DynamicMinimapSession {
         this.bufferCenterZ = Double.NaN;
         this.bufferComplete = false;
         this.lastTerrainMs = 0L;
+        this.lastSignatureMs = 0L; // Probe the new terrain straight away.
         ++this.terrainGeneration;
+        // Rotation renders of the old terrain stop early (counters are only compared for equality).
+        this.rotationSequence.incrementAndGet();
+    }
+
+    /**
+     * Forgets the shown terrain image: its rotation source, chunk hashes, warm-up and the client
+     * slots it was published to. Used when the raster changes (size, resolution), the HUD is
+     * rebuilt (world change, new HUD) or the session stops. World thread only.
+     */
+    private void dropShownTerrain() {
+        this.warmupUntilMs = 0L;
+        this.shownChunkHashes = null;
+        this.rotationSource = null;
+        this.displayedTerrainPng = null;
+        this.terrainPublications.clear();
+    }
+
+    /** Sends every locator heading again (new colour, or the client lost its images). */
+    private void resetSelfArrows() {
+        java.util.Arrays.fill(this.selfArrowDelivered, false);
+        this.selfArrowsComplete = false;
     }
 
     /** Bumped by every start: a cleanup task posted by an earlier stop then no longer applies. */
@@ -609,7 +606,7 @@ public final class DynamicMinimapSession {
 
         if (removeHud && this.hud != null && this.hud.isShown()) {
             try { this.hud.removeFromClient(); }
-            catch (RuntimeException failure) { if (!isStoppedWorldException(failure)) throw failure; }
+            catch (RuntimeException failure) { if (!DapperMapUtil.isStoppedWorld(failure)) throw failure; }
         }
 
         // Thread-safe part, done at once from any thread: the volatile/concurrent fields that make
@@ -656,9 +653,7 @@ public final class DynamicMinimapSession {
     /** stop()'s world-thread-only cleanup (see stop); safe to run more than once. */
     private void clearWorldState(DynamicMinimapHud oldHud) {
         if (oldHud != null) oldHud.detach();
-        this.rotationSource = null;
-        this.displayedTerrainPng = null;
-        this.terrainPublications.clear();
+        this.dropShownTerrain();
         this.lastCaveView = null;
         this.markerOrder.clear();
         this.edgeTracker.clear();
@@ -666,8 +661,7 @@ public final class DynamicMinimapSession {
         // Delivered-image records are kept: the client still holds those images on this
         // connection, so turning the minimap off and on again re-sends nothing. They are cleared
         // on disconnect and world join (DapperMapSessionManager) and on teleport (renderTick).
-        java.util.Arrays.fill(this.selfArrowDelivered, false);
-        this.selfArrowsComplete = false;
+        this.resetSelfArrows();
     }
 
     /**
@@ -692,7 +686,7 @@ public final class DynamicMinimapSession {
     private long tickIntervalMs(boolean idle) {
         boolean turning = System.currentTimeMillis() - this.lastHeadingChangeMs < TURNING_WINDOW_MS;
         if (turning || this.rotationCatchUp) {
-            return Math.min(this.settings.panIntervalMs(), this.rotationPollIntervalMs());
+            return Math.min(this.settings.panIntervalMs(), this.settings.rotationPollIntervalMs());
         }
         long pan = this.settings.panIntervalMs();
         return idle ? Math.max(pan, this.settings.markerIntervalMs()) : pan;
@@ -738,7 +732,7 @@ public final class DynamicMinimapSession {
             DapperMapUtil.logFailure("minimap heartbeat", failure);
         } finally {
             // stop() clears running first, so a stopped session never reschedules itself.
-            this.scheduleNextTick(Math.min(this.settings.panIntervalMs(), this.rotationPollIntervalMs()));
+            this.scheduleNextTick(Math.min(this.settings.panIntervalMs(), this.settings.rotationPollIntervalMs()));
         }
     }
 
@@ -812,9 +806,7 @@ public final class DynamicMinimapSession {
                 // and marker scan). Renders still in flight for the old spot are discarded.
                 this.edgeTracker.clear();
                 this.forceTerrainRender();
-                this.lastSignatureMs = 0L;
                 this.deliveredSequence = this.renderSequence.incrementAndGet();
-                this.rotationSequence.incrementAndGet();
                 if (worldChanged) {
                     // The HUD is rebuilt for the new world (or after a resync). A same-world
                     // teleport keeps the client's images (verified in 0.6.8 and 0.7.0), and a
@@ -825,10 +817,9 @@ public final class DynamicMinimapSession {
                     if (clientWiped) {
                         this.invalidateMarkerAssets();
                         DynamicAssetPublisher.clear(this.uuid);
-                        java.util.Arrays.fill(this.selfArrowDelivered, false);
-                        this.selfArrowsComplete = false;
+                        this.resetSelfArrows();
                     }
-                    this.terrainPublications.clear();
+                    this.dropShownTerrain();
                     if (this.hud != null) this.hud.invalidateVisualAssets();
                     this.lastSelfBucket = -1;
                     if (this.hud != null) this.hud.invalidateMarkerSlots();
@@ -843,11 +834,6 @@ public final class DynamicMinimapSession {
                     this.hud = null;
                     this.lastCaveView = null;
                     this.lastCaveCheckMs = 0L; // Re-read cave mode immediately in the new world.
-                    this.rotationSource = null;
-                    this.displayedTerrainPng = null;
-                    this.terrainPublications.clear();
-                    this.forceTerrainRender();
-                    this.rotationSequence.incrementAndGet();
                     this.cachedMarkers = new ArrayList<>();
                     this.cachedWorldMapMarkers = List.of();
                     this.emptyWorldMapScans = 0;
@@ -887,13 +873,7 @@ public final class DynamicMinimapSession {
                 // previous buffer centre can leave needsTerrain false until the next
                 // signature/recenter event, making the resolution control appear inert.
                 this.forceTerrainRender();
-                this.warmupUntilMs = 0L;
-                this.shownChunkHashes = null;
-                this.lastSignatureMs = 0L;
-                this.rotationSource = null;
-                this.displayedTerrainPng = null;
-                this.terrainPublications.clear();
-                this.rotationSequence.incrementAndGet();
+                this.dropShownTerrain();
             }
 
             if (this.settings.sizePixels != this.builtSize) {
@@ -904,59 +884,18 @@ public final class DynamicMinimapSession {
                 // Invalidate the old terrain buffer and let the normal render
                 // path create a fresh one without recreating the Custom HUD.
                 this.forceTerrainRender();
-                this.warmupUntilMs = 0L;
-                this.shownChunkHashes = null;
-                this.lastSignatureMs = 0L;
+                this.dropShownTerrain();
                 this.lastMarkerMs = 0L;
-                this.rotationSource = null;
-                this.displayedTerrainPng = null;
-                this.terrainPublications.clear();
             }
 
-            if (this.settings.interfaceScalePercent != this.builtInterfaceScale) {
-                this.builtInterfaceScale = this.settings.interfaceScalePercent;
-                this.hud.setInterfaceScale(this.settings.interfaceScalePercent);
-            }
-
-            if (this.settings.infoPanelEnabled != this.builtInfoPanelEnabled) {
-                this.builtInfoPanelEnabled = this.settings.infoPanelEnabled;
-                this.hud.setInfoPanelEnabled(this.settings.infoPanelEnabled);
-            }
-
-            if (this.settings.hudPositionX != this.builtHudPositionX
-                    || this.settings.hudPositionY != this.builtHudPositionY
-                    || this.settings.infoPanelPosition != this.builtInfoPanelPosition) {
-                this.builtHudPositionX = this.settings.hudPositionX;
-                this.builtHudPositionY = this.settings.hudPositionY;
-                this.builtInfoPanelEnabled = this.settings.infoPanelEnabled;
-                this.builtInfoPanelPosition = this.settings.infoPanelPosition;
-                this.hud.setLayoutPosition(
-                        this.settings.hudPositionX,
-                        this.settings.hudPositionY,
-                        this.settings.infoPanelPosition
-                );
-            }
-
-            if (this.settings.infoPanelTextAlignment != this.builtInfoPanelTextAlignment) {
-                this.builtInfoPanelTextAlignment = this.settings.infoPanelTextAlignment;
-                this.hud.setInfoTextAlignment(this.settings.infoPanelTextAlignment);
-            }
-
-            if (this.settings.showCoordinates != this.builtShowCoordinates
-                    || this.settings.showCompass != this.builtShowCompass
-                    || this.settings.showClock != this.builtShowClock
-                    || this.settings.showBiome != this.builtShowBiome) {
-                this.builtShowCoordinates = this.settings.showCoordinates;
-                this.builtShowCompass = this.settings.showCompass;
-                this.builtShowClock = this.settings.showClock;
-                this.builtShowBiome = this.settings.showBiome;
-                this.hud.setInfoVisibility(
-                        this.settings.showCoordinates,
-                        this.settings.showCompass,
-                        this.settings.showClock,
-                        this.settings.showBiome
-                );
-            }
+            // Layout settings: each HUD setter returns at once when its value is unchanged, and
+            // queues one layout rebuild (applyPendingLayout below) when it did change.
+            DynamicMinimapSetting s = this.settings;
+            this.hud.setInterfaceScale(s.interfaceScalePercent);
+            this.hud.setInfoPanelEnabled(s.infoPanelEnabled);
+            this.hud.setLayoutPosition(s.hudPositionX, s.hudPositionY, s.infoPanelPosition);
+            this.hud.setInfoTextAlignment(s.infoPanelTextAlignment);
+            this.hud.setInfoVisibility(s.showCoordinates, s.showCompass, s.showClock, s.showBiome);
 
             long now = System.currentTimeMillis();
             // BetterMap cave state is read reflectively; poll it at most every
@@ -987,8 +926,7 @@ public final class DynamicMinimapSession {
             }
             if (!this.settings.colours.equals(this.renderedColours)) {
                 this.renderedColours = this.settings.colours;
-                java.util.Arrays.fill(this.selfArrowDelivered, false);
-                this.selfArrowsComplete = false;
+                this.resetSelfArrows();
                 this.invalidateMarkerAssets();
                 this.lastSelfBucket = -1;
                 this.lastMarkerMs = 0L;
@@ -1036,12 +974,10 @@ public final class DynamicMinimapSession {
                 // the previous decoded source must not survive the transition.
                 this.rotationSource = null;
                 this.forceTerrainRender();
-                this.lastSignatureMs = 0L;
                 this.lastMapRotationBucket = -1;
                 this.lastSelfBucket = -1;
                 this.lastMarkerMs = 0L;
                 this.cachedMarkers = new ArrayList<>();
-                this.rotationSequence.incrementAndGet();
             }
 
             int mapRotationBucket = this.settings.rotationMode == 1
@@ -1049,7 +985,7 @@ public final class DynamicMinimapSession {
                     : 0;
 
             if (mapRotationBucket != this.lastMapRotationBucket
-                    && now - this.lastRotationRequestMs >= this.rotationIntervalMs()) {
+                    && now - this.lastRotationRequestMs >= this.settings.rotationIntervalMs()) {
                 // Pace from the previous request so render time is not added on top of the
                 // interval; only one rotation render is ever in flight (coalesced). While turning
                 // a reduced frame is sent (about 40% of the bytes); a sharp one follows once the
@@ -1134,26 +1070,16 @@ public final class DynamicMinimapSession {
     }
 
     /**
-     * Heading-only updates are intentionally faster than terrain stitching.
-     * This keeps player-up rotation readable without increasing expensive world
-     * map stitching to the same frequency.
-     */
-    /**
      * Terrain paths include raster resolution so the client never resolves a
      * newly rendered PNG through one of the old-resolution rotating cache keys.
      * We still keep the bounded 16-slot rotation within each resolution.
      */
     private String terrainAssetPath(int textureResolution, int frame) {
-        int resolution = Math.max(256, Math.min(1024, textureResolution));
+        int resolution = DapperMapUtil.clamp(textureResolution, DynamicMinimapSetting.RESOLUTION_MIN, DynamicMinimapSetting.RESOLUTION_MAX);
         return "UI/DapperMap/terrain-" + this.slug + "-r"
                 + resolution + "-" + (frame & 15) + ".png";
     }
 
-    /**
-     * Compass-frame path paired with a terrain path. The rotating slot number must stay
-     * at the end ("...-compass-7.png") because ImagePublicationCache rotates slots by
-     * that trailing number; "...-7-compass.png" had none and could throw on reuse.
-     */
     /**
      * Player-up compass frame path: one fixed name per heading for this frame artwork (shape,
      * size, resolution, info panel, colours). The publisher skips images the client already
@@ -1167,29 +1093,14 @@ public final class DynamicMinimapSession {
                 + "-" + rotationBucket + ".png";
     }
 
+    /**
+     * Compass-frame path paired with a terrain path. The rotating slot number must stay
+     * at the end ("...-compass-7.png") because ImagePublicationCache rotates slots by
+     * that trailing number; "...-7-compass.png" had none and could throw on reuse.
+     */
     private static String compassFramePath(String terrainPath) {
         int slot = terrainPath.lastIndexOf('-');
         return terrainPath.substring(0, slot) + "-compass" + terrainPath.substring(slot);
-    }
-
-    private long rotationPollIntervalMs() {
-        return switch (this.settings.updateSpeed) {
-            case 0 -> 25L;   // 40 Hz (scheduler ceiling)
-            case 1 -> 40L;   // 25 Hz
-            case 3 -> 100L;  // 10 Hz
-            case 2 -> 60L;   // ~17 Hz
-            default -> 60L;
-        };
-    }
-
-    /** Limit network PNG/texture uploads independently of cheap position polling. */
-    private long rotationIntervalMs() {
-        return switch (this.settings.updateSpeed) {
-            case 0 -> 100L;  // 10 Hz
-            case 1 -> 125L;  // 8 Hz
-            case 3 -> 300L;  // about 3 Hz
-            default -> 200L; // 5 Hz
-        };
     }
 
     private void ensureHud(World world) {
@@ -1255,19 +1166,11 @@ public final class DynamicMinimapSession {
             this.builtSize = snap.sizePixels;
             this.builtShape = snap.shape;
             this.builtZoom = snap.zoomBlocks;
-            this.builtHudPositionX = snap.hudPositionX;
-            this.builtHudPositionY = snap.hudPositionY;
-            this.builtInfoPanelEnabled = snap.infoPanelEnabled;
-            this.builtInfoPanelPosition = snap.infoPanelPosition;
-            this.builtInfoPanelTextAlignment = snap.infoPanelTextAlignment;
-            this.builtInterfaceScale = snap.interfaceScalePercent;
             this.builtTextureResolution = snap.textureResolution;
             this.builtCompassMarkings = snap.compassMarkings();
             this.builtRotationMode = -1;
             this.lastMapRotationBucket = -1;
-            this.rotationSource = null;
-            this.displayedTerrainPng = null;
-            this.terrainPublications.clear();
+            this.dropShownTerrain();
             this.hud.deliverStaticAssets();
             this.hud.show();
             this.renderedColours = this.settings.colours;
@@ -1414,15 +1317,15 @@ public final class DynamicMinimapSession {
                             DynamicMinimapRenderer.loadedChunkFilter(world)
                     );
 
-            if (terrain.present == 0) {
+            if (terrain.present() == 0) {
                 return;
             }
 
             DynamicMinimapRenderer.RotationSource source = playerUp
-                    ? DynamicMinimapRenderer.prepareRotationSource(terrain.image, renderSettings) : null;
+                    ? DynamicMinimapRenderer.prepareRotationSource(terrain.image(), renderSettings) : null;
             byte[] displayPng = playerUp
                     ? DynamicMinimapRenderer.rotateTerrain(source, mapAngle)
-                    : terrain.png;
+                    : terrain.png();
 
             if (displayPng == null || displayPng.length == 0) {
                 return;
@@ -1438,32 +1341,16 @@ public final class DynamicMinimapSession {
                     playerUp ? this.headingFramePath(renderSettings, rotationBucket)
                             : compassFramePath(prepared.path()), framePng);
             // Per-chunk hashes of exactly the chunk images drawn, hashed while stitching.
-            long[] renderHashes = terrain.chunkHashes;
+            long[] renderHashes = terrain.chunkHashes();
             executeDelivery(world, "terrain delivery", () -> {
                 if (!this.canRenderHud(renderHud)
                         || !java.util.Objects.equals(caveView, this.lastCaveView)
                         || sequence <= this.deliveredSequence
-                        || this.settings.textureResolution != renderSettings.textureResolution
-                        || this.settings.zoomBlocks != renderSettings.zoomBlocks
-                        || this.settings.rotationMode != renderSettings.rotationMode
-                        || this.settings.sizePixels != renderSettings.sizePixels
-                        || this.settings.shape != renderSettings.shape
-                        || this.settings.infoPanelShown() != renderSettings.infoPanelShown() // Picks the frame variant.
-                        || this.settings.compassMarkings() != renderSettings.compassMarkings() // Ring drawn for old markings.
-                        || !this.settings.colours.equals(renderSettings.colours)) {
+                        || !this.frameMatches(renderSettings)) {
                     return;
                 }
-
-                String path = this.terrainPublications.pathFor(prepared.hash());
-                if (path == null) {
-                    DynamicAssetPublisher.PreparedAsset publication = prepared.withPath(
-                            this.terrainPublications.nonActivePath(prepared.path()));
-                    if (!DynamicAssetPublisher.deliver(this.playerRef, publication)) return;
-                    path = publication.path();
-                    this.terrainPublications.remember(path, publication.hash());
-                }
-
-                if (!renderHud.acceptTerrainFrame(mapAngle, preparedFrame)) return;
+                String path = this.sendFrame(renderHud, prepared, mapAngle, preparedFrame);
+                if (path == null) return;
                 this.deliveredSequence = sequence;
                 this.rotationSource = source;
                 ++this.terrainGeneration;
@@ -1472,37 +1359,13 @@ public final class DynamicMinimapSession {
                 // Chunks skipped only because they aren't loaded can't fill in on a retry, so they
                 // don't hold the warm-up retries open; the probe still catches images that appear.
                 this.bufferComplete = terrain.complete()
-                        || (terrain.total > 0 && terrain.present + terrain.unloaded >= terrain.total);
+                        || (terrain.total() > 0 && terrain.present() + terrain.unloaded() >= terrain.total());
                 this.bufferCenterX = centerX;
                 this.bufferCenterZ = centerZ;
                 this.shownChunkHashes = renderHashes;
                 this.lastMapRotationBucket = rotationBucket;
                 this.displayedRotationReduced = false; // Terrain renders are always full sharpness.
-
-                double pixelsPerBlock =
-                        DynamicMinimapRenderer.pixelsPerBlock(renderSettings);
-                int bufferPixels = this.hud.bufferPixels();
-                int mapCenter = renderSettings.sizePixels / 2;
-                int[] pan = this.currentPan(
-                        world,
-                        centerX,
-                        centerZ,
-                        pixelsPerBlock,
-                        bufferPixels,
-                        mapCenter,
-                        mapAngle
-                );
-                // Player-up frames are cropped around the buffer centre; the HUD sizes the terrain to match.
-                this.hud.setTerrain(path, pan[0], pan[1], DynamicMinimapRenderer.terrainImagePixels(renderSettings));
-                this.terrainPublications.shown(path);
-
-                // Keep marker projection in the exact same accepted orientation
-                // as the terrain/frame that was just delivered.
-                this.projectCachedMarkers(
-                        pixelsPerBlock,
-                        bufferPixels,
-                        Double.NaN
-                );
+                this.showFrame(world, renderHud, path, renderSettings, centerX, centerZ, mapAngle);
             });
         });
     }
@@ -1511,8 +1374,9 @@ public final class DynamicMinimapSession {
      * Reuses the most recently stitched north-up terrain and rotates only the
      * bitmap when the player changes heading. This keeps follow-player rotation
      * responsive without re-fetching/re-stitching world-map chunks each turn.
+     *
+     * @return true when a rotation render was queued.
      */
-    /** @return true when a rotation render was queued. */
     private boolean scheduleRotationOnly(
             World world,
             double yaw,
@@ -1532,7 +1396,6 @@ public final class DynamicMinimapSession {
         long generation = this.terrainGeneration;
         DynamicMinimapHud renderHud = this.hud;
         DynamicMinimapSetting renderSettings = this.settings.copy();
-        int expectedRotationMode = renderSettings.rotationMode;
         double centerX = this.bufferCenterX;
         double centerZ = this.bufferCenterZ;
         double mapAngle = DynamicMinimapRenderer.bucketAngle(rotationBucket);
@@ -1572,58 +1435,63 @@ public final class DynamicMinimapSession {
                 if (!this.canRenderHud(renderHud)
                         || generation != this.terrainGeneration
                         || rotationRequest != this.rotationSequence.get()
-                        || this.settings.rotationMode != expectedRotationMode
-                        || this.settings.zoomBlocks != renderSettings.zoomBlocks
-                        || this.settings.sizePixels != renderSettings.sizePixels
-                        || this.settings.shape != renderSettings.shape
-                        || this.settings.textureResolution != renderSettings.textureResolution
-                        || this.settings.infoPanelShown() != renderSettings.infoPanelShown() // Picks the frame variant.
-                        || this.settings.compassMarkings() != renderSettings.compassMarkings() // Ring drawn for old markings.
-                        || !this.settings.colours.equals(renderSettings.colours)) {
+                        || !this.frameMatches(renderSettings)) {
                     return;
                 }
-
-                String path = this.terrainPublications.pathFor(prepared.hash());
-                if (path == null) {
-                    DynamicAssetPublisher.PreparedAsset publication = prepared.withPath(
-                            this.terrainPublications.nonActivePath(prepared.path()));
-                    if (!DynamicAssetPublisher.deliver(this.playerRef, publication)) return;
-                    path = publication.path();
-                    this.terrainPublications.remember(path, publication.hash());
-                }
-
-                if (!renderHud.acceptTerrainFrame(mapAngle, preparedFrame)) return;
+                String path = this.sendFrame(renderHud, prepared, mapAngle, preparedFrame);
+                if (path == null) return;
                 this.displayedTerrainPng = displayPng;
                 this.lastMapRotationBucket = rotationBucket;
                 this.displayedRotationReduced = useReduced; // A reduced frame is sharpened once the turn ends.
-
-                double pixelsPerBlock =
-                        DynamicMinimapRenderer.pixelsPerBlock(renderSettings);
-                int bufferPixels = this.hud.bufferPixels();
-                int mapCenter = renderSettings.sizePixels / 2;
-                int[] pan = this.currentPan(
-                        world,
-                        centerX,
-                        centerZ,
-                        pixelsPerBlock,
-                        bufferPixels,
-                        mapCenter,
-                        mapAngle
-                );
-                // Player-up frames are cropped around the buffer centre; the HUD sizes the terrain to match.
-                this.hud.setTerrain(path, pan[0], pan[1], DynamicMinimapRenderer.terrainImagePixels(renderSettings));
-                this.terrainPublications.shown(path);
-
-                // Rotation-only updates do not rescan entities. Re-project the
-                // cached world-space markers immediately against the accepted
-                // rotation bucket so terrain/frame/markers move as one.
-                this.projectCachedMarkers(
-                        pixelsPerBlock,
-                        bufferPixels,
-                        Double.NaN
-                );
+                // Rotation-only updates do not rescan entities: showFrame re-projects the cached markers.
+                this.showFrame(world, renderHud, path, renderSettings, centerX, centerZ, mapAngle);
             });
         });
+    }
+
+    /**
+     * True while the settings a terrain or rotation frame was rendered with still match the
+     * live ones that decide its look (raster, scale, shape, frame variant, ring, colours).
+     * A frame that fails this is dropped. World thread.
+     */
+    private boolean frameMatches(DynamicMinimapSetting rendered) {
+        DynamicMinimapSetting live = this.settings;
+        return live.textureResolution == rendered.textureResolution
+                && live.zoomBlocks == rendered.zoomBlocks
+                && live.rotationMode == rendered.rotationMode
+                && live.sizePixels == rendered.sizePixels
+                && live.shape == rendered.shape
+                && live.infoPanelShown() == rendered.infoPanelShown() // Picks the frame variant.
+                && live.compassMarkings() == rendered.compassMarkings() // Ring drawn for old markings.
+                && live.colours.equals(rendered.colours);
+    }
+
+    /**
+     * Sends a terrain image (unless the client already holds it in a terrain slot) and hands the
+     * matching compass ring to the HUD. Returns the terrain path to show, or null when either
+     * could not be delivered (nothing is shown then). World thread.
+     */
+    private String sendFrame(DynamicMinimapHud hud, DynamicAssetPublisher.PreparedAsset terrain,
+                             double mapAngle, DynamicAssetPublisher.PreparedAsset ring) {
+        String path = this.terrainPublications.publish(this.playerRef, terrain);
+        if (path == null || !hud.acceptTerrainFrame(mapAngle, ring)) return null;
+        return path;
+    }
+
+    /**
+     * Shows a sent terrain image panned to the player's current spot, then re-projects the cached
+     * markers in the same orientation so terrain, ring and markers move as one. World thread.
+     */
+    private void showFrame(World world, DynamicMinimapHud hud, String path, DynamicMinimapSetting rendered,
+                           double centerX, double centerZ, double mapAngle) {
+        double pixelsPerBlock = DynamicMinimapRenderer.pixelsPerBlock(rendered);
+        int bufferPixels = hud.bufferPixels();
+        int[] pan = this.currentPan(world, centerX, centerZ, pixelsPerBlock, bufferPixels,
+                rendered.sizePixels / 2, mapAngle);
+        // Player-up frames are cropped around the buffer centre; the HUD sizes the terrain to match.
+        hud.setTerrain(path, pan[0], pan[1], DynamicMinimapRenderer.terrainImagePixels(rendered));
+        this.terrainPublications.shown(path); // Only after the AssetPath is set (see ImagePublicationCache).
+        this.projectCachedMarkers(pixelsPerBlock, bufferPixels, Double.NaN);
     }
 
     private int[] currentPan(
@@ -2127,8 +1995,7 @@ public final class DynamicMinimapSession {
                 if (now - previous.time < 200L || (x - previous.x) * (x - previous.x) + (z - previous.z) * (z - previous.z) < 4.0)
                     return new double[]{previous.x, previous.z};
             }
-            if (positions.size() >= 256 && previous == null) positions.clear();
-            positions.put(key, new Position(x, z, mapSize, shape, iconSize, now));
+            DapperMapUtil.putBounded(positions, key, new Position(x, z, mapSize, shape, iconSize, now), 256);
             return new double[]{x, z};
         }
         /**
@@ -2146,7 +2013,7 @@ public final class DynamicMinimapSession {
             directionX /= distance;
             directionZ /= distance;
             // Inner edge of the frame; for a square map the edge distance depends on the bearing.
-            double perimeter = Math.max(1, center - 11 * uiScale - markerSize / 2.0D - 1);
+            double perimeter = Math.max(1, center - DynamicMinimapRenderer.APERTURE_INSET * uiScale - markerSize / 2.0D - 1);
             double radius = Math.min(distance, settings.isCircle() ? perimeter
                     : perimeter / Math.max(Math.abs(directionX), Math.abs(directionZ)));
             if (!settings.showCompassLetters) return new double[]{center + directionX * radius, center + directionZ * radius};
@@ -2154,8 +2021,8 @@ public final class DynamicMinimapSession {
             // Move radially inward so the marker still indicates its true direction.
             // Badge size and inset match DynamicMinimapRenderer.cardinalLetterCentre.
             boolean dashes = settings.showCardinalDashes;
-            double badgeInset = (dashes ? 25 : DynamicMinimapRenderer.cardinalBadgeSize(false) / 2.0D + 0.5D) * uiScale;
-            double clearance = DynamicMinimapRenderer.cardinalBadgeSize(dashes) / 2.0D * uiScale + markerSize / 2.0D + 1;
+            double badgeInset = (dashes ? 25 : DynamicMinimapRenderer.CARDINAL_BADGE_SIZE / 2.0D + 0.5D) * uiScale;
+            double clearance = DynamicMinimapRenderer.CARDINAL_BADGE_SIZE / 2.0D * uiScale + markerSize / 2.0D + 1;
             // Cardinal k sits at bearing -90° + k·90° + angle; its unit vector follows from one
             // cos/sin pair: (sin, -cos), (cos, sin), (-sin, cos), (-cos, -sin).
             double cos = Math.cos(angle), sin = Math.sin(angle);

@@ -25,6 +25,8 @@ import dev.scyphoz.dappermap.permissions.DapperMapPermissions;
 import dev.scyphoz.dappermap.permissions.SettingPermissions;
 import dev.scyphoz.dappermap.service.DapperMapSessionManager;
 import dev.scyphoz.dappermap.service.DapperMapServerLoad;
+import dev.scyphoz.dappermap.util.DapperMapUtil;
+import static dev.scyphoz.dappermap.dynamic.DynamicMinimapSetting.*;
 import javax.annotation.Nonnull;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -108,34 +110,27 @@ public class DapperMapCommand extends AbstractPlayerCommand {
     private static final List<Setting> SETTINGS = new ArrayList<>();
     static {
         // Display
-        add("display", "zoom", Arg.WORD, "close|medium|far|<16..256>", "Zoom Radius (presets 48, 96, 160 blocks)", (s, v, e, p) -> {
-            int zoom = switch (v) { case "close" -> 48; case "medium" -> 96; case "far" -> 160; default -> parseRanged(v, 16, 256); };
+        add("display", "zoom", Arg.WORD, "close|medium|far|<" + ZOOM_MIN + ".." + ZOOM_MAX + ">", "Zoom Radius (presets 48, 96, 160 blocks)", (s, v, e, p) -> {
+            int zoom = switch (v) { case "close" -> 48; case "medium" -> 96; case "far" -> 160; default -> parseRanged(v, ZOOM_MIN, ZOOM_MAX); };
             if (zoom < 0) return null;
             s.zoomBlocks = zoom;
             return done("zoom radius: " + zoom + " blocks.");
         });
-        number("display", "size", 120, 360, "Map Size", (s, n) -> s.sizePixels = n, " px");
-        number("display", "scale", 75, 160, "Interface Scale", (s, n) -> s.interfaceScalePercent = n, "%");
-        add("display", "shape", Arg.WORD, "circle|square", "Map Shape", (s, v, e, p) -> {
-            if (!v.equals("circle") && !v.equals("square")) return null;
-            s.shape = v.equals("circle") ? DynamicMinimapSetting.SHAPE_CIRCLE : DynamicMinimapSetting.SHAPE_SQUARE;
-            return done("map shape: " + v + ".");
-        });
-        add("display", "rotation", Arg.WORD, "north|player", "Map Rotation: North Up or Player Facing", (s, v, e, p) -> {
-            if (!v.equals("north") && !v.equals("player")) return null;
-            s.rotationMode = v.equals("player") ? DynamicMinimapSetting.ROTATION_PLAYER_UP : DynamicMinimapSetting.ROTATION_NORTH_UP;
-            return done("map rotation: " + v + ".");
-        });
+        number("display", "size", SIZE_MIN, SIZE_MAX, "Map Size", (s, n) -> s.sizePixels = n, " px");
+        number("display", "scale", SCALE_MIN, SCALE_MAX, "Interface Scale", (s, n) -> s.interfaceScalePercent = n, "%");
+        named("display", "shape", "circle|square", SHAPE_NAMES, "Map Shape", "map shape", (s, i) -> s.shape = i);
+        named("display", "rotation", "north|player", ROTATION_NAMES, "Map Rotation: North Up or Player Facing", "map rotation",
+                (s, i) -> s.rotationMode = i);
         toggle("display", "compass-letters", "Compass Letters (N, E, S, W)", (s, on) -> s.showCompassLetters = on);
         toggle("display", "compass-dashes", "Compass Dashes (small dashes around the map edge)", (s, on) -> s.showCompassDashes = on);
         toggle("display", "cardinal-dashes", "Cardinal Dashes (large N, E, S, W dashes)", (s, on) -> s.showCardinalDashes = on);
         add("display", "speed", Arg.WORD, "very-fast|fast|normal|slow", "Update Speed", (s, v, e, p) -> {
-            int speed = Arrays.asList(DapperMapConfig.SPEED_NAMES).indexOf(v);
+            int speed = DapperMapUtil.indexOf(DapperMapConfig.SPEED_NAMES, v);
             if (speed < 0) return null;
             s.updateSpeed = speed;
             return done("update speed: " + s.updateSpeedName() + ".");
         });
-        number("display", "resolution", 256, 1024, "Texture Resolution", (s, n) -> s.textureResolution = n, " px");
+        number("display", "resolution", RESOLUTION_MIN, RESOLUTION_MAX, "Texture Resolution", (s, n) -> s.textureResolution = n, " px");
         // Markers
         toggle("markers", "players", "Player Markers", (s, on) -> s.showOtherPlayers = on);
         choice("markers", "player-style", "icons", "dots", "Player Marker Style", (s, first) -> s.playerIcons = first);
@@ -146,39 +141,20 @@ public class DapperMapCommand extends AbstractPlayerCommand {
                 (s, first) -> s.hostileCreaturesOnly = !first);
         add("markers", "creature-limit", Arg.NUMBER, "16|32|64", "Creature Marker Limit", (s, v, e, p) -> {
             int limit = parseRanged(v, 16, 64);
-            if (limit != 16 && limit != 32 && limit != 64) return null;
+            if (!isCreatureLimit(limit)) return null;
             s.creatureMarkerLimit = limit;
             return done("creature marker limit: " + limit + ".");
         });
         toggle("markers", "height-filter", "Creature Height Filter", (s, on) -> s.limitMobHeight = on);
-        number("markers", "height-range", 4, 256, "Height Filter Range (blocks above and below you)",
+        number("markers", "height-range", HEIGHT_RANGE_MIN, HEIGHT_RANGE_MAX, "Height Filter Range (blocks above and below you)",
                 (s, n) -> s.mobVerticalRange = n, " blocks");
         toggle("markers", "death", "Death Markers", (s, on) -> s.showDeathMarker = on);
         // Info Panel
         toggle("info", "panel", "Info Panel", (s, on) -> s.infoPanelEnabled = on);
-        add("info", "position", Arg.WORD, "below|above|left|right", "Info Panel Position", (s, v, e, p) -> {
-            int position = switch (v) {
-                case "below" -> DynamicMinimapSetting.INFO_BELOW;
-                case "above" -> DynamicMinimapSetting.INFO_ABOVE;
-                case "left" -> DynamicMinimapSetting.INFO_LEFT;
-                case "right" -> DynamicMinimapSetting.INFO_RIGHT;
-                default -> -1;
-            };
-            if (position < 0) return null;
-            s.infoPanelPosition = position;
-            return done("Info Panel position: " + v + ".");
-        });
-        add("info", "alignment", Arg.WORD, "left|centre|right", "Info Panel Alignment", (s, v, e, p) -> {
-            int alignment = switch (v) {
-                case "left" -> DynamicMinimapSetting.INFO_ALIGN_LEFT;
-                case "centre" -> DynamicMinimapSetting.INFO_ALIGN_CENTER;
-                case "right" -> DynamicMinimapSetting.INFO_ALIGN_RIGHT;
-                default -> -1;
-            };
-            if (alignment < 0) return null;
-            s.infoPanelTextAlignment = alignment;
-            return done("Info Panel alignment: " + v + ".");
-        });
+        named("info", "position", "below|above|left|right", PANEL_POSITION_NAMES, "Info Panel Position",
+                "Info Panel position", (s, i) -> s.infoPanelPosition = i);
+        named("info", "alignment", "left|centre|right", PANEL_ALIGNMENT_NAMES, "Info Panel Alignment",
+                "Info Panel alignment", (s, i) -> s.infoPanelTextAlignment = i);
         toggle("info", "coordinates", "Coordinates", (s, on) -> s.showCoordinates = on);
         toggle("info", "bearing", "Bearing", (s, on) -> s.showCompass = on);
         toggle("info", "world-time", "World Time", (s, on) -> s.showClock = on);
@@ -218,7 +194,7 @@ public class DapperMapCommand extends AbstractPlayerCommand {
         });
         // Position (its own tab, a root command)
         add("", "position", Arg.TWO_NUMBERS, "<x 0..100> <y 0..100>", "Place the minimap on screen", (s, v, e, p) -> {
-            int x = parseRanged(v, 0, 100), y = parseRanged(e, 0, 100);
+            int x = parseRanged(v, POSITION_MIN, POSITION_MAX), y = parseRanged(e, POSITION_MIN, POSITION_MAX);
             if (x < 0 || y < 0) return null;
             s.hudPositionX = x;
             s.hudPositionY = y;
@@ -256,6 +232,20 @@ public class DapperMapCommand extends AbstractPlayerCommand {
         });
     }
 
+    /**
+     * A setting chosen by name; {@code names} are indexed by the setting's value, and
+     * {@code values} is the usage text. Confirms with "{@code confirmation}: name.".
+     */
+    private static void named(String group, String name, String values, String[] names, String description,
+                              String confirmation, java.util.function.ObjIntConsumer<DynamicMinimapSetting> set) {
+        add(group, name, Arg.WORD, values, description, (s, v, e, p) -> {
+            int index = DapperMapUtil.indexOf(names, v);
+            if (index < 0) return null;
+            set.accept(s, index);
+            return done(confirmation + ": " + v + ".");
+        });
+    }
+
     /** A whole-number setting within [min, max]. */
     private static void number(String group, String name, int min, int max, String description,
                                java.util.function.ObjIntConsumer<DynamicMinimapSetting> set, String unit) {
@@ -276,13 +266,6 @@ public class DapperMapCommand extends AbstractPlayerCommand {
         return new Result(true, message);
     }
 
-    /** Settings that server limits can hold below the player's own choice. */
-    private static boolean limitable(Setting setting) {
-        return switch (setting.name()) {
-            case "zoom", "speed", "resolution", "creature-limit" -> true;
-            default -> false;
-        };
-    }
 
     // ---------------------------------------------------------------------------------
     // Registration
@@ -362,24 +345,20 @@ public class DapperMapCommand extends AbstractPlayerCommand {
             context.sendMessage(Message.raw("You do not have permission to show or hide DapperMap. Use /dappermap help for your commands."));
             return;
         }
-        boolean enabled = this.sessions.toggle(store.getComponent(ref, Player.getComponentType()), playerRef,
-                DapperMap.getConfig().get());
+        boolean enabled = this.sessions.toggle(playerRef, DapperMap.config());
         context.sendMessage(Message.raw(enabled ? "DapperMap shown." : "DapperMap hidden."));
     }
 
     /** One setting command, for a player's own settings or (admin) the server defaults. */
     private void runSetting(CommandContext context, Store<EntityStore> store, Ref<EntityStore> ref, PlayerRef playerRef,
                             Scope scope, Setting setting, String value, String extra) {
-        DapperMapConfig config = DapperMap.getConfig().get();
+        DapperMapConfig config = DapperMap.config();
         Player player = store.getComponent(ref, Player.getComponentType());
         value = value.toLowerCase(java.util.Locale.ROOT);
         extra = extra.toLowerCase(java.util.Locale.ROOT);
         String prefix = scope == Scope.ADMIN ? "/dappermap admin " : "/dappermap ";
         if (scope == Scope.ADMIN) {
-            if (!playerRef.hasPermission(DapperMapPermissions.ADMIN)) {
-                context.sendMessage(Message.raw("You do not have permission to manage DapperMap server defaults."));
-                return;
-            }
+            if (!requireAdmin(context, playerRef)) return;
             DynamicMinimapSetting defaults = this.sessions.getAdminDefaults(config).copy();
             Result result = setting.apply().apply(defaults, value, extra, player);
             if (result == null) { context.sendMessage(Message.raw("Usage: " + prefix + setting.path() + " " + setting.values())); return; }
@@ -394,19 +373,16 @@ public class DapperMapCommand extends AbstractPlayerCommand {
         Result result = setting.apply().apply(settings, value, extra, player);
         if (result == null) { context.sendMessage(Message.raw("Usage: " + prefix + setting.path() + " " + setting.values())); return; }
         if (result.changed()) this.sessions.applySettings(playerRef, settings);
-        context.sendMessage(Message.raw("DapperMap " + result.message() + (limitable(setting) ? limitNote(settings) : "")));
+        context.sendMessage(Message.raw("DapperMap " + result.message() + (DapperMapConfig.Limit.bySettingCommand(setting.name()) != null ? limitNote(settings) : "")));
     }
 
     /** General commands (settings, on, off, status, help, reset) for either scope. */
     private void runSimple(CommandContext context, Store<EntityStore> store, Ref<EntityStore> ref, PlayerRef playerRef,
                            Scope scope, String command) {
-        DapperMapConfig config = DapperMap.getConfig().get();
+        DapperMapConfig config = DapperMap.config();
         Player player = store.getComponent(ref, Player.getComponentType());
         if (scope == Scope.ADMIN) {
-            if (!playerRef.hasPermission(DapperMapPermissions.ADMIN)) {
-                context.sendMessage(Message.raw("You do not have permission to manage DapperMap server defaults."));
-                return;
-            }
+            if (!requireAdmin(context, playerRef)) return;
             switch (command) {
                 case "settings" -> openAdminPage(store, ref, playerRef, player, config);
                 case "help" -> {
@@ -464,6 +440,13 @@ public class DapperMapCommand extends AbstractPlayerCommand {
         }
     }
 
+    /** True when the player holds the admin node; otherwise tells them and returns false. */
+    private static boolean requireAdmin(CommandContext context, PlayerRef playerRef) {
+        if (playerRef.hasPermission(DapperMapPermissions.ADMIN)) return true;
+        context.sendMessage(Message.raw("You do not have permission to manage DapperMap server defaults."));
+        return false;
+    }
+
     /** Opens the admin settings page; "Save Changes" then closes it (opened by command). */
     private void openAdminPage(Store<EntityStore> store, Ref<EntityStore> ref, PlayerRef playerRef, Player player,
                                DapperMapConfig config) {
@@ -475,13 +458,10 @@ public class DapperMapCommand extends AbstractPlayerCommand {
     /** {@code colours [list | <target> <#RRGGBB|R G B> | reset <target|all>]} for either scope. */
     private void runColours(CommandContext context, Store<EntityStore> store, Ref<EntityStore> ref, PlayerRef playerRef,
                             Scope scope, String arguments) {
-        DapperMapConfig config = DapperMap.getConfig().get();
+        DapperMapConfig config = DapperMap.config();
         String args = arguments.trim().toLowerCase(java.util.Locale.ROOT);
         if (scope == Scope.ADMIN) {
-            if (!playerRef.hasPermission(DapperMapPermissions.ADMIN)) {
-                context.sendMessage(Message.raw("You do not have permission to manage DapperMap server defaults."));
-                return;
-            }
+            if (!requireAdmin(context, playerRef)) return;
             if (args.isEmpty()) { context.sendMessage(Message.raw(COLOURS_USAGE.replace("/dappermap ", "/dappermap admin "))); return; }
             DynamicMinimapSetting defaults = this.sessions.getAdminDefaults(config).copy();
             var result = executeColourCommand(defaults, args, node -> true); // Admin: every colour.
@@ -504,11 +484,8 @@ public class DapperMapCommand extends AbstractPlayerCommand {
 
     /** Admin-only server tools: limit, stats and load-shedding. */
     private void runAdminTool(CommandContext context, PlayerRef playerRef, String tool, String arguments) {
-        if (!playerRef.hasPermission(DapperMapPermissions.ADMIN)) {
-            context.sendMessage(Message.raw("You do not have permission to manage DapperMap server defaults."));
-            return;
-        }
-        DapperMapConfig config = DapperMap.getConfig().get();
+        if (!requireAdmin(context, playerRef)) return;
+        DapperMapConfig config = DapperMap.config();
         switch (tool) {
             case "limit" -> context.sendMessage(Message.raw(this.adminLimit(arguments.trim())));
             case "stats" -> { for (String line : DapperMapServerLoad.report(this.sessions, config)) context.sendMessage(Message.raw(line)); }
@@ -575,8 +552,8 @@ public class DapperMapCommand extends AbstractPlayerCommand {
         return List.of(
                 "DapperMap: " + onOff(s.enabled) + ", position " + s.hudPositionX + " " + s.hudPositionY,
                 "display: zoom " + s.zoomBlocks + ", size " + s.sizePixels + ", scale " + s.interfaceScalePercent
-                        + ", shape " + (s.isCircle() ? "circle" : "square")
-                        + ", rotation " + (s.rotationMode == DynamicMinimapSetting.ROTATION_PLAYER_UP ? "player" : "north")
+                        + ", shape " + DapperMapUtil.nameAt(SHAPE_NAMES, s.shape)
+                        + ", rotation " + DapperMapUtil.nameAt(ROTATION_NAMES, s.rotationMode)
                         + ", compass-letters " + onOff(s.showCompassLetters) + ", compass-dashes " + onOff(s.showCompassDashes)
                         + ", cardinal-dashes " + onOff(s.showCardinalDashes)
                         + ", speed " + s.updateSpeedName() + ", resolution " + s.textureResolution,
@@ -586,8 +563,8 @@ public class DapperMapCommand extends AbstractPlayerCommand {
                         + ", creature-filter " + (s.hostileCreaturesOnly ? "hostile" : "all")
                         + ", creature-limit " + s.creatureMarkerLimit + ", height-filter " + onOff(s.limitMobHeight)
                         + ", height-range " + s.mobVerticalRange + ", death " + onOff(s.showDeathMarker),
-                "info: panel " + onOff(s.infoPanelEnabled) + ", position " + panelPositionName(s.infoPanelPosition)
-                        + ", alignment " + panelAlignmentName(s.infoPanelTextAlignment)
+                "info: panel " + onOff(s.infoPanelEnabled) + ", position " + DapperMapUtil.nameAt(PANEL_POSITION_NAMES, s.infoPanelPosition)
+                        + ", alignment " + DapperMapUtil.nameAt(PANEL_ALIGNMENT_NAMES, s.infoPanelTextAlignment)
                         + ", coordinates " + onOff(s.showCoordinates) + ", bearing " + onOff(s.showCompass)
                         + ", world-time " + onOff(s.showClock) + ", clock-format " + (s.clock24Hour ? "24" : "12")
                         + ", region " + onOff(s.showBiome),
@@ -598,7 +575,7 @@ public class DapperMapCommand extends AbstractPlayerCommand {
 
     /** " (server limit applies: ...)" when an admin limit holds this player below their own choice. */
     private static String limitNote(DynamicMinimapSetting settings) {
-        String applied = DapperMap.getConfig().get().describeLimitsApplied(settings);
+        String applied = DapperMap.config().describeLimitsApplied(settings);
         return applied.isEmpty() ? "" : " (server limit applies: " + applied + ")";
     }
 
@@ -607,40 +584,18 @@ public class DapperMapCommand extends AbstractPlayerCommand {
      * re-applies the limits to every live minimap; players' saved settings are kept.
      */
     private String adminLimit(String arguments) {
-        DapperMapConfig config = DapperMap.getConfig().get();
+        DapperMapConfig config = DapperMap.config();
         String usage = "Usage: /dappermap admin limit speed very-fast|fast|normal|slow|none"
                 + " | resolution <256..1024>|none | zoom <16..256>|none | creatures 16|32|64|none";
         if (arguments.isBlank()) return "DapperMap server limits: " + (config.hasLimits() ? config.describeLimits() : "none") + ".";
         String[] parts = arguments.toLowerCase(java.util.Locale.ROOT).split("\\s+");
         if (parts.length != 2) return usage;
-        boolean none = parts[1].equals("none");
-        int speed = config.getFastestUpdateSpeed(), resolution = config.getMaxTextureResolution();
-        int zoom = config.getMaxZoomRadius(), creatures = config.getMaxCreatureLimit();
-        int parsed;
-        switch (parts[0]) {
-            case "speed" -> {
-                parsed = none ? 0 : Arrays.asList(DapperMapConfig.SPEED_NAMES).indexOf(parts[1]);
-                if (parsed < 0) return usage;
-                speed = parsed;
-            }
-            case "resolution" -> {
-                parsed = none ? 1024 : parseRanged(parts[1], 256, 1024);
-                if (parsed < 0) return usage;
-                resolution = parsed;
-            }
-            case "zoom" -> {
-                parsed = none ? 256 : parseRanged(parts[1], 16, 256);
-                if (parsed < 0) return usage;
-                zoom = parsed;
-            }
-            case "creatures" -> {
-                parsed = none ? 64 : parseRanged(parts[1], 16, 64);
-                if (parsed != 16 && parsed != 32 && parsed != 64) return usage;
-                creatures = parsed;
-            }
-            default -> { return usage; }
-        }
-        config.setLimits(speed, resolution, zoom, creatures);
+        DapperMapConfig.Limit limit = DapperMapConfig.Limit.byCommand(parts[0]);
+        if (limit == null) return usage;
+        // "none" lifts the limit (its widest value); anything else must be a value the limit accepts.
+        int parsed = parts[1].equals("none") ? limit.noLimit : limit.parse(parts[1]);
+        if (parsed < 0) return usage;
+        config.setLimit(limit, parsed);
         DapperMap.saveConfig();
         this.sessions.refreshLiveSettings(); // Applies on each minimap's next tick.
         return "DapperMap server limits: " + (config.hasLimits() ? config.describeLimits() : "none")
@@ -649,7 +604,7 @@ public class DapperMapCommand extends AbstractPlayerCommand {
 
     /** {@code /mm admin load-shedding on|off}; no value shows the current state. */
     private String adminLoadShedding(String value) {
-        DapperMapConfig config = DapperMap.getConfig().get();
+        DapperMapConfig config = DapperMap.config();
         Boolean enabled = parseOnOff(value);
         if (enabled == null) {
             return value.isEmpty()
@@ -664,21 +619,19 @@ public class DapperMapCommand extends AbstractPlayerCommand {
                 + (enabled ? " (live minimaps step down one update speed while the server is busy)." : ".");
     }
 
-    private record ColourCommandResult(boolean changed, String message) { }
-
     /**
      * {@code list | <target> <#RRGGBB|R G B> | reset <target|all>} against {@code settings}.
      * {@code allowed} tests a colour's node ({@code colours.<target>}): a denied colour is never
      * changed, and {@code reset all} resets only the colours that may be changed.
      */
-    private static ColourCommandResult executeColourCommand(DynamicMinimapSetting settings, String arguments,
-                                                            java.util.function.Predicate<String> allowed) {
+    private static Result executeColourCommand(DynamicMinimapSetting settings, String arguments,
+                                               java.util.function.Predicate<String> allowed) {
         String[] parts = arguments.trim().split("\\s+", 2);
         String target = parts[0];
 
         if (target.equals("list")) {
             // Locked colours are still listed (read-only), marked so the player knows why a change fails.
-            return new ColourCommandResult(false, "DapperMap colours:\n" + Arrays.stream(Key.values())
+            return new Result(false, "DapperMap colours:\n" + Arrays.stream(Key.values())
                     .map(key -> key.id + " " + settings.colours.hex(key) + " (" + key.group + " / " + key.label + ")"
                             + (allowed.test(SettingPermissions.forColour(key)) ? "" : " [locked]"))
                     .collect(Collectors.joining("\n")));
@@ -694,37 +647,37 @@ public class DapperMapCommand extends AbstractPlayerCommand {
                     else kept++;
                 }
                 settings.colours = colours;
-                return new ColourCommandResult(true, kept == 0 ? "DapperMap colours reset to defaults."
+                return new Result(true, kept == 0 ? "DapperMap colours reset to defaults."
                         : "DapperMap colours you may change were reset to defaults (" + kept + " locked colour(s) kept).");
             }
             Key key = Key.find(name);
             if (key == null) {
-                return new ColourCommandResult(false,
+                return new Result(false,
                         "Usage: /dappermap colours reset <target|all>. Use /dappermap colours list for targets.");
             }
             if (!allowed.test(SettingPermissions.forColour(key))) return lockedColour(key);
             settings.colours = settings.colours.reset(key);
-            return new ColourCommandResult(true, key.label + ": " + settings.colours.hex(key));
+            return new Result(true, key.label + ": " + settings.colours.hex(key));
         }
 
         Key key = Key.find(target);
         if (key == null || parts.length != 2) {
-            return new ColourCommandResult(false,
+            return new Result(false,
                     "Usage: /dappermap colours <target> <#RRGGBB|R G B>. Use /dappermap colours list for targets.");
         }
         if (!allowed.test(SettingPermissions.forColour(key))) return lockedColour(key);
         try {
             int rgb = DynamicMinimapColours.parse(parts[1]);
             settings.colours = settings.colours.with(key, rgb);
-            return new ColourCommandResult(true, key.label + ": " + settings.colours.hex(key));
+            return new Result(true, key.label + ": " + settings.colours.hex(key));
         } catch (IllegalArgumentException e) {
-            return new ColourCommandResult(false, e.getMessage());
+            return new Result(false, e.getMessage());
         }
     }
 
     /** The reply for a colour the player has no permission to change. */
-    private static ColourCommandResult lockedColour(Key key) {
-        return new ColourCommandResult(false, "You do not have permission to change the " + key.label + " colour.");
+    private static Result lockedColour(Key key) {
+        return new Result(false, "You do not have permission to change the " + key.label + " colour.");
     }
 
     /** An integer in [min, max], or -1 for anything else. */
@@ -748,23 +701,6 @@ public class DapperMapCommand extends AbstractPlayerCommand {
 
     private static String onOff(boolean value) {
         return value ? "on" : "off";
-    }
-
-    private static String panelPositionName(int value) {
-        return switch (value) {
-            case DynamicMinimapSetting.INFO_ABOVE -> "above";
-            case DynamicMinimapSetting.INFO_LEFT -> "left";
-            case DynamicMinimapSetting.INFO_RIGHT -> "right";
-            default -> "below";
-        };
-    }
-
-    private static String panelAlignmentName(int value) {
-        return switch (value) {
-            case DynamicMinimapSetting.INFO_ALIGN_CENTER -> "centre";
-            case DynamicMinimapSetting.INFO_ALIGN_RIGHT -> "right";
-            default -> "left";
-        };
     }
 
     /**

@@ -90,6 +90,8 @@ public final class DynamicMinimapHud extends CustomUIHud {
     /** Emitted after threatLayer, so other players draw above every creature. */
     private final MarkerLayer playerLayer = new MarkerLayer(false, PLAYER_MARKER_SLOTS,
             "WayfinderMmPly", "#WayfinderMmRoot #WayfinderMmClip #WayfinderMmMarkers #");
+    /** Every marker layer, in snapshot order. */
+    private final MarkerLayer[] layers = {this.mapLayer, this.threatLayer, this.playerLayer, this.edgeLayer};
 
     // All constants below are logical HUD units. They are converted to display units
     // only when markup/Anchor values are produced.
@@ -109,11 +111,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
                                      boolean biome, DynamicMinimapColours colours, int markings) {}
     /** First overlay per HUD set-up; least recently used dropped beyond 32 (was cleared wholesale at 16). */
     private static final java.util.Map<InitialOverlayKey, DynamicMinimapRenderer.NativeHudParts> INITIAL_OVERLAYS =
-            java.util.Collections.synchronizedMap(new java.util.LinkedHashMap<>(32, 0.75F, true) {
-                @Override protected boolean removeEldestEntry(java.util.Map.Entry<InitialOverlayKey, DynamicMinimapRenderer.NativeHudParts> eldest) {
-                    return size() > 32;
-                }
-            });
+            DapperMapUtil.lruMap(32, true);
 
     private static InitialOverlayKey initialOverlayKey(DynamicMinimapSetting settings) {
         return new InitialOverlayKey(settings.sizePixels, settings.shape,
@@ -146,7 +144,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
         DynamicMinimapSetting normalized = settings.copy();
         normalized.normalize();
         var overlay = initialOverlay(normalized);
-        if (overlay != null) { rememberHash(overlay.readout()); rememberHash(overlay.frame()); rememberHash(overlay.bezel()); }
+        rememberParts(overlay);
     }
 
     private final PlayerRef ownerRef;
@@ -236,14 +234,6 @@ public final class DynamicMinimapHud extends CustomUIHud {
         this.overlayDirty = true;
     }
 
-    private long overlayIntervalMs() {
-        return switch (this.settings.updateSpeed) {
-            case 0 -> 125L;
-            case 1 -> 150L;
-            case 3 -> 500L;
-            default -> 250L;
-        };
-    }
     private final UUID uuid;
     private final DynamicMinimapSetting settings;
     /** Base logical UI size. World/pan/marker math remains in this coordinate space. */
@@ -252,11 +242,6 @@ public final class DynamicMinimapHud extends CustomUIHud {
     private int bufferPixels;
     /** Base logical size of the self arrow. */
     private int selfSize;
-    /**
-     * Mutable presentation-only scale. Kept separate from the copied settings so
-     * scale changes can be applied to the existing HUD without recreating it.
-     */
-    private int interfaceScalePercent;
     private final String slug;
     private String maskFile;
     private final String blankPath;
@@ -269,15 +254,15 @@ public final class DynamicMinimapHud extends CustomUIHud {
     private int terrainPixels;
     private volatile boolean built = false;
     private boolean terrainShown = false;
-    private int hudPositionX;
-    private int hudPositionY;
-    private int infoPanelPosition;
     private int panLeft = 0;
     private int panTop = 0;
-    private String coordsText = "X: ?  Y: ?  Z: ?";
-    private String compassText = "N 0 deg";
-    private String clockText = "Sun 06:00";
-    private String biomeText = "Biome: unknown";
+    // Readout texts before the first tick; publishOverlayAsset recognises this initial state.
+    private static final String INITIAL_COORDS = "X: ?  Y: ?  Z: ?", INITIAL_COMPASS = "N 0 deg",
+            INITIAL_CLOCK = "Sun 06:00", INITIAL_BIOME = "Biome: unknown";
+    private String coordsText = INITIAL_COORDS;
+    private String compassText = INITIAL_COMPASS;
+    private String clockText = INITIAL_CLOCK;
+    private String biomeText = INITIAL_BIOME;
 
     public DynamicMinimapHud(PlayerRef playerRef, DynamicMinimapSetting settings,
                              Consumer<Runnable> worldExecute, java.util.function.BooleanSupplier renderingAllowed) {
@@ -288,14 +273,10 @@ public final class DynamicMinimapHud extends CustomUIHud {
         this.uuid = playerRef.getUuid();
         this.settings = settings.copy();
         this.settings.normalize();
-        this.hudPositionX = this.settings.hudPositionX;
-        this.hudPositionY = this.settings.hudPositionY;
-        this.infoPanelPosition = this.settings.infoPanelPosition;
         this.logicalUiSize = this.settings.sizePixels;
         this.bufferPixels = DynamicMinimapRenderer.bufferPixels(this.settings);
         this.terrainPixels = this.bufferPixels;
         this.selfSize = Math.max(18, this.logicalUiSize / 10);
-        this.interfaceScalePercent = this.settings.interfaceScalePercent;
         this.slug = DapperMapUtil.playerSlug(this.uuid);
         this.blankPath = "UI/DapperMap/blank-" + this.slug + ".png";
         this.selfPath = "UI/DapperMap/self-" + this.slug + "-" + this.settings.colours.arrowKey() + "-0.png";
@@ -312,7 +293,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
     public DynamicMinimapRenderer.LiveSnapshot snapshot(byte[] terrain, double selfAngle) {
         if (!this.built || !this.terrainShown || terrain == null) return null;
         java.util.List<DynamicMinimapRenderer.PreviewMarker> markers = new java.util.ArrayList<>();
-        for (MarkerLayer layer : new MarkerLayer[]{this.mapLayer, this.threatLayer, this.playerLayer, this.edgeLayer}) {
+        for (MarkerLayer layer : this.layers) {
             for (int i = 0; i < layer.active; i++) {
                 if (!layer.visible[i] || layer.path[i] == null) continue;
                 byte[] icon = DynamicAssetPublisher.markerBytes(this.uuid, layer.path[i]);
@@ -343,16 +324,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
 
     /** Populate the renderer's shared mask cache before the first world-thread HUD tick. */
     public static void prepareStaticAssets(DynamicMinimapSetting settings) {
-        for (int resolution : new int[]{256, 320, 384, 448, 512, 1024}) {
-            for (int shape : new int[]{DynamicMinimapSetting.SHAPE_SQUARE,
-                    DynamicMinimapSetting.SHAPE_CIRCLE}) {
-                DynamicMinimapSetting candidate = settings.copy();
-                candidate.textureResolution = resolution;
-                candidate.shape = shape;
-                candidate.normalize();
-                rememberHash(DynamicMinimapRenderer.renderShapeMask(candidate));
-            }
-        }
+        forEachMask(settings, candidate -> rememberHash(DynamicMinimapRenderer.renderShapeMask(candidate)));
         rememberHash(DynamicMinimapRenderer.renderBlank());
         DynamicMinimapSetting normalized = settings.copy();
         normalized.normalize();
@@ -360,12 +332,37 @@ public final class DynamicMinimapHud extends CustomUIHud {
         byte[][] arrows = DynamicMinimapRenderer.selfArrows(normalized.colours);
         rememberArrowHashes(arrows); // Every heading, so locator deliveries never hash on the world thread.
         var overlay = initialOverlay(normalized); // Includes frame/font setup and PNG encoding off the world thread.
-        if (overlay != null) { rememberHash(overlay.readout()); rememberHash(overlay.frame()); rememberHash(overlay.bezel()); }
+        rememberParts(overlay);
     }
 
     /** Hashes a cached image here (render pool) so the world thread's delivery finds its hash ready. */
     private static void rememberHash(byte[] png) {
         if (png != null && png.length > 0) DynamicAssetPublisher.rememberedHash(png);
+    }
+
+    /** {@link #rememberHash} for each overlay part (null parts are skipped). */
+    private static void rememberParts(DynamicMinimapRenderer.NativeHudParts parts) {
+        if (parts == null) return;
+        rememberHash(parts.readout());
+        rememberHash(parts.frame());
+        rememberHash(parts.bezel());
+    }
+
+    /**
+     * Settings for every clip mask the client may be asked to show (each texture resolution in
+     * both shapes), based on {@code settings}. Shape and resolution changes then never need a
+     * new common asset (see deliverStaticAssets).
+     */
+    private static void forEachMask(DynamicMinimapSetting settings, Consumer<DynamicMinimapSetting> action) {
+        for (int resolution : DynamicMinimapSetting.TEXTURE_RESOLUTIONS) {
+            for (int shape : new int[]{DynamicMinimapSetting.SHAPE_SQUARE, DynamicMinimapSetting.SHAPE_CIRCLE}) {
+                DynamicMinimapSetting candidate = settings.copy();
+                candidate.textureResolution = resolution;
+                candidate.shape = shape;
+                candidate.normalize();
+                action.accept(candidate);
+            }
+        }
     }
 
     /** Hashes all locator headings of one colour set (render pool; already-hashed arrays are a map hit). */
@@ -400,29 +397,16 @@ public final class DynamicMinimapHud extends CustomUIHud {
         // Register every selectable shape/resolution combination before the one
         // initial common-assets rebuild. Future shape and texture-resolution
         // changes can then swap paths without rebuilding an open settings page.
-        for (int resolution : new int[]{256, 320, 384, 448, 512, 1024}) {
-            for (int shape : new int[]{
-                    DynamicMinimapSetting.SHAPE_SQUARE,
-                    DynamicMinimapSetting.SHAPE_CIRCLE}) {
-                if (resolution == this.settings.textureResolution
-                        && shape == this.settings.shape) {
-                    continue;
-                }
-
-                DynamicMinimapSetting maskSettings = this.settings.copy();
-                maskSettings.textureResolution = resolution;
-                maskSettings.shape = shape;
-                maskSettings.normalize();
-                byte[] candidate = DynamicMinimapRenderer.renderShapeMask(maskSettings);
-                if (candidate != null) {
-                    DynamicAssetPublisher.deliverShared( // Cached mask bytes: remembered hash.
-                            this.ownerRef,
-                            "UI/Custom/" + maskFileFor(maskSettings),
-                            candidate
-                    );
-                }
+        forEachMask(this.settings, maskSettings -> {
+            // The current mask is sent last, with the one common-assets rebuild.
+            if (maskSettings.textureResolution == this.settings.textureResolution
+                    && maskSettings.shape == this.settings.shape) return;
+            byte[] candidate = DynamicMinimapRenderer.renderShapeMask(maskSettings);
+            if (candidate != null) {
+                DynamicAssetPublisher.deliverShared( // Cached mask bytes: remembered hash.
+                        this.ownerRef, "UI/Custom/" + maskFileFor(maskSettings), candidate);
             }
-        }
+        });
 
         byte[] mask = DynamicMinimapRenderer.renderShapeMask(this.settings);
         if (mask != null) {
@@ -501,10 +485,9 @@ public final class DynamicMinimapHud extends CustomUIHud {
     }
 
     /**
-     * Swaps only the compass/frame asset. Used by player-up rotation mode so the
-     * compass markings track the rotated terrain without rebuilding the HUD.
+     * Publishes a pre-rendered compass frame in the same command batch as its accepted terrain,
+     * so player-up rotation swaps only the frame asset without rebuilding the HUD.
      */
-    /** Publish a pre-rendered frame in the same command batch as its accepted terrain. */
     public boolean acceptTerrainFrame(double angle, DynamicAssetPublisher.PreparedAsset prepared) {
         if (!this.overlayWorkAllowed() || prepared == null) return false;
         String path = this.publishPart(this.framePublications, prepared);
@@ -568,7 +551,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
      * common assets. All supported mask paths are registered during initial load.
      */
     public void setTextureResolution(int resolution) {
-        int normalized = Math.max(256, Math.min(1024, resolution));
+        int normalized = DapperMapUtil.clamp(resolution, DynamicMinimapSetting.RESOLUTION_MIN, DynamicMinimapSetting.RESOLUTION_MAX);
         if (this.settings.textureResolution == normalized) {
             return;
         }
@@ -589,10 +572,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
 
     /** Force the next marker update to rebind client asset paths after teleportation. */
     public void invalidateMarkerSlots() {
-        this.mapLayer.forget();
-        this.threatLayer.forget();
-        this.playerLayer.forget();
-        this.edgeLayer.forget();
+        for (MarkerLayer layer : this.layers) layer.forget();
     }
 
     /**
@@ -810,8 +790,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
     }
 
     public void setInfoTextAlignment(int alignment) {
-        int normalized = Math.max(DynamicMinimapSetting.INFO_ALIGN_LEFT,
-                Math.min(DynamicMinimapSetting.INFO_ALIGN_RIGHT, alignment));
+        int normalized = DapperMapUtil.clamp(alignment, DynamicMinimapSetting.INFO_ALIGN_LEFT, DynamicMinimapSetting.INFO_ALIGN_RIGHT);
 
         if (this.settings.infoPanelTextAlignment == normalized) return;
         this.settings.infoPanelTextAlignment = normalized;
@@ -822,40 +801,28 @@ public final class DynamicMinimapHud extends CustomUIHud {
         }
     }
 
+    /** Text selectors of the four readout values, indexed like the rows (coordinates, bearing, time, region). */
+    private static final String[] READOUT_TEXT = {"#WayfinderMmRoot #WayfinderMmReadout0.Text",
+            "#WayfinderMmRoot #WayfinderMmReadout1.Text", "#WayfinderMmRoot #WayfinderMmReadout2.Text",
+            "#WayfinderMmRoot #WayfinderMmReadout3.Text"};
+
+    /** Updates the readout values; only changed ones whose label is on the client are sent. */
     public void setStatus(String coords, String compass, String clock, String biome) {
+        String[] values = {coords, compass, clock, biome};
+        String[] current = {this.coordsText, this.compassText, this.clockText, this.biomeText};
         UICommandBuilder builder = null;
-        if (coords != null && !coords.equals(this.coordsText)) {
-            this.coordsText = coords;
-            if (this.built && (this.shownReadouts & 1) != 0) {
+        for (int row = 0; row < 4; row++) {
+            if (values[row] == null || values[row].equals(current[row])) continue;
+            current[row] = values[row];
+            if (this.built && (this.shownReadouts & (1 << row)) != 0) {
                 if (builder == null) builder = new UICommandBuilder();
-                builder.set("#WayfinderMmRoot #WayfinderMmReadout0.Text", this.coordsText);
+                builder.set(READOUT_TEXT[row], values[row]);
             }
         }
-
-        if (compass != null && !compass.equals(this.compassText)) {
-            this.compassText = compass;
-            if (this.built && (this.shownReadouts & 2) != 0) {
-                if (builder == null) builder = new UICommandBuilder();
-                builder.set("#WayfinderMmRoot #WayfinderMmReadout1.Text", this.compassText);
-            }
-        }
-
-        if (clock != null && !clock.equals(this.clockText)) {
-            this.clockText = clock;
-            if (this.built && (this.shownReadouts & 4) != 0) {
-                if (builder == null) builder = new UICommandBuilder();
-                builder.set("#WayfinderMmRoot #WayfinderMmReadout2.Text", this.clockText);
-            }
-        }
-
-        if (biome != null && !biome.equals(this.biomeText)) {
-            this.biomeText = biome;
-            if (this.built && (this.shownReadouts & 8) != 0) {
-                if (builder == null) builder = new UICommandBuilder();
-                builder.set("#WayfinderMmRoot #WayfinderMmReadout3.Text", this.biomeText);
-            }
-        }
-
+        this.coordsText = current[0];
+        this.compassText = current[1];
+        this.clockText = current[2];
+        this.biomeText = current[3];
         if (builder != null) this.update(false, builder);
     }
 
@@ -879,10 +846,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
             this.terrainShown = false;
 
             this.invalidateMarkerSlots();
-            this.mapLayer.active = 0;
-            this.threatLayer.active = 0;
-            this.playerLayer.active = 0;
-            this.edgeLayer.active = 0;
+            for (MarkerLayer layer : this.layers) layer.active = 0;
         }
     }
 
@@ -896,23 +860,15 @@ public final class DynamicMinimapHud extends CustomUIHud {
             int yPercent,
             int panelPosition
     ) {
-        int x = Math.max(0, Math.min(100, xPercent));
-        int y = Math.max(0, Math.min(100, yPercent));
-        int panel = Math.max(
-                DynamicMinimapSetting.INFO_BELOW,
-                Math.min(DynamicMinimapSetting.INFO_RIGHT, panelPosition)
-        );
+        int x = DapperMapUtil.clamp(xPercent, DynamicMinimapSetting.POSITION_MIN, DynamicMinimapSetting.POSITION_MAX);
+        int y = DapperMapUtil.clamp(yPercent, DynamicMinimapSetting.POSITION_MIN, DynamicMinimapSetting.POSITION_MAX);
+        int panel = DapperMapUtil.clamp(panelPosition, DynamicMinimapSetting.INFO_BELOW, DynamicMinimapSetting.INFO_RIGHT);
+        if (x == this.settings.hudPositionX && y == this.settings.hudPositionY
+                && panel == this.settings.infoPanelPosition) return;
 
-        if (x == this.hudPositionX
-                && y == this.hudPositionY
-                && panel == this.infoPanelPosition) {
-            return;
-        }
-
-        boolean panelMoved = panel != this.infoPanelPosition;
-        this.hudPositionX = x;
-        this.hudPositionY = y;
-        this.infoPanelPosition = panel;
+        boolean panelMoved = panel != this.settings.infoPanelPosition;
+        this.settings.hudPositionX = x;
+        this.settings.hudPositionY = y;
         this.settings.infoPanelPosition = panel;
 
         if (this.built) {
@@ -931,7 +887,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
      * the session delivers a freshly rendered buffer for the new logical size.
      */
     public void setMapSize(int newSize) {
-        int normalized = Math.max(120, Math.min(360, newSize));
+        int normalized = DapperMapUtil.clamp(newSize, DynamicMinimapSetting.SIZE_MIN, DynamicMinimapSetting.SIZE_MAX);
         if (normalized == this.logicalUiSize) {
             return;
         }
@@ -968,13 +924,12 @@ public final class DynamicMinimapHud extends CustomUIHud {
      * converted only when Anchor values are emitted.
      */
     public void setInterfaceScale(int percent) {
-        int normalized = Math.max(75, Math.min(160, percent));
-        if (normalized == this.interfaceScalePercent) {
+        int normalized = DapperMapUtil.clamp(percent, DynamicMinimapSetting.SCALE_MIN, DynamicMinimapSetting.SCALE_MAX);
+        if (normalized == this.settings.interfaceScalePercent) {
             return;
         }
 
-        this.interfaceScalePercent = normalized;
-        // Marker deltas and rebuilt markup must use the same presentation scale.
+        // Marker deltas and rebuilt markup both read this presentation scale.
         this.settings.interfaceScalePercent = normalized;
 
         if (this.built) {
@@ -1008,9 +963,9 @@ public final class DynamicMinimapHud extends CustomUIHud {
         StringBuilder out = new StringBuilder(5600);
         out.append("Group #WayfinderMmPositionLayout { Anchor: (Full: 0); LayoutMode: Top; ");
 
-        if (this.hudPositionY > 0) {
+        if (this.settings.hudPositionY > 0) {
             out.append("Group #WayfinderMmTopSpacer { FlexWeight: ")
-                    .append(this.hudPositionY)
+                    .append(this.settings.hudPositionY)
                     .append("; } ");
         }
 
@@ -1018,9 +973,9 @@ public final class DynamicMinimapHud extends CustomUIHud {
                 .append(widgetHeight)
                 .append("); LayoutMode: Left; ");
 
-        if (this.hudPositionX > 0) {
+        if (this.settings.hudPositionX > 0) {
             out.append("Group #WayfinderMmLeftSpacer { FlexWeight: ")
-                    .append(this.hudPositionX)
+                    .append(this.settings.hudPositionX)
                     .append("; } ");
         }
 
@@ -1055,17 +1010,17 @@ public final class DynamicMinimapHud extends CustomUIHud {
         this.appendReadoutLabels(out);
         out.append("} ");
 
-        if (this.hudPositionX < 100) {
+        if (this.settings.hudPositionX < DynamicMinimapSetting.POSITION_MAX) {
             out.append("Group #WayfinderMmRightSpacer { FlexWeight: ")
-                    .append(100 - this.hudPositionX)
+                    .append(DynamicMinimapSetting.POSITION_MAX - this.settings.hudPositionX)
                     .append("; } ");
         }
 
         out.append("} ");
 
-        if (this.hudPositionY < 100) {
+        if (this.settings.hudPositionY < DynamicMinimapSetting.POSITION_MAX) {
             out.append("Group #WayfinderMmBottomSpacer { FlexWeight: ")
-                    .append(100 - this.hudPositionY)
+                    .append(DynamicMinimapSetting.POSITION_MAX - this.settings.hudPositionY)
                     .append("; } ");
         }
 
@@ -1073,10 +1028,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
         return out.toString();
     }
 
-    /**
-     * Builds the map subtree at the origin determined by the selected
-     * information-panel side.
-     */
+    /** Whether readout row {@code row} (coordinates, bearing, world time, region) is shown. */
     private boolean readoutEnabled(int row) {
         return DynamicMinimapRenderer.readoutShown(this.settings, row);
     }
@@ -1098,7 +1050,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
                 : position == DynamicMinimapSetting.INFO_ABOVE ? 0 : Math.max(0, (this.logicalUiSize - this.readoutHeight()) / 2);
         String[] values = {this.coordsText, this.compassText, this.clockText, this.biomeText};
         DynamicMinimapColours.Key[] colours = {COORDS_TEXT, COMPASS_TEXT, CLOCK_TEXT, BIOME_TEXT};
-        String alignment = switch (this.settings.infoPanelTextAlignment) { case 1 -> "Center"; case 2 -> "End"; default -> "Start"; };
+        String alignment = DapperMapUtil.alignmentName(this.settings.infoPanelTextAlignment);
         // Brand label: native text (previously painted into the panel PNG, which the client
         // stretched and blurred). Same insets/position as the old raster version.
         int brandCurve = this.settings.isCircle() && side ? 6 : 0;
@@ -1118,15 +1070,10 @@ public final class DynamicMinimapHud extends CustomUIHud {
             this.appendPanelLabel(out, "WayfinderMmHeading" + i, DynamicMinimapRenderer.READOUT_HEADINGS[i], panelX + left,
                     READOUT_WIDTH - left - right, cursor + 3, cursor + 18, 9, 0.95F, false,
                     this.settings.colours.hex(INFO_HEADERS), alignment);
-            out.append("Label #WayfinderMmReadout").append(i).append(" { Anchor: (Left: ")
-                    .append(this.displayCoordinate(panelX + left)).append(", Top: ")
-                    .append(this.displayCoordinate(cursor + 19)).append(", Width: ")
-                    .append(this.displaySize(READOUT_WIDTH - left - right)).append(", Height: ")
-                    .append(this.displayCoordinate(cursor + 38) - this.displayCoordinate(cursor + 19))
-                    .append("); Text: \"").append(DapperMapUtil.escapeUiText(values[i]))
-                    .append("\"; Style: (FontSize: ").append(this.displaySize(11)).append(", TextColor: ")
-                    .append(this.settings.colours.hex(colours[i])).append(", HorizontalAlignment: ")
-                    .append(alignment).append(", VerticalAlignment: Center); } ");
+            // The value itself: updated by setStatus with Text sets only.
+            this.appendPanelLabel(out, "WayfinderMmReadout" + i, values[i], panelX + left,
+                    READOUT_WIDTH - left - right, cursor + 19, cursor + 38, 11, 0.0F, false,
+                    this.settings.colours.hex(colours[i]), alignment);
             cursor += 43;
         }
     }
@@ -1141,18 +1088,13 @@ public final class DynamicMinimapHud extends CustomUIHud {
         if (!this.cardinalLabelsInMarkup) return;
         double angle = this.displayedFrameAngle;
         this.cardinalBucketShown = DynamicMinimapRenderer.rotationBucket(angle);
-        boolean dashes = this.settings.showCardinalDashes;
-        int font = this.displaySize((int)Math.round(DynamicMinimapRenderer.cardinalFontSize(dashes)
+        int font = this.displaySize((int)Math.round(DynamicMinimapRenderer.CARDINAL_FONT_SIZE
                 * this.logicalUiSize / (double)DynamicMinimapRenderer.STATIC_ASSET_LOGICAL_SIZE));
         String colour = this.settings.colours.hex(CARDINAL_TEXT);
         for (int i = 0; i < 4; i++) {
-            int[] box = this.cardinalBox(i, angle);
-            out.append("Label #WayfinderMmCardinal").append(i).append(" { Anchor: (Left: ").append(box[0])
-                    .append(", Top: ").append(box[1]).append(", Width: ").append(box[2])
-                    .append(", Height: ").append(box[2]).append("); Text: \"")
-                    .append(DynamicMinimapRenderer.CARDINAL_LETTERS[i])
-                    .append("\"; Style: (FontSize: ").append(font).append(", TextColor: ").append(colour)
-                    .append(", RenderBold: true, HorizontalAlignment: Center, VerticalAlignment: Center); } ");
+            int[] box = this.cardinalBox(i, angle); // Already in display units.
+            DapperMapUtil.appendLabel(out, "WayfinderMmCardinal" + i, box[0], box[1], box[2], box[2],
+                    DynamicMinimapRenderer.CARDINAL_LETTERS[i], font, colour, true, 0.0D, "Center");
         }
     }
 
@@ -1160,7 +1102,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
     private int[] cardinalBox(int index, double angle) {
         boolean dashes = this.settings.showCardinalDashes;
         double[] centre = DynamicMinimapRenderer.cardinalLetterCentre(index, angle, this.settings.isCircle(), dashes);
-        int side = (int)Math.round(DynamicMinimapRenderer.cardinalBadgeSize(dashes) * this.logicalUiSize / (double)DynamicMinimapRenderer.STATIC_ASSET_LOGICAL_SIZE);
+        int side = (int)Math.round(DynamicMinimapRenderer.CARDINAL_BADGE_SIZE * this.logicalUiSize / (double)DynamicMinimapRenderer.STATIC_ASSET_LOGICAL_SIZE);
         int left = (int)Math.round(centre[0] * this.logicalUiSize - side / 2.0D);
         int top = (int)Math.round(centre[1] * this.logicalUiSize - side / 2.0D);
         return new int[]{this.mapOriginX() + this.displayCoordinate(left),
@@ -1192,20 +1134,14 @@ public final class DynamicMinimapHud extends CustomUIHud {
     private void appendPanelLabel(StringBuilder out, String id, String text, int left, int width,
                                   int top, int bottom, int fontSize, float letterSpacing, boolean bold,
                                   String colourHex, String alignment) {
-        float spacing = Math.round(letterSpacing * this.interfaceScalePercent / 10.0F) / 10.0F;
-        out.append("Label #").append(id).append(" { Anchor: (Left: ")
-                .append(this.displayCoordinate(left)).append(", Top: ")
-                .append(this.displayCoordinate(top)).append(", Width: ")
-                .append(this.displaySize(width)).append(", Height: ")
-                .append(this.displayCoordinate(bottom) - this.displayCoordinate(top))
-                .append("); Text: \"").append(text)
-                .append("\"; Style: (FontSize: ").append(this.displaySize(fontSize))
-                .append(", TextColor: ").append(colourHex);
-        if (bold) out.append(", RenderBold: true");
-        if (spacing > 0.0F) out.append(", LetterSpacing: ").append(spacing);
-        out.append(", HorizontalAlignment: ").append(alignment).append(", VerticalAlignment: Center); } ");
+        // Letter spacing scales with the UI, rounded to 0.1 (tenths, so double and float print alike).
+        int tenths = Math.round(letterSpacing * this.settings.interfaceScalePercent / 10.0F);
+        DapperMapUtil.appendLabel(out, id, this.displayCoordinate(left), this.displayCoordinate(top),
+                this.displaySize(width), this.displayCoordinate(bottom) - this.displayCoordinate(top),
+                text, this.displaySize(fontSize), colourHex, bold, tenths / 10.0D, alignment);
     }
 
+    /** Builds the map subtree at the origin determined by the selected information-panel side. */
     private String buildMapMarkup() {
         int displayUiSize = this.displaySize(this.logicalUiSize);
         int displayBuffer = this.displaySize(this.bufferPixels);
@@ -1263,13 +1199,6 @@ public final class DynamicMinimapHud extends CustomUIHud {
                 .append("\"; Visible: true; } ");
     }
 
-    /**
-     * Static visual assets are intentionally independent of logical map size.
-     *
-     * Hytale stretches the mask/frame AssetImage to the current UI Anchor, so a
-     * circle/square mask and nautical frame can be reused at every map size.
-     * This avoids introducing a new mask resource during live map-size changes.
-     */
     /** Edge icons sit above the bezel and outside the terrain aperture mask. */
     private void appendEdgeLayer(StringBuilder out) {
         int mapLeft = this.mapOriginX(), mapTop = this.mapOriginY();
@@ -1295,6 +1224,13 @@ public final class DynamicMinimapHud extends CustomUIHud {
         }
     }
 
+    /**
+     * Static visual assets are intentionally independent of logical map size.
+     *
+     * Hytale stretches the mask/frame AssetImage to the current UI Anchor, so a
+     * circle/square mask and nautical frame can be reused at every map size.
+     * This avoids introducing a new mask resource during live map-size changes.
+     */
     private void updateStaticAssetPaths() {
         String shape = this.settings.isCircle() ? "circle" : "square";
         // The clip mask depends only on shape and texture resolution.
@@ -1352,8 +1288,8 @@ public final class DynamicMinimapHud extends CustomUIHud {
         this.overlayDirty = false;
         this.updateStaticAssetPaths();
         boolean initial = this.frameAngle == 0.0D
-                && "X: ?  Y: ?  Z: ?".equals(this.coordsText) && "N 0 deg".equals(this.compassText)
-                && "Sun 06:00".equals(this.clockText) && "Biome: unknown".equals(this.biomeText);
+                && INITIAL_COORDS.equals(this.coordsText) && INITIAL_COMPASS.equals(this.compassText)
+                && INITIAL_CLOCK.equals(this.clockText) && INITIAL_BIOME.equals(this.biomeText);
         long now = System.currentTimeMillis();
         boolean inline = allowInlineRender || this.overlayPrepareFailed
                 || (this.overlayPendingSinceMs != 0L && now - this.overlayPendingSinceMs > OVERLAY_INLINE_AFTER_MS);
@@ -1411,7 +1347,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
                 else {
                     // Hash the parts here, so publishOverlayAsset's prepareShared finds them remembered
                     // instead of running SHA-256 on the world thread.
-                    rememberHash(parts.readout()); rememberHash(parts.frame()); rememberHash(parts.bezel());
+                    rememberParts(parts);
                     this.preparedOverlay = new PreparedOverlay(key, parts);
                 }
             } finally {
@@ -1423,23 +1359,17 @@ public final class DynamicMinimapHud extends CustomUIHud {
     private String publishPart(DynamicAssetPublisher.ImagePublicationCache publications,
                                DynamicAssetPublisher.PreparedAsset prepared) {
         if (prepared == null) return null;
-        String existing = publications.pathFor(prepared.hash());
-        if (existing == null) {
-            var publication = prepared.withPath(publications.nonActivePath(prepared.path()));
-            if (!DynamicAssetPublisher.deliver(this.ownerRef, publication)) return null;
-            publications.remember(publication.path(), publication.hash());
-            existing = publication.path();
-        }
+        String path = publications.publish(this.ownerRef, prepared);
         // Every caller shows the returned path in the same world task.
-        publications.shown(existing);
-        return existing;
+        if (path != null) publications.shown(path);
+        return path;
     }
 
     /** Render frame changes outside the world tick; native readouts use text deltas. */
     private void queueOverlayRender() {
         if (!this.overlayDirty || this.overlayRenderQueued || !this.built || !this.renderingAllowed.getAsBoolean()) return;
         long now = System.currentTimeMillis();
-        if (now - this.lastOverlaySubmitMs < this.overlayIntervalMs()) return;
+        if (now - this.lastOverlaySubmitMs < this.settings.overlayIntervalMs()) return;
         this.overlayDirty = false;
         this.overlayRenderQueued = true;
         this.overlayRevision++;
@@ -1472,29 +1402,21 @@ public final class DynamicMinimapHud extends CustomUIHud {
                         String publishedFrame = this.publishPart(this.framePublications, preparedFrame);
                         String publishedBezel = this.publishPart(this.bezelPublications, preparedBezel);
                         UICommandBuilder builder = new AnchorCommandBuilder();
+                        // Each published part is shown (AssetPath swapped only when it changed).
                         boolean changed = false;
                         if (publishedBezel != null) {
                             this.bezelPath = publishedBezel;
-                            if (!publishedBezel.equals(this.displayedBezelPath)) {
-                                builder.set("#WayfinderMmRoot #WayfinderMmBezel.AssetPath", publishedBezel);
-                                changed = true;
-                            }
+                            changed |= swapPart(builder, "#WayfinderMmRoot #WayfinderMmBezel.AssetPath", publishedBezel, this.displayedBezelPath);
                             this.displayedBezelPath = publishedBezel;
                         }
                         if (publishedPath != null) {
                             this.overlayPath = publishedPath;
-                            if (!publishedPath.equals(this.displayedOverlayPath)) {
-                                builder.set("#WayfinderMmRoot #WayfinderMmOverlay.AssetPath", publishedPath);
-                                changed = true;
-                            }
+                            changed |= swapPart(builder, "#WayfinderMmRoot #WayfinderMmOverlay.AssetPath", publishedPath, this.displayedOverlayPath);
                             this.displayedOverlayPath = publishedPath;
                         }
                         if (publishedFrame != null) {
                             this.framePath = publishedFrame;
-                            if (!publishedFrame.equals(this.displayedFramePath)) {
-                                builder.set("#WayfinderMmRoot #WayfinderMmFrame.AssetPath", publishedFrame);
-                                changed = true;
-                            }
+                            changed |= swapPart(builder, "#WayfinderMmRoot #WayfinderMmFrame.AssetPath", publishedFrame, this.displayedFramePath);
                             this.displayedFramePath = publishedFrame;
                             changed |= this.cardinalFrameShown(builder, angle); // Labels follow the ring.
                         }
@@ -1505,7 +1427,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
             } catch (RuntimeException failure) {
                 this.overlayDirty = true;
                 this.overlayRenderQueued = false;
-                if (!DynamicMinimapSession.isStoppedWorldException(failure)) throw failure;
+                if (!DapperMapUtil.isStoppedWorld(failure)) throw failure;
             }
         })) {
             this.overlayRenderQueued = false;
@@ -1513,6 +1435,13 @@ public final class DynamicMinimapHud extends CustomUIHud {
         } else {
             this.lastOverlaySubmitMs = now;
         }
+    }
+
+    /** Adds an AssetPath Set when {@code published} differs from what the client shows; true when added. */
+    private static boolean swapPart(UICommandBuilder builder, String selector, String published, String displayed) {
+        if (published.equals(displayed)) return false;
+        builder.set(selector, published);
+        return true;
     }
 
     private boolean overlayWorkAllowed() {
@@ -1620,7 +1549,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
 
     private int mapOriginX() {
         if (!this.settings.infoPanelShown()) return 0;
-        if (this.infoPanelPosition == DynamicMinimapSetting.INFO_LEFT) {
+        if (this.settings.infoPanelPosition == DynamicMinimapSetting.INFO_LEFT) {
             return this.displaySize(READOUT_WIDTH + this.readoutGap());
         }
         return this.isSideRail() ? 0 : this.displayCoordinate(
@@ -1629,10 +1558,10 @@ public final class DynamicMinimapHud extends CustomUIHud {
 
     private int mapOriginY() {
         if (!this.settings.infoPanelShown()) return 0;
-        if (this.infoPanelPosition == DynamicMinimapSetting.INFO_ABOVE) {
+        if (this.settings.infoPanelPosition == DynamicMinimapSetting.INFO_ABOVE) {
             return this.displaySize(this.readoutHeight() + this.readoutGap());
         }
-        if (this.infoPanelPosition == DynamicMinimapSetting.INFO_BELOW) {
+        if (this.settings.infoPanelPosition == DynamicMinimapSetting.INFO_BELOW) {
             return 0;
         }
         return this.displayCoordinate(Math.max(0, (this.readoutHeight() - this.logicalUiSize) / 2));
@@ -1643,8 +1572,8 @@ public final class DynamicMinimapHud extends CustomUIHud {
     }
 
     private boolean isSideRail() {
-        return this.infoPanelPosition == DynamicMinimapSetting.INFO_LEFT
-                || this.infoPanelPosition == DynamicMinimapSetting.INFO_RIGHT;
+        return this.settings.infoPanelPosition == DynamicMinimapSetting.INFO_LEFT
+                || this.settings.infoPanelPosition == DynamicMinimapSetting.INFO_RIGHT;
     }
 
     private int readoutGap() { return readoutGap(this.settings); }
@@ -1654,14 +1583,14 @@ public final class DynamicMinimapHud extends CustomUIHud {
         return settings.isCircle() ? CIRCLE_READOUT_GAP : SQUARE_READOUT_GAP;
     }
 
-    /** Logical HUD value in display units (same rounding as DynamicMinimapSetting, used for marker updates). */
+    /** Logical HUD value in display units (the settings' own conversion, also used for marker updates). */
     private int displayCoordinate(int logicalValue) {
-        return DapperMapUtil.scaled(logicalValue, this.interfaceScalePercent);
+        return this.settings.displayCoordinate(logicalValue);
     }
 
     /** Positive logical size in display units (0 stays 0, anything else at least 1). */
     private int displaySize(int logicalValue) {
-        return logicalValue <= 0 ? 0 : Math.max(1, this.displayCoordinate(logicalValue));
+        return this.settings.displaySize(logicalValue);
     }
 
     private static final String PAN_ANCHOR = "#WayfinderMmRoot #WayfinderMmClip #WayfinderMmPan.Anchor";
@@ -1746,18 +1675,6 @@ public final class DynamicMinimapHud extends CustomUIHud {
         public final boolean threat;
         /** Another player: placed in the player layer, above every creature. */
         public final boolean player;
-
-        public Slot(String path, int left, int top, int size) {
-            this(path, left, top, size, false, false);
-        }
-
-        public Slot(String path, int left, int top, int size, boolean fixed) {
-            this(path, left, top, size, fixed, false);
-        }
-
-        public Slot(String path, int left, int top, int size, boolean fixed, boolean threat) {
-            this(path, left, top, size, fixed, threat, false);
-        }
 
         public Slot(String path, int left, int top, int size, boolean fixed, boolean threat, boolean player) {
             this.path = path;

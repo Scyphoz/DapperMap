@@ -91,7 +91,7 @@ public final class DapperMapSettingsPage
     /** Player reset-to-defaults must remove the override only when Apply is pressed. */
     private boolean draftResetsPlayerOverride = false;
     private boolean betterMapCaveAvailable = false;
-    /** Admin page only: unsaved server limits {speed, resolution, zoom, creatures}; saved on Apply. */
+    /** Admin page only: unsaved server limits, indexed by DapperMapConfig.Limit ordinal; saved on Apply. */
     private int[] draftLimits;
     /**
      * Retained for source compatibility. The authoritative definition now lives in
@@ -157,7 +157,7 @@ public final class DapperMapSettingsPage
                     ? this.sessions.getAdminDefaults(this.config)
                     : this.sessions.getSettings(this.playerRef.getUuid(), this.config)).copy();
         }
-        if (this.adminMode && this.draftLimits == null) this.draftLimits = this.savedLimits();
+        if (this.adminMode && this.draftLimits == null) this.draftLimits = this.config.limits();
         if (this.previewSnapshot == null) this.previewSnapshot = this.sessions.capturePreview(this.playerRef.getUuid());
         DynamicMinimapSetting settings = this.draftSettings;
         this.betterMapCaveAvailable = BetterMapIntegration.isCaveModeEnabled(
@@ -427,7 +427,7 @@ public final class DapperMapSettingsPage
                 });
             } catch (RuntimeException failure) {
                 this.previewQueued.set(false);
-                if (!DynamicMinimapSession.isStoppedWorldException(failure)) throw failure;
+                if (!dev.scyphoz.dappermap.util.DapperMapUtil.isStoppedWorld(failure)) throw failure;
             }
         })) this.previewQueued.set(false);
     }
@@ -453,9 +453,7 @@ public final class DapperMapSettingsPage
         }
         if (event.colour != null && VISIBLE_COLOUR_KEYS.contains(this.selectedColour)
                 && this.hasSettingPermission(SettingPermissions.forColour(this.selectedColour))) {
-            int rgb = (Byte.toUnsignedInt(event.colour.red) << 16)
-                    | (Byte.toUnsignedInt(event.colour.green) << 8)
-                    | Byte.toUnsignedInt(event.colour.blue);
+            int rgb = dev.scyphoz.dappermap.util.DapperMapUtil.rgb(event.colour);
             if (draft.colours.rgb(this.selectedColour) != rgb) {
                 draft.colours = draft.colours.with(this.selectedColour, rgb);
                 changed = true;
@@ -484,16 +482,9 @@ public final class DapperMapSettingsPage
             // At least 4: the Position tab draws the whole HUD small (smaller text is unreadable).
             int font = Math.max(4, (int)Math.round(text.fontSize() * PREVIEW_SCALE_Y));
             double spacing = Math.round(text.letterSpacing() * PREVIEW_SCALE_X * 10.0D) / 10.0D;
-            out.append("Label #").append(text.id()).append(" { Anchor: (Left: ").append(left)
-                    .append(", Top: ").append(top).append(", Width: ").append(width)
-                    .append(", Height: ").append(height).append("); Text: \"")
-                    .append(dev.scyphoz.dappermap.util.DapperMapUtil.escapeUiText(text.text())).append("\"; Style: (FontSize: ").append(font)
-                    .append(", TextColor: ").append(text.colour());
-            if (text.bold()) out.append(", RenderBold: true");
-            if (spacing > 0.0D) out.append(", LetterSpacing: ").append(spacing);
-            out.append(", HorizontalAlignment: ").append(switch (text.alignment()) {
-                        case 1 -> "Center"; case 2 -> "End"; default -> "Start"; })
-                    .append(", VerticalAlignment: Center); } ");
+            dev.scyphoz.dappermap.util.DapperMapUtil.appendLabel(out, text.id(), left, top, width, height,
+                    text.text(), font, text.colour(), text.bold(), spacing,
+                    dev.scyphoz.dappermap.util.DapperMapUtil.alignmentName(text.alignment()));
         }
         return out.toString();
     }
@@ -1010,9 +1001,7 @@ public final class DapperMapSettingsPage
             return;
         } else if ("colour_value".equals(action)) {
             if (event.colour == null) return;
-            int rgb = (Byte.toUnsignedInt(event.colour.red) << 16)
-                    | (Byte.toUnsignedInt(event.colour.green) << 8)
-                    | Byte.toUnsignedInt(event.colour.blue);
+            int rgb = dev.scyphoz.dappermap.util.DapperMapUtil.rgb(event.colour);
             if (settings.colours.rgb(this.selectedColour) == rgb) return;
             settings.colours = settings.colours.with(this.selectedColour, rgb);
         } else if ("colour_reset".equals(action)) {
@@ -1256,7 +1245,7 @@ public final class DapperMapSettingsPage
         };
     }
 
-    /** Keep descriptions within the text column at common UI scales. */
+    /** True when a row's control is unavailable: minimap off, a controlling setting off, or BetterMap missing. */
     private boolean isDropdownDisabled(String id, DynamicMinimapSetting settings) {
         return !settings.enabled
                 || (isInfoPanelSetting(id) && !"info_panel".equals(id) && !settings.infoPanelEnabled)
@@ -1329,12 +1318,12 @@ public final class DapperMapSettingsPage
         List<DropdownEntryInfo> entries = new ArrayList<>();
         switch (id) {
             case "zoom" -> {
-                addNumericEntries(entries, settings.zoomBlocks, 16, 256, 16, " blocks");
+                addNumericEntries(entries, settings.zoomBlocks, DynamicMinimapSetting.ZOOM_MIN, DynamicMinimapSetting.ZOOM_MAX, 16, " blocks");
                 this.markOverLimit(entries, id);
             }
-            case "size" -> addNumericEntries(entries, settings.sizePixels, 120, 360, 20, " px");
+            case "size" -> addNumericEntries(entries, settings.sizePixels, DynamicMinimapSetting.SIZE_MIN, DynamicMinimapSetting.SIZE_MAX, 20, " px");
             case "creature_limit" -> {
-                for (int limit : new int[]{16, 32, 64}) entries.add(entry(Integer.toString(limit), Integer.toString(limit)));
+                for (int limit : DynamicMinimapSetting.CREATURE_LIMITS) entries.add(entry(Integer.toString(limit), Integer.toString(limit)));
                 this.markOverLimit(entries, id);
             }
             case "creature_style" -> {
@@ -1350,8 +1339,8 @@ public final class DapperMapSettingsPage
                 entries.add(entry("Dots", "dots"));
             }
             case "vrange" -> {
-                TreeSet<Integer> values = new TreeSet<>(List.of(4));
-                for (int value = 8; value <= 256; value += 8) values.add(value);
+                TreeSet<Integer> values = new TreeSet<>(List.of(DynamicMinimapSetting.HEIGHT_RANGE_MIN));
+                for (int value = 8; value <= DynamicMinimapSetting.HEIGHT_RANGE_MAX; value += 8) values.add(value);
                 values.add(settings.mobVerticalRange);
                 for (int value : values) entries.add(entry(value + " blocks", Integer.toString(value)));
             }
@@ -1361,13 +1350,13 @@ public final class DapperMapSettingsPage
                 for (int value : values) entries.add(entry(value + "%", Integer.toString(value)));
             }
             case "texture_resolution" -> {
-                TreeSet<Integer> values = new TreeSet<>(List.of(256, 320, 384, 448, 512, 1024));
+                TreeSet<Integer> values = resolutionChoices();
                 values.add(settings.textureResolution);
                 for (int value : values) entries.add(entry(value + " px", Integer.toString(value)));
                 this.markOverLimit(entries, id);
             }
             case "speed" -> {
-                for (int value = 0; value <= 3; value++) entries.add(entry(displaySpeed(value), Integer.toString(value)));
+                for (int value = DynamicMinimapSetting.SPEED_FASTEST; value <= DynamicMinimapSetting.SPEED_SLOWEST; value++) entries.add(entry(displaySpeed(value), Integer.toString(value)));
                 this.markOverLimit(entries, id);
             }
             case "panel_position" -> {
@@ -1411,28 +1400,17 @@ public final class DapperMapSettingsPage
         return id.startsWith("limit_") || "section_limits".equals(id);
     }
 
-    /** Current saved limits as {speed, resolution, zoom, creatures}. */
-    private int[] savedLimits() {
-        return new int[]{this.config.getFastestUpdateSpeed(), this.config.getMaxTextureResolution(),
-                this.config.getMaxZoomRadius(), this.config.getMaxCreatureLimit()};
-    }
-
     /** Persists edited limits and re-clamps live minimaps; untouched limits cause no file write. */
     private void saveLimitsIfChanged() {
-        if (this.draftLimits == null || java.util.Arrays.equals(this.draftLimits, this.savedLimits())) return;
-        this.config.setLimits(this.draftLimits[0], this.draftLimits[1], this.draftLimits[2], this.draftLimits[3]);
+        if (this.draftLimits == null || java.util.Arrays.equals(this.draftLimits, this.config.limits())) return;
+        this.config.setLimits(this.draftLimits);
         DapperMap.saveConfig();
         this.sessions.refreshLiveSettings(); // Players' saved settings are not changed.
     }
 
-    private static int limitSlot(String id) {
-        return switch (id) {
-            case "limit_speed" -> 0;
-            case "limit_resolution" -> 1;
-            case "limit_zoom" -> 2;
-            case "limit_creatures" -> 3;
-            default -> -1;
-        };
+    /** "Fast", "512 px", "128 blocks" or "32": a limit value as the page shows it. */
+    private static String limitLabel(DapperMapConfig.Limit limit, int value) {
+        return limit == DapperMapConfig.Limit.SPEED ? displaySpeed(value) : value + limit.unit;
     }
 
     /** Admin dropdown for one server limit; the "no limit" value is labelled as such. */
@@ -1443,100 +1421,60 @@ public final class DapperMapSettingsPage
         builder.set(selector + " #RowDescription.Text", description(row.id));
         String dropdownSelector = selector + " #ValueDropdown";
         builder.set(dropdownSelector + ".Entries", this.limitEntries(row.id));
-        builder.set(dropdownSelector + ".Value", Integer.toString(this.draftLimits[limitSlot(row.id)]));
+        builder.set(dropdownSelector + ".Value", Integer.toString(this.draftLimits[DapperMapConfig.Limit.byAdminRow(row.id).ordinal()]));
         events.addEventBinding(CustomUIEventBindingType.ValueChanged, dropdownSelector,
                 EventData.of("Action", "dropdown_" + row.id).append("@Value", dropdownSelector + ".Value"), false);
     }
 
+    /** Admin dropdown entries for one limit: the player row's choices, with the widest marked "(no limit)". */
     private List<DropdownEntryInfo> limitEntries(String id) {
+        DapperMapConfig.Limit limit = DapperMapConfig.Limit.byAdminRow(id);
         List<DropdownEntryInfo> entries = new ArrayList<>();
-        int current = this.draftLimits[limitSlot(id)];
-        switch (id) {
-            case "limit_speed" -> {
-                for (int value = 0; value <= 3; value++)
-                    entries.add(entry(displaySpeed(value) + (value == 0 ? " (no limit)" : ""), Integer.toString(value)));
-            }
-            case "limit_resolution" -> {
-                TreeSet<Integer> values = new TreeSet<>(List.of(256, 320, 384, 448, 512, 1024));
-                values.add(current);
-                for (int value : values)
-                    entries.add(entry(value + " px" + (value == 1024 ? " (no limit)" : ""), Integer.toString(value)));
-            }
-            case "limit_zoom" -> {
-                TreeSet<Integer> values = new TreeSet<>();
-                for (int value = 16; value <= 256; value += 16) values.add(value);
-                values.add(current);
-                for (int value : values)
-                    entries.add(entry(value + " blocks" + (value == 256 ? " (no limit)" : ""), Integer.toString(value)));
-            }
-            case "limit_creatures" -> {
-                for (int value : new int[]{16, 32, 64})
-                    entries.add(entry(value + (value == 64 ? " (no limit)" : ""), Integer.toString(value)));
-            }
-            default -> { }
+        if (limit == null) return entries;
+        int current = this.draftLimits[limit.ordinal()];
+        TreeSet<Integer> values = new TreeSet<>();
+        switch (limit) {
+            case SPEED -> { for (int value = limit.min; value <= limit.max; value++) values.add(value); }
+            case RESOLUTION -> { values = resolutionChoices(); values.add(current); }
+            case ZOOM -> { for (int value = limit.min; value <= limit.max; value += 16) values.add(value); values.add(current); }
+            case CREATURES -> { for (int value : DynamicMinimapSetting.CREATURE_LIMITS) values.add(value); }
         }
+        for (int value : values)
+            entries.add(entry(limitLabel(limit, value) + (value == limit.noLimit ? " (no limit)" : ""), Integer.toString(value)));
         return entries;
     }
 
     /** Validates an offered value and stores it in the page draft; false when nothing changed. */
     private boolean applyLimitDropdown(String id, String value) {
-        int slot = limitSlot(id);
-        if (slot < 0 || value == null
+        DapperMapConfig.Limit limit = DapperMapConfig.Limit.byAdminRow(id);
+        if (limit == null || value == null
                 || this.limitEntries(id).stream().noneMatch(entry -> entry.value().equals(value))) return false;
         int parsed = Integer.parseInt(value);
-        if (this.draftLimits[slot] == parsed) return false;
-        this.draftLimits[slot] = parsed;
+        if (this.draftLimits[limit.ordinal()] == parsed) return false;
+        this.draftLimits[limit.ordinal()] = parsed;
         return true;
     }
 
     /** Player page: tags choices above a server limit. They stay selectable and are saved, but play at the limit. */
     private void markOverLimit(List<DropdownEntryInfo> entries, String id) {
-        if (this.adminMode || !this.config.hasLimits()) return;
+        DapperMapConfig.Limit limit = DapperMapConfig.Limit.byPageRow(id);
+        if (this.adminMode || limit == null || !this.config.isLimited(limit)) return;
+        int max = this.config.limit(limit);
         for (int i = 0; i < entries.size(); i++) {
             DropdownEntryInfo entry = entries.get(i);
             int value = Integer.parseInt(entry.value());
-            boolean over = switch (id) {
-                case "speed" -> value < this.config.getFastestUpdateSpeed();
-                case "texture_resolution" -> value > this.config.getMaxTextureResolution();
-                case "zoom" -> value > this.config.getMaxZoomRadius();
-                case "creature_limit" -> value > this.config.getMaxCreatureLimit();
-                default -> false;
-            };
-            if (!over) continue;
-            String label = switch (id) {
-                case "speed" -> displaySpeed(value);
-                case "texture_resolution" -> value + " px";
-                case "zoom" -> value + " blocks";
-                default -> Integer.toString(value);
-            };
-            entries.set(i, new DropdownEntryInfo(LocalizableString.fromString(label + " (server limit)"), entry.value(),
-                    LocalizableString.fromString("This server limits this setting to " + this.limitText(id)
+            if (!limit.exceeds(value, max)) continue;
+            entries.set(i, new DropdownEntryInfo(LocalizableString.fromString(limitLabel(limit, value) + " (server limit)"), entry.value(),
+                    LocalizableString.fromString("This server limits this setting to " + limitLabel(limit, max)
                             + ". Your choice is kept and used if the limit is lifted.")));
         }
     }
 
-    /** Short text for the server limit on a row, e.g. "128 blocks". */
-    private String limitText(String id) {
-        return switch (id) {
-            case "speed" -> displaySpeed(this.config.getFastestUpdateSpeed());
-            case "texture_resolution" -> this.config.getMaxTextureResolution() + " px";
-            case "zoom" -> this.config.getMaxZoomRadius() + " blocks";
-            case "creature_limit" -> Integer.toString(this.config.getMaxCreatureLimit());
-            default -> "";
-        };
-    }
-
     /** Row description, with a short server-limit note on the player page when a limit applies. */
     private String rowDescription(String id) {
-        if (this.adminMode) return description(id);
-        boolean limited = switch (id) {
-            case "speed" -> this.config.getFastestUpdateSpeed() > 0;
-            case "texture_resolution" -> this.config.getMaxTextureResolution() < 1024;
-            case "zoom" -> this.config.getMaxZoomRadius() < 256;
-            case "creature_limit" -> this.config.getMaxCreatureLimit() < 64;
-            default -> false;
-        };
-        return limited ? description(id) + " Server limit: " + this.limitText(id) + "." : description(id);
+        DapperMapConfig.Limit limit = this.adminMode ? null : DapperMapConfig.Limit.byPageRow(id);
+        boolean limited = limit != null && this.config.isLimited(limit);
+        return limited ? description(id) + " Server limit: " + limitLabel(limit, this.config.limit(limit)) + "." : description(id);
     }
 
     private static DropdownEntryInfo entry(String label, String value) {
@@ -1589,7 +1527,14 @@ public final class DapperMapSettingsPage
     }
 
     private static int clampPercent(int value) {
-        return Math.max(0, Math.min(100, value));
+        return dev.scyphoz.dappermap.util.DapperMapUtil.clamp(value, DynamicMinimapSetting.POSITION_MIN, DynamicMinimapSetting.POSITION_MAX);
+    }
+
+    /** The texture resolutions offered by the page, as a sorted set the current value can join. */
+    private static TreeSet<Integer> resolutionChoices() {
+        TreeSet<Integer> values = new TreeSet<>();
+        for (int value : DynamicMinimapSetting.TEXTURE_RESOLUTIONS) values.add(value);
+        return values;
     }
 
     private static int nearestPositionStop(int value) {

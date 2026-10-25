@@ -11,9 +11,6 @@ import dev.scyphoz.dappermap.dynamic.DynamicAssetPublisher;
 import dev.scyphoz.dappermap.util.DapperMapUtil;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.ByteArrayInputStream;
-import java.awt.image.BufferedImage;
-import javax.imageio.ImageIO;
 import java.lang.reflect.Method;
 import java.util.Map;
 import java.util.LinkedHashMap;
@@ -90,8 +87,7 @@ public final class BetterMapIntegration {
             if (stream == null) return null;
             bytes = stream.readAllBytes();
             if (bytes.length == 0) return null;
-            if (ICON_BYTES.size() >= 256) ICON_BYTES.clear();
-            ICON_BYTES.put(filename, bytes);
+            DapperMapUtil.putBounded(ICON_BYTES, filename, bytes, 256);
             return bytes;
         } catch (IOException | RuntimeException ignored) {
             return null;
@@ -130,39 +126,6 @@ public final class BetterMapIntegration {
             ICON_BYTES.clear();
         }
         resolvedLoader = null;
-    }
-
-    /**
-     * Multiplies every pixel of a PNG icon by {@code rgb} (alpha kept). Reads and writes whole
-     * pixel rows at once and encodes in memory. Render pool only; results are cached by callers.
-     */
-    static byte[] tintPng(byte[] source, int rgb) {
-        try {
-            BufferedImage image = ImageIO.read(new ByteArrayInputStream(source));
-            if (image == null) {
-                return null;
-            }
-
-            int tintR = (rgb >>> 16) & 0xFF;
-            int tintG = (rgb >>> 8) & 0xFF;
-            int tintB = rgb & 0xFF;
-            int width = image.getWidth();
-            int height = image.getHeight();
-            int[] pixels = image.getRGB(0, 0, width, height, null, 0, width);
-            for (int i = 0; i < pixels.length; i++) {
-                int argb = pixels[i];
-                int r = ((argb >>> 16) & 0xFF) * tintR / 255;
-                int g = ((argb >>> 8) & 0xFF) * tintG / 255;
-                int b = (argb & 0xFF) * tintB / 255;
-                pixels[i] = (argb & 0xFF000000) | (r << 16) | (g << 8) | b;
-            }
-
-            BufferedImage tinted = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
-            tinted.setRGB(0, 0, width, height, pixels, 0, width);
-            return DapperMapUtil.encodePng(tinted, 2048);
-        } catch (IOException | RuntimeException ignored) {
-            return null;
-        }
     }
 
     /**
@@ -341,12 +304,6 @@ public final class BetterMapIntegration {
         private final long ttlMs, windowMs;
         private int capacity, pending, starts; // capacity: current cap, baseCapacity..maxCapacity.
         private long windowStart;
-
-        /** A fixed cap. */
-        public BoundedImageRequests(int capacity, int maxPending, int startsPerWindow,
-                                    long windowMs, long ttlMs, LongSupplier clock) {
-            this(capacity, capacity, maxPending, startsPerWindow, windowMs, ttlMs, clock);
-        }
 
         /**
          * A cap that follows demand: it doubles (up to {@code maxCapacity}) when a new image would

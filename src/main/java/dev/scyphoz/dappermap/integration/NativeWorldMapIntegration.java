@@ -49,16 +49,12 @@ public final class NativeWorldMapIntegration {
     private static final int BETTERMAP_MARKER_SIZE = 20;
     private static final Map<String, byte[]> ICON_BYTES = new ConcurrentHashMap<>();
     private static final Map<String, byte[]> TINTED_ICON_BYTES = new ConcurrentHashMap<>();
-    /** Icon names already reported as unresolvable, so each is logged only once. */
-    private static final Set<String> REPORTED_MISSING = ConcurrentHashMap.newKeySet();
     /** Longest wait for a common asset's bytes to load; render pool only, never the world thread. */
     private static final long ICON_LOAD_TIMEOUT_MS = 2000L;
     private static volatile Map<String, String> filenameIndex;
     private static volatile long filenameIndexBuiltMs;
     /** Common asset entry count when the filename index was last built. */
     private static volatile int filenameIndexAssetCount = -1;
-    private static final com.hypixel.hytale.logger.HytaleLogger LOGGER =
-            com.hypixel.hytale.logger.HytaleLogger.get("DapperMap");
     private NativeWorldMapIntegration() { }
 
     /** One marker pass in flight: the world it reads and the markers it will produce. */
@@ -104,9 +100,11 @@ public final class NativeWorldMapIntegration {
         // World marker overrides (icon swaps from /worldmap markers override and world events),
         // applied the same way Hytale's own collector applies them. Usually empty: no lookups then.
         Map<String, MapMarkerOverride> overrides = markerOverrides(world);
+        // A marker's image after any override, normalised (null when unusable).
+        java.util.function.Function<MapMarker, String> imageOf = marker -> markerImage(overriddenImage(marker, overrides));
         MarkersCollector nativeCollector = collector(marker -> {
             double mx = marker.transform.position.x, mz = marker.transform.position.z;
-            String image = markerImage(overriddenImage(marker, overrides));
+            String image = imageOf.apply(marker);
             if (image == null) {
                 result.add(DynamicMinimapMarker.dot(mx, mz, neutral, 9));
                 return;
@@ -115,13 +113,13 @@ public final class NativeWorldMapIntegration {
                     marker.iconSize == MapMarkerIconSize.Major ? MAJOR_MARKER_SIZE : MARKER_SIZE), marker));
         });
         MarkersCollector betterMapCollector = collector(marker -> {
-            String image = markerImage(overriddenImage(marker, overrides));
+            String image = imageOf.apply(marker);
             if (image == null) return;
             result.add(withAlert(DynamicMinimapMarker.betterMap(marker.transform.position.x,
                     marker.transform.position.z, image, markerTint(marker), BETTERMAP_MARKER_SIZE), marker));
         });
         MarkersCollector deathCollector = collector(marker -> {
-            String image = markerImage(overriddenImage(marker, overrides));
+            String image = imageOf.apply(marker);
             if (image == null) return;
             result.add(DynamicMinimapMarker.nativeWorldMap(marker.transform.position.x,
                     marker.transform.position.z, image, deathTint, MARKER_SIZE));
@@ -171,8 +169,7 @@ public final class NativeWorldMapIntegration {
             // Markers without an id (rare) are told apart by image and block position.
             String id = marker.id != null ? marker.id
                     : minimap.assetPath + "@" + Math.floor(minimap.x) + "," + Math.floor(minimap.z);
-            java.awt.Color tint = alert.tint == null ? null : new java.awt.Color(
-                    Byte.toUnsignedInt(alert.tint.red), Byte.toUnsignedInt(alert.tint.green), Byte.toUnsignedInt(alert.tint.blue));
+            java.awt.Color tint = alert.tint == null ? null : new java.awt.Color(DapperMapUtil.rgb(alert.tint));
             return minimap.withAlert(id, markerImage(alert.image), tint, durationMs);
         }
         return minimap;
@@ -287,8 +284,7 @@ public final class NativeWorldMapIntegration {
                             provider.update(world, player, collector(collected::add));
                             return collected;
                         }, MARKER_EXECUTOR);
-                if (OFF_THREAD.size() >= 1024 && !OFF_THREAD.containsKey(id)) OFF_THREAD.clear(); // Bounded.
-                OFF_THREAD.put(id, new OffThreadLookup(world, provider, started, now, last));
+                DapperMapUtil.putBounded(OFF_THREAD, id, new OffThreadLookup(world, provider, started, now, last), 1024);
             } catch (java.util.concurrent.RejectedExecutionException busy) {
                 // Queue full: keep the last markers and try again on the next scan.
                 if (lookup != null && last != lookup.last()) OFF_THREAD.put(id, new OffThreadLookup(
@@ -369,8 +365,7 @@ public final class NativeWorldMapIntegration {
         if (cached != null) return cached;
         byte[] bytes = DapperMapUtil.commonAssetBytes(path, ICON_LOAD_TIMEOUT_MS);
         if (bytes == null) return null;
-        if (ICON_BYTES.size() >= 256) ICON_BYTES.clear();
-        ICON_BYTES.put(path, bytes);
+        DapperMapUtil.putBounded(ICON_BYTES, path, bytes, 256);
         return bytes;
     }
 
@@ -445,10 +440,9 @@ public final class NativeWorldMapIntegration {
             String cacheKey = kind + image + "#" + hex;
             published = TINTED_ICON_BYTES.get(cacheKey);
             if (published == null) {
-                published = BetterMapIntegration.tintPng(source, rgb);
+                published = DapperMapUtil.tintPng(source, rgb);
                 if (published == null || published.length == 0) return null;
-                if (TINTED_ICON_BYTES.size() >= 256) TINTED_ICON_BYTES.clear();
-                TINTED_ICON_BYTES.put(cacheKey, published);
+                DapperMapUtil.putBounded(TINTED_ICON_BYTES, cacheKey, published, 256);
             }
         }
         String baseName = image.substring(0, image.length() - 4).replace('/', '_');
@@ -458,10 +452,8 @@ public final class NativeWorldMapIntegration {
 
     /** Logs each unresolvable icon name once, to help identify missing marker artwork. */
     static void reportMissing(String image) {
-        if (REPORTED_MISSING.size() < 256 && REPORTED_MISSING.add(image)) {
-            LOGGER.at(java.util.logging.Level.INFO).log(
-                    "DapperMap: no icon found for world-map marker image '%s'; it will not be drawn on the minimap.", image);
-        }
+        DapperMapUtil.logInfoOnce("marker:" + image,
+                "DapperMap: no icon found for world-map marker image '%s'; it will not be drawn on the minimap.", image);
     }
 
     /**
@@ -477,18 +469,15 @@ public final class NativeWorldMapIntegration {
         String known = MARKER_IMAGES.get(image);
         if (known == null) {
             known = normaliseMarkerImage(image);
-            if (MARKER_IMAGES.size() >= 512) MARKER_IMAGES.clear(); // Bounded (mod packs may add many).
-            MARKER_IMAGES.put(image, known);
+            DapperMapUtil.putBounded(MARKER_IMAGES, image, known, 512); // Bounded (mod packs may add many).
         }
         return known.isEmpty() ? null : known;
     }
 
     /** The image name cleaned and validated, or "" when it is unusable. */
     private static String normaliseMarkerImage(String image) {
-        if (image.isBlank()) return "";
-        String normalized = image.replace('\\', '/');
-        while (normalized.startsWith("/")) normalized = normalized.substring(1);
-        return !normalized.contains("..") && ICON_PATH.matcher(normalized).matches() ? normalized : "";
+        String normalized = DapperMapUtil.cleanAssetPath(image);
+        return normalized != null && ICON_PATH.matcher(normalized).matches() ? normalized : "";
     }
 
     static String fileName(String image) {
@@ -501,10 +490,7 @@ public final class NativeWorldMapIntegration {
         if (marker.components != null) {
             for (MapMarkerComponent component : marker.components) {
                 if (component instanceof TintComponent tint && tint.color != null) {
-                    return new java.awt.Color(
-                            Byte.toUnsignedInt(tint.color.red),
-                            Byte.toUnsignedInt(tint.color.green),
-                            Byte.toUnsignedInt(tint.color.blue));
+                    return new java.awt.Color(DapperMapUtil.rgb(tint.color));
                 }
             }
         }
