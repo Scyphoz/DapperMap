@@ -96,15 +96,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
     // All constants below are logical HUD units. They are converted to display units
     // only when markup/Anchor values are produced.
     private static final int HUD_MARGIN = 10;
-    private static final int SQUARE_READOUT_GAP = 16;
-    private static final int CIRCLE_READOUT_GAP = 8;
-    /** Compact concept-style information panel used in every panel orientation. */
-    private static final int READOUT_WIDTH = 148;
-    private static final int READOUT_PADDING_V = 6;
-    private static final int BRAND_HEIGHT = 24;
-    private static final int COORDS_HEIGHT = 43;
-    private static final int META_HEIGHT = 43;
-    private static final int BIOME_HEIGHT = 43;
+    // The map/panel geometry (panel size, gaps, rows) lives in DynamicMinimapRenderer.HudLayout.
 
     private record InitialOverlayKey(int size, int shape, int resolution, boolean panel, int position,
                                      int alignment, boolean coords, boolean compass, boolean clock,
@@ -126,8 +118,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
         InitialOverlayKey key = initialOverlayKey(settings);
         var ready = INITIAL_OVERLAYS.get(key);
         if (ready != null) return ready;
-        var png = DynamicMinimapRenderer.renderNativeHudParts(settings, settings.sizePixels,
-                READOUT_WIDTH, readoutHeight(settings), readoutGap(settings), 0.0D);
+        var png = DynamicMinimapRenderer.renderNativeHudParts(settings, settings.sizePixels, 0.0D);
         if (png != null) INITIAL_OVERLAYS.put(key, png);
         return png;
     }
@@ -1028,11 +1019,6 @@ public final class DynamicMinimapHud extends CustomUIHud {
         return out.toString();
     }
 
-    /** Whether readout row {@code row} (coordinates, bearing, world time, region) is shown. */
-    private boolean readoutEnabled(int row) {
-        return DynamicMinimapRenderer.readoutShown(this.settings, row);
-    }
-
     /**
      * Bit i set: label #WayfinderMmReadout{i} is in the markup the client has. setStatus only
      * updates these, since a settings toggle can change before its layout rebuild is sent.
@@ -1041,40 +1027,24 @@ public final class DynamicMinimapHud extends CustomUIHud {
 
     private void appendReadoutLabels(StringBuilder out) {
         this.shownReadouts = 0;
-        if (!this.settings.infoPanelShown()) return;
-        int position = this.settings.infoPanelPosition;
-        boolean side = position == DynamicMinimapSetting.INFO_LEFT || position == DynamicMinimapSetting.INFO_RIGHT;
-        int panelX = position == DynamicMinimapSetting.INFO_RIGHT ? this.logicalUiSize + this.readoutGap()
-                : side ? 0 : Math.max(0, (this.logicalUiSize - READOUT_WIDTH) / 2);
-        int panelY = position == DynamicMinimapSetting.INFO_BELOW ? this.logicalUiSize + this.readoutGap()
-                : position == DynamicMinimapSetting.INFO_ABOVE ? 0 : Math.max(0, (this.logicalUiSize - this.readoutHeight()) / 2);
         String[] values = {this.coordsText, this.compassText, this.clockText, this.biomeText};
-        DynamicMinimapColours.Key[] colours = {COORDS_TEXT, COMPASS_TEXT, CLOCK_TEXT, BIOME_TEXT};
         String alignment = DapperMapUtil.alignmentName(this.settings.infoPanelTextAlignment);
-        // Brand label: native text (previously painted into the panel PNG, which the client
-        // stretched and blurred). Same insets/position as the old raster version.
-        int brandCurve = this.settings.isCircle() && side ? 6 : 0;
-        int brandLeft = 8 + (position == DynamicMinimapSetting.INFO_RIGHT ? brandCurve : 0);
-        int brandRight = 8 + (position == DynamicMinimapSetting.INFO_LEFT ? brandCurve : 0);
-        this.appendPanelLabel(out, "WayfinderMmBrand", "DapperMap", panelX + brandLeft,
-                READOUT_WIDTH - brandLeft - brandRight, panelY + 12, panelY + 27, 10, 0.35F, true,
-                this.settings.colours.hex(BRAND_TEXT), alignment);
-        int cursor = panelY + 30;
-        for (int i = 0; i < 4; i++) {
-            if (!this.readoutEnabled(i)) continue;
-            this.shownReadouts |= 1 << i;
-            int curve = this.settings.isCircle() && side ? (i == 0 || i == 3 ? 12 : 22) : 0;
-            int left = 8 + (position == DynamicMinimapSetting.INFO_RIGHT ? curve : 0);
-            int right = 8 + (position == DynamicMinimapSetting.INFO_LEFT ? curve : 0);
-            // Heading above the value: static text, only sent with layout rebuilds.
-            this.appendPanelLabel(out, "WayfinderMmHeading" + i, DynamicMinimapRenderer.READOUT_HEADINGS[i], panelX + left,
-                    READOUT_WIDTH - left - right, cursor + 3, cursor + 18, 9, 0.95F, false,
-                    this.settings.colours.hex(INFO_HEADERS), alignment);
-            // The value itself: updated by setStatus with Text sets only.
-            this.appendPanelLabel(out, "WayfinderMmReadout" + i, values[i], panelX + left,
-                    READOUT_WIDTH - left - right, cursor + 19, cursor + 38, 11, 0.0F, false,
-                    this.settings.colours.hex(colours[i]), alignment);
-            cursor += 43;
+        // Brand, then per shown row a heading (static text, only sent with layout rebuilds) and its
+        // value (updated by setStatus with Text sets only). The boxes are shared with the preview.
+        for (DynamicMinimapRenderer.PanelLabel label : this.layout().panelLabels(this.settings)) {
+            int row = label.row();
+            String id, text;
+            DynamicMinimapColours.Key colour;
+            if (row < 0) { id = "WayfinderMmBrand"; text = "DapperMap"; colour = BRAND_TEXT; }
+            else if (!label.value()) { id = "WayfinderMmHeading" + row; text = DynamicMinimapRenderer.READOUT_HEADINGS[row]; colour = INFO_HEADERS; }
+            else {
+                id = "WayfinderMmReadout" + row;
+                text = values[row];
+                colour = DynamicMinimapRenderer.READOUT_COLOURS[row];
+                this.shownReadouts |= 1 << row;
+            }
+            this.appendPanelLabel(out, id, text, label.x(), label.width(), label.y(), label.y() + label.height(),
+                    label.fontSize(), (float) label.letterSpacing(), label.bold(), this.settings.colours.hex(colour), alignment);
         }
     }
 
@@ -1300,10 +1270,8 @@ public final class DynamicMinimapHud extends CustomUIHud {
         var overlay = handed != null && handed.key().equals(key) ? handed.parts()
                 : initial
                 ? (inline ? initialOverlay(this.settings) : INITIAL_OVERLAYS.get(key.settings()))
-                : inline ? DynamicMinimapRenderer.renderNativeHudParts(this.settings, this.logicalUiSize, READOUT_WIDTH,
-                this.readoutHeight(), this.readoutGap(), this.frameAngle)
-                : DynamicMinimapRenderer.cachedNativeHudParts(this.settings, this.logicalUiSize, READOUT_WIDTH,
-                this.readoutHeight(), this.readoutGap(), this.frameAngle);
+                : inline ? DynamicMinimapRenderer.renderNativeHudParts(this.settings, this.logicalUiSize, this.frameAngle)
+                : DynamicMinimapRenderer.cachedNativeHudParts(this.settings, this.logicalUiSize, this.frameAngle);
         this.overlayPrepareFailed = false;
         if (overlay == null) {
             if (!inline) {
@@ -1341,8 +1309,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
         if (!DynamicMinimapSession.renderAsync(() -> {
             try {
                 var parts = key.initial() ? initialOverlay(snapshot)
-                        : DynamicMinimapRenderer.renderNativeHudParts(snapshot, key.mapSize(), READOUT_WIDTH,
-                        key.panelHeight(), key.gap(), key.angle());
+                        : DynamicMinimapRenderer.renderNativeHudParts(snapshot, key.mapSize(), key.angle());
                 if (parts == null) this.overlayPrepareFailed = true;
                 else {
                     // Hash the parts here, so publishOverlayAsset's prepareShared finds them remembered
@@ -1380,14 +1347,11 @@ public final class DynamicMinimapHud extends CustomUIHud {
         long generation = ++this.overlayGeneration;
         DynamicMinimapSetting snapshot = this.settings.copy();
         int mapSize = this.logicalUiSize;
-        int panelHeight = this.readoutHeight();
-        int gap = this.readoutGap();
         double angle = this.frameAngle;
         if (!DynamicMinimapSession.renderAsync(() -> {
             try {
                 if (!this.overlayWorkAllowed()) return;
-                var image = DynamicMinimapRenderer.renderNativeHudParts(
-                        snapshot, mapSize, READOUT_WIDTH, panelHeight, gap, angle);
+                var image = DynamicMinimapRenderer.renderNativeHudParts(snapshot, mapSize, angle);
                 var prepared = image == null ? null : DynamicAssetPublisher.prepareShared(path, image.readout());
                 var preparedFrame = image == null ? null : DynamicAssetPublisher.prepareShared(framePath, image.frame());
                 var preparedBezel = image == null ? null : DynamicAssetPublisher.prepareShared(bezelPath, image.bezel());
@@ -1462,30 +1426,13 @@ public final class DynamicMinimapHud extends CustomUIHud {
         return (this.bufferPixels - this.terrainPixels) / 2;
     }
 
-    private int readoutHeight() { return readoutHeight(this.settings); }
-
-    private static int readoutHeight(DynamicMinimapSetting settings) {
-        if (!settings.infoPanelShown()) return 0;
-        int height = (READOUT_PADDING_V * 2) + BRAND_HEIGHT;
-
-        if (settings.showCoordinates) {
-            height += COORDS_HEIGHT;
-        }
-
-        if (settings.showCompass) {
-            height += META_HEIGHT;
-        }
-
-        if (settings.showClock) {
-            height += META_HEIGHT;
-        }
-
-        if (settings.showBiome) {
-            height += BIOME_HEIGHT;
-        }
-
-        return height;
+    /** This HUD's map and panel layout (logical units; see DynamicMinimapRenderer.HudLayout). */
+    private DynamicMinimapRenderer.HudLayout layout() {
+        return DynamicMinimapRenderer.HudLayout.of(this.settings, this.logicalUiSize);
     }
+
+    /** Info panel height (0 when hidden). */
+    private int readoutHeight() { return this.layout().panelHeight(); }
 
     /** Overlay publish requested by a layout setter; applied once by applyPendingLayout(). */
     private boolean overlayPublishPending;
@@ -1531,57 +1478,17 @@ public final class DynamicMinimapHud extends CustomUIHud {
         this.update(false, builder);
     }
 
-    private int widgetWidth() {
-        if (!this.settings.infoPanelShown()) return this.displaySize(this.logicalUiSize);
-        if (this.isSideRail()) {
-            return this.displaySize(this.logicalUiSize + this.readoutGap() + READOUT_WIDTH);
-        }
-        return this.displaySize(Math.max(this.logicalUiSize, this.readoutLogicalWidth()));
-    }
+    // Widget size and map origin in display units (the layout's offsets are never negative).
+    private int widgetWidth() { return this.displaySize(this.layout().width()); }
 
-    private int widgetHeight() {
-        if (!this.settings.infoPanelShown()) return this.displaySize(this.logicalUiSize);
-        if (this.isSideRail()) {
-            return this.displaySize(Math.max(this.logicalUiSize, this.readoutHeight()));
-        }
-        return this.displaySize(this.logicalUiSize + this.readoutGap() + this.readoutHeight());
-    }
+    private int widgetHeight() { return this.displaySize(this.layout().height()); }
 
-    private int mapOriginX() {
-        if (!this.settings.infoPanelShown()) return 0;
-        if (this.settings.infoPanelPosition == DynamicMinimapSetting.INFO_LEFT) {
-            return this.displaySize(READOUT_WIDTH + this.readoutGap());
-        }
-        return this.isSideRail() ? 0 : this.displayCoordinate(
-                Math.max(0, (this.readoutLogicalWidth() - this.logicalUiSize) / 2));
-    }
+    private int mapOriginX() { return this.displayCoordinate(this.layout().mapX()); }
 
-    private int mapOriginY() {
-        if (!this.settings.infoPanelShown()) return 0;
-        if (this.settings.infoPanelPosition == DynamicMinimapSetting.INFO_ABOVE) {
-            return this.displaySize(this.readoutHeight() + this.readoutGap());
-        }
-        if (this.settings.infoPanelPosition == DynamicMinimapSetting.INFO_BELOW) {
-            return 0;
-        }
-        return this.displayCoordinate(Math.max(0, (this.readoutHeight() - this.logicalUiSize) / 2));
-    }
+    private int mapOriginY() { return this.displayCoordinate(this.layout().mapY()); }
 
-    private int readoutLogicalWidth() {
-        return READOUT_WIDTH;
-    }
-
-    private boolean isSideRail() {
-        return this.settings.infoPanelPosition == DynamicMinimapSetting.INFO_LEFT
-                || this.settings.infoPanelPosition == DynamicMinimapSetting.INFO_RIGHT;
-    }
-
-    private int readoutGap() { return readoutGap(this.settings); }
-
-    private static int readoutGap(DynamicMinimapSetting settings) {
-        if (!settings.infoPanelShown()) return 0;
-        return settings.isCircle() ? CIRCLE_READOUT_GAP : SQUARE_READOUT_GAP;
-    }
+    /** Gap between map and panel (0 when hidden). */
+    private int readoutGap() { return this.layout().gap(); }
 
     /** Logical HUD value in display units (the settings' own conversion, also used for marker updates). */
     private int displayCoordinate(int logicalValue) {

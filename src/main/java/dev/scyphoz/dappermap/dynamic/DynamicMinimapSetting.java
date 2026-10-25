@@ -120,6 +120,82 @@ public final class DynamicMinimapSetting {
     public DynamicMinimapSetting() {
     }
 
+    /**
+     * Every stored player setting, one entry each, in settings-file key order. Copying, saving,
+     * loading, per-setting permissions and the preview cache all loop over this table, so a new
+     * setting needs one line here (plus its page row and command). Booleans are read and written
+     * as 0/1 so nothing is boxed. The legacy four-corner {@link #position} and the colours are
+     * handled separately.
+     */
+    public enum Field {
+        ENABLED("enabled", true, s -> s.enabled ? 1 : 0, (s, v) -> s.enabled = v != 0),
+        ROTATION_MODE("rotationMode", false, s -> s.rotationMode, (s, v) -> s.rotationMode = v),
+        ZOOM_BLOCKS("zoomBlocks", false, s -> s.zoomBlocks, (s, v) -> s.zoomBlocks = v),
+        SIZE_PIXELS("sizePixels", false, s -> s.sizePixels, (s, v) -> s.sizePixels = v),
+        TEXTURE_RESOLUTION("textureResolution", false, s -> s.textureResolution, (s, v) -> s.textureResolution = v),
+        INTERFACE_SCALE("interfaceScalePercent", false, s -> s.interfaceScalePercent, (s, v) -> s.interfaceScalePercent = v),
+        SHAPE("shape", false, s -> s.shape, (s, v) -> s.shape = v),
+        SHOW_OTHER_PLAYERS("showOtherPlayers", true, s -> s.showOtherPlayers ? 1 : 0, (s, v) -> s.showOtherPlayers = v != 0),
+        SHOW_ENTITIES("showEntities", true, s -> s.showEntities ? 1 : 0, (s, v) -> s.showEntities = v != 0),
+        CREATURE_MARKER_LIMIT("creatureMarkerLimit", false, s -> s.creatureMarkerLimit, (s, v) -> s.creatureMarkerLimit = v),
+        CREATURE_ICONS("creatureIcons", true, s -> s.creatureIcons ? 1 : 0, (s, v) -> s.creatureIcons = v != 0),
+        HOSTILE_CREATURES_ONLY("hostileCreaturesOnly", true, s -> s.hostileCreaturesOnly ? 1 : 0, (s, v) -> s.hostileCreaturesOnly = v != 0),
+        PLAYER_ICONS("playerIcons", true, s -> s.playerIcons ? 1 : 0, (s, v) -> s.playerIcons = v != 0),
+        PLAYER_ICON_HELMETS("playerIconHelmets", true, s -> s.playerIconHelmets ? 1 : 0, (s, v) -> s.playerIconHelmets = v != 0),
+        SHOW_DEATH_MARKER("showDeathMarker", true, s -> s.showDeathMarker ? 1 : 0, (s, v) -> s.showDeathMarker = v != 0),
+        SHOW_WORLD_MAP_MARKERS("showWorldMapMarkers", true, s -> s.showWorldMapMarkers ? 1 : 0, (s, v) -> s.showWorldMapMarkers = v != 0),
+        LIMIT_MOB_HEIGHT("limitMobHeight", true, s -> s.limitMobHeight ? 1 : 0, (s, v) -> s.limitMobHeight = v != 0),
+        MOB_VERTICAL_RANGE("mobVerticalRange", false, s -> s.mobVerticalRange, (s, v) -> s.mobVerticalRange = v),
+        HUD_POSITION_X("hudPositionX", false, s -> s.hudPositionX, (s, v) -> s.hudPositionX = v),
+        HUD_POSITION_Y("hudPositionY", false, s -> s.hudPositionY, (s, v) -> s.hudPositionY = v),
+        INFO_PANEL_ENABLED("infoPanelEnabled", true, s -> s.infoPanelEnabled ? 1 : 0, (s, v) -> s.infoPanelEnabled = v != 0),
+        INFO_PANEL_POSITION("infoPanelPosition", false, s -> s.infoPanelPosition, (s, v) -> s.infoPanelPosition = v),
+        INFO_PANEL_TEXT_ALIGNMENT("infoPanelTextAlignment", false, s -> s.infoPanelTextAlignment, (s, v) -> s.infoPanelTextAlignment = v),
+        UPDATE_SPEED("updateSpeed", false, s -> s.updateSpeed, (s, v) -> s.updateSpeed = v),
+        CLOCK_24_HOUR("clock24Hour", true, s -> s.clock24Hour ? 1 : 0, (s, v) -> s.clock24Hour = v != 0),
+        SHOW_COORDINATES("showCoordinates", true, s -> s.showCoordinates ? 1 : 0, (s, v) -> s.showCoordinates = v != 0),
+        SHOW_CLOCK("showClock", true, s -> s.showClock ? 1 : 0, (s, v) -> s.showClock = v != 0),
+        SHOW_COMPASS("showCompass", true, s -> s.showCompass ? 1 : 0, (s, v) -> s.showCompass = v != 0),
+        SHOW_BIOME("showBiome", true, s -> s.showBiome ? 1 : 0, (s, v) -> s.showBiome = v != 0),
+        SHOW_COMPASS_LETTERS("showCompassLetters", true, s -> s.showCompassLetters ? 1 : 0, (s, v) -> s.showCompassLetters = v != 0),
+        SHOW_COMPASS_DASHES("showCompassDashes", true, s -> s.showCompassDashes ? 1 : 0, (s, v) -> s.showCompassDashes = v != 0),
+        SHOW_CARDINAL_DASHES("showCardinalDashes", true, s -> s.showCardinalDashes ? 1 : 0, (s, v) -> s.showCardinalDashes = v != 0),
+        BETTERMAP_ENABLED("betterMapEnabled", true, s -> s.betterMapEnabled ? 1 : 0, (s, v) -> s.betterMapEnabled = v != 0),
+        BETTERMAP_MARKERS("betterMapMarkersEnabled", true, s -> s.betterMapMarkersEnabled ? 1 : 0, (s, v) -> s.betterMapMarkersEnabled = v != 0),
+        BETTERMAP_CAVES("betterMapCaveModeEnabled", true, s -> s.betterMapCaveModeEnabled ? 1 : 0, (s, v) -> s.betterMapCaveModeEnabled = v != 0);
+
+        /** Key in the settings files (unchanged since the setting was added). */
+        public final String key;
+        /** True for an on/off setting (stored as true/false), false for a number. */
+        public final boolean bool;
+        private final java.util.function.ToIntFunction<DynamicMinimapSetting> getter;
+        private final java.util.function.ObjIntConsumer<DynamicMinimapSetting> setter;
+        private static final Field[] ALL = values();
+
+        Field(String key, boolean bool, java.util.function.ToIntFunction<DynamicMinimapSetting> getter,
+              java.util.function.ObjIntConsumer<DynamicMinimapSetting> setter) {
+            this.key = key;
+            this.bool = bool;
+            this.getter = getter;
+            this.setter = setter;
+        }
+
+        /** The value (booleans as 0/1). */
+        public int get(DynamicMinimapSetting settings) { return this.getter.applyAsInt(settings); }
+
+        /** Sets the value (booleans: non-zero is true). Not normalised. */
+        public void set(DynamicMinimapSetting settings, int value) { this.setter.accept(settings, value); }
+
+        /** Copies this one setting from {@code source} into {@code target}. */
+        public void copy(DynamicMinimapSetting target, DynamicMinimapSetting source) {
+            this.setter.accept(target, this.getter.applyAsInt(source));
+        }
+
+        /** Every field, in file order (a shared array: do not modify). */
+        public static Field[] all() { return ALL; }
+    }
+
+
     public static DynamicMinimapSetting fromConfig(DapperMapConfig config) {
         DynamicMinimapSetting settings = new DynamicMinimapSetting();
         settings.enabled = config.isEnabledByDefault();
@@ -163,48 +239,22 @@ public final class DynamicMinimapSetting {
     }
 
     /**
-     * Copies every setting from {@code source} into this object (identity kept). The one field
-     * list used by {@link #copy()} and by live-session refreshes, so a new setting only needs
-     * adding here (plus the settings store and SettingPermissions). Callers hold any lock needed.
+     * Copies every setting from {@code source} into this object (identity kept). Used by
+     * {@link #copy()} and by live-session refreshes. Callers hold any lock needed.
      */
     public void copyFrom(DynamicMinimapSetting source) {
         this.colours = source.colours; // immutable, safe to share
-        this.enabled = source.enabled;
-        this.rotationMode = source.rotationMode;
-        this.zoomBlocks = source.zoomBlocks;
-        this.sizePixels = source.sizePixels;
-        this.textureResolution = source.textureResolution;
-        this.interfaceScalePercent = source.interfaceScalePercent;
-        this.shape = source.shape;
-        this.showOtherPlayers = source.showOtherPlayers;
-        this.showEntities = source.showEntities;
-        this.creatureMarkerLimit = source.creatureMarkerLimit;
-        this.creatureIcons = source.creatureIcons;
-        this.hostileCreaturesOnly = source.hostileCreaturesOnly;
-        this.playerIcons = source.playerIcons;
-        this.playerIconHelmets = source.playerIconHelmets;
-        this.showDeathMarker = source.showDeathMarker;
-        this.showWorldMapMarkers = source.showWorldMapMarkers;
-        this.limitMobHeight = source.limitMobHeight;
-        this.mobVerticalRange = source.mobVerticalRange;
-        this.position = source.position;
-        this.hudPositionX = source.hudPositionX;
-        this.hudPositionY = source.hudPositionY;
-        this.infoPanelEnabled = source.infoPanelEnabled;
-        this.infoPanelPosition = source.infoPanelPosition;
-        this.infoPanelTextAlignment = source.infoPanelTextAlignment;
-        this.updateSpeed = source.updateSpeed;
-        this.clock24Hour = source.clock24Hour;
-        this.showCoordinates = source.showCoordinates;
-        this.showClock = source.showClock;
-        this.showCompass = source.showCompass;
-        this.showBiome = source.showBiome;
-        this.showCompassLetters = source.showCompassLetters;
-        this.showCompassDashes = source.showCompassDashes;
-        this.showCardinalDashes = source.showCardinalDashes;
-        this.betterMapEnabled = source.betterMapEnabled;
-        this.betterMapMarkersEnabled = source.betterMapMarkersEnabled;
-        this.betterMapCaveModeEnabled = source.betterMapCaveModeEnabled;
+        this.position = source.position; // Legacy corner (not in Field: never saved).
+        for (Field field : Field.ALL) field.copy(this, source);
+    }
+
+    /** True when every setting except the X/Y position matches (the preview HUD looks the same). */
+    public boolean sameExceptPosition(DynamicMinimapSetting other) {
+        if (this.position != other.position || !this.colours.equals(other.colours)) return false;
+        for (Field field : Field.ALL)
+            if (field != Field.HUD_POSITION_X && field != Field.HUD_POSITION_Y
+                    && field.get(this) != field.get(other)) return false;
+        return true;
     }
 
     public void normalize() {

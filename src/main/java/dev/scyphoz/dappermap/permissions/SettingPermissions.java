@@ -3,6 +3,7 @@ package dev.scyphoz.dappermap.permissions;
 import com.hypixel.hytale.server.core.universe.PlayerRef;
 import dev.scyphoz.dappermap.dynamic.DynamicMinimapColours;
 import dev.scyphoz.dappermap.dynamic.DynamicMinimapSetting;
+import dev.scyphoz.dappermap.dynamic.DynamicMinimapSetting.Field;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -25,7 +26,7 @@ import java.util.function.Predicate;
  * {@code help}, {@code reset} and {@code position}. Each colour has {@code colours.<target>}.
  *
  * <p>To add a setting: add its row to {@link #SETTING_NODES} (path = group + "." + command name,
- * the settings-page row id, and the fields it copies). DapperMapCommand checks at start-up that
+ * the settings-page row id, and the DynamicMinimapSetting.Field(s) it copies). DapperMapCommand checks at start-up that
  * every setting command has a node here.
  */
 public final class SettingPermissions {
@@ -61,53 +62,50 @@ public final class SettingPermissions {
 
     static {
         // Root-level: the Minimap switch (/dappermap, on, off).
-        node(TOGGLE, "enabled", (t, s) -> t.enabled = s.enabled);
+        node(TOGGLE, "enabled", Field.ENABLED);
         // Display tab.
-        node("display.zoom", "zoom", (t, s) -> t.zoomBlocks = s.zoomBlocks);
-        node("display.size", "size", (t, s) -> t.sizePixels = s.sizePixels);
-        node("display.scale", "interface_scale", (t, s) -> t.interfaceScalePercent = s.interfaceScalePercent);
-        node("display.shape", "shape", (t, s) -> t.shape = s.shape);
-        node("display.rotation", "rotation", (t, s) -> t.rotationMode = s.rotationMode);
-        node("display.compass-letters", "compass_letters", (t, s) -> t.showCompassLetters = s.showCompassLetters);
-        node("display.compass-dashes", "compass_dashes", (t, s) -> t.showCompassDashes = s.showCompassDashes);
-        node("display.cardinal-dashes", "cardinal_dashes", (t, s) -> t.showCardinalDashes = s.showCardinalDashes);
-        node("display.speed", "speed", (t, s) -> t.updateSpeed = s.updateSpeed);
-        node("display.resolution", "texture_resolution", (t, s) -> t.textureResolution = s.textureResolution);
+        node("display.zoom", "zoom", Field.ZOOM_BLOCKS);
+        node("display.size", "size", Field.SIZE_PIXELS);
+        node("display.scale", "interface_scale", Field.INTERFACE_SCALE);
+        node("display.shape", "shape", Field.SHAPE);
+        node("display.rotation", "rotation", Field.ROTATION_MODE);
+        node("display.compass-letters", "compass_letters", Field.SHOW_COMPASS_LETTERS);
+        node("display.compass-dashes", "compass_dashes", Field.SHOW_COMPASS_DASHES);
+        node("display.cardinal-dashes", "cardinal_dashes", Field.SHOW_CARDINAL_DASHES);
+        node("display.speed", "speed", Field.UPDATE_SPEED);
+        node("display.resolution", "texture_resolution", Field.TEXTURE_RESOLUTION);
         // Markers tab.
-        node("markers.players", "players", (t, s) -> t.showOtherPlayers = s.showOtherPlayers);
-        node("markers.player-style", "player_style", (t, s) -> t.playerIcons = s.playerIcons);
-        node("markers.player-helmets", "player_helmets", (t, s) -> t.playerIconHelmets = s.playerIconHelmets);
-        node("markers.creatures", "entities", (t, s) -> t.showEntities = s.showEntities);
-        node("markers.creature-style", "creature_style", (t, s) -> t.creatureIcons = s.creatureIcons);
-        node("markers.creature-filter", "creature_filter", (t, s) -> t.hostileCreaturesOnly = s.hostileCreaturesOnly);
-        node("markers.creature-limit", "creature_limit", (t, s) -> t.creatureMarkerLimit = s.creatureMarkerLimit);
-        node("markers.height-filter", "height", (t, s) -> t.limitMobHeight = s.limitMobHeight);
-        node("markers.height-range", "vrange", (t, s) -> t.mobVerticalRange = s.mobVerticalRange);
-        node("markers.death", "death", (t, s) -> t.showDeathMarker = s.showDeathMarker);
+        node("markers.players", "players", Field.SHOW_OTHER_PLAYERS);
+        node("markers.player-style", "player_style", Field.PLAYER_ICONS);
+        node("markers.player-helmets", "player_helmets", Field.PLAYER_ICON_HELMETS);
+        node("markers.creatures", "entities", Field.SHOW_ENTITIES);
+        node("markers.creature-style", "creature_style", Field.CREATURE_ICONS);
+        node("markers.creature-filter", "creature_filter", Field.HOSTILE_CREATURES_ONLY);
+        node("markers.creature-limit", "creature_limit", Field.CREATURE_MARKER_LIMIT);
+        node("markers.height-filter", "height", Field.LIMIT_MOB_HEIGHT);
+        node("markers.height-range", "vrange", Field.MOB_VERTICAL_RANGE);
+        node("markers.death", "death", Field.SHOW_DEATH_MARKER);
         // Info Panel tab.
-        node("info.panel", "info_panel", (t, s) -> t.infoPanelEnabled = s.infoPanelEnabled);
-        node("info.position", "panel_position", (t, s) -> t.infoPanelPosition = s.infoPanelPosition);
-        node("info.alignment", "panel_alignment", (t, s) -> t.infoPanelTextAlignment = s.infoPanelTextAlignment);
-        node("info.coordinates", "coordinates", (t, s) -> t.showCoordinates = s.showCoordinates);
-        node("info.bearing", "compass", (t, s) -> t.showCompass = s.showCompass);
-        node("info.world-time", "clock", (t, s) -> t.showClock = s.showClock);
-        node("info.clock-format", "clock_format", (t, s) -> t.clock24Hour = s.clock24Hour);
-        node("info.region", "biome", (t, s) -> t.showBiome = s.showBiome);
+        node("info.panel", "info_panel", Field.INFO_PANEL_ENABLED);
+        node("info.position", "panel_position", Field.INFO_PANEL_POSITION);
+        node("info.alignment", "panel_alignment", Field.INFO_PANEL_TEXT_ALIGNMENT);
+        node("info.coordinates", "coordinates", Field.SHOW_COORDINATES);
+        node("info.bearing", "compass", Field.SHOW_COMPASS);
+        node("info.world-time", "clock", Field.SHOW_CLOCK);
+        node("info.clock-format", "clock_format", Field.CLOCK_24_HOUR);
+        node("info.region", "biome", Field.SHOW_BIOME);
         // Integrations tab.
-        node("integration.worldmap", "worldmap", (t, s) -> t.showWorldMapMarkers = s.showWorldMapMarkers);
-        node("integration.bettermap", "bettermap", (t, s) -> t.betterMapEnabled = s.betterMapEnabled);
-        node("integration.bettermap-markers", "bettermap_markers", (t, s) -> t.betterMapMarkersEnabled = s.betterMapMarkersEnabled);
-        node("integration.bettermap-caves", "bettermap_caves", (t, s) -> t.betterMapCaveModeEnabled = s.betterMapCaveModeEnabled);
+        node("integration.worldmap", "worldmap", Field.SHOW_WORLD_MAP_MARKERS);
+        node("integration.bettermap", "bettermap", Field.BETTERMAP_ENABLED);
+        node("integration.bettermap-markers", "bettermap_markers", Field.BETTERMAP_MARKERS);
+        node("integration.bettermap-caves", "bettermap_caves", Field.BETTERMAP_CAVES);
         // Position tab (one setting: both axes).
-        node(POSITION, "move_minimap", (t, s) -> {
-            t.hudPositionX = s.hudPositionX;
-            t.hudPositionY = s.hudPositionY;
-        });
+        node(POSITION, "move_minimap", Field.HUD_POSITION_X, Field.HUD_POSITION_Y);
         // Colours tab: one node per colour, copying only that colour.
         for (DynamicMinimapColours.Key key : DynamicMinimapColours.Key.values()) {
             String path = COLOURS + "." + key.id;
             COLOUR_NODES.put(key, path);
-            node(path, null, (t, s) -> t.colours = t.colours.with(key, s.colours.rgb(key)));
+            SETTING_NODES.add(new Node(path, null, (t, s) -> t.colours = t.colours.with(key, s.colours.rgb(key))));
         }
         Set<String> all = new LinkedHashSet<>();
         for (Node node : SETTING_NODES) all.add(node.path());
@@ -115,7 +113,9 @@ public final class SettingPermissions {
         ALL_PATHS = Collections.unmodifiableSet(all);
     }
 
-    private static void node(String path, String rowId, Copier copier) {
+    /** A setting node that copies the given settings fields (one, or both position axes). */
+    private static void node(String path, String rowId, Field... fields) {
+        Copier copier = fields.length == 1 ? fields[0]::copy : (t, s) -> { for (Field field : fields) field.copy(t, s); };
         SETTING_NODES.add(new Node(path, rowId, copier));
         if (rowId != null) ROW_NODES.put(rowId, path);
     }

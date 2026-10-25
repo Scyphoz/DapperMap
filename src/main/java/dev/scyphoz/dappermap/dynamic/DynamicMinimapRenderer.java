@@ -446,27 +446,95 @@ public final class DynamicMinimapRenderer {
         return image;
     }
 
-    private static BufferedImage renderHudChromeImage(DynamicMinimapSetting settings, int mapSize,
-                                                      int sidePanelWidth, int panelHeight, int gap) {
-        boolean side = settings.infoPanelPosition == DynamicMinimapSetting.INFO_LEFT
-                || settings.infoPanelPosition == DynamicMinimapSetting.INFO_RIGHT;
-        int panelWidth = sidePanelWidth;
-        int width = side ? mapSize + gap + panelWidth : Math.max(mapSize, panelWidth);
-        int height = side ? Math.max(mapSize, panelHeight) : mapSize + gap + panelHeight;
+    /**
+     * Logical layout of the HUD widget: the map and the info panel beside, above or below it
+     * (logical HUD units). The one source for the live HUD markup and labels, the panel image and
+     * the settings preview, so the three always line up. With the panel hidden the widget is the
+     * map alone (panelHeight and gap 0).
+     */
+    public record HudLayout(int mapSize, int panelHeight, int gap, int width, int height,
+                            int mapX, int mapY, int panelX, int panelY, boolean side) {
+        /** Info panel width in every orientation. */
+        public static final int PANEL_WIDTH = 148;
+        private static final int PANEL_PADDING_V = 6, BRAND_HEIGHT = 24, ROW_HEIGHT = 43;
+        private static final int CIRCLE_GAP = 8, SQUARE_GAP = 16;
 
-        int mapX = settings.infoPanelPosition == DynamicMinimapSetting.INFO_LEFT
-                ? panelWidth + gap : (side ? 0 : Math.max(0, (width - mapSize) / 2));
-        int mapY = settings.infoPanelPosition == DynamicMinimapSetting.INFO_ABOVE
-                ? panelHeight + gap : Math.max(0, (height - mapSize) / 2);
-        if (settings.infoPanelPosition == DynamicMinimapSetting.INFO_BELOW) mapY = 0;
+        /** Layout for these settings and map size. */
+        public static HudLayout of(DynamicMinimapSetting settings, int mapSize) {
+            return settings.infoPanelShown()
+                    ? withPanel(settings, mapSize)
+                    : new HudLayout(mapSize, 0, 0, mapSize, mapSize, 0, 0, 0, 0, isSide(settings));
+        }
 
-        int panelX = settings.infoPanelPosition == DynamicMinimapSetting.INFO_RIGHT
-                ? mapSize + gap : (side ? 0 : Math.max(0, (width - panelWidth) / 2));
-        int panelY = settings.infoPanelPosition == DynamicMinimapSetting.INFO_BELOW
-                ? mapSize + gap : (settings.infoPanelPosition == DynamicMinimapSetting.INFO_ABOVE
-                ? 0 : Math.max(0, (height - panelHeight) / 2));
+        /**
+         * Layout as if the panel were shown (even when it is switched off): the settings preview
+         * keeps this footprint as its scale reference, so the map doesn't grow when the panel goes.
+         */
+        public static HudLayout withPanel(DynamicMinimapSetting settings, int mapSize) {
+            int position = settings.infoPanelPosition;
+            boolean side = isSide(settings);
+            // Padding, the brand line, then one 43-unit row per readout shown.
+            int panelHeight = PANEL_PADDING_V * 2 + BRAND_HEIGHT;
+            for (int row = 0; row < 4; row++) if (readoutShown(settings, row)) panelHeight += ROW_HEIGHT;
+            int gap = settings.isCircle() ? CIRCLE_GAP : SQUARE_GAP;
+            int width = side ? mapSize + gap + PANEL_WIDTH : Math.max(mapSize, PANEL_WIDTH);
+            int height = side ? Math.max(mapSize, panelHeight) : mapSize + gap + panelHeight;
+            int mapX = position == DynamicMinimapSetting.INFO_LEFT ? PANEL_WIDTH + gap : side ? 0 : Math.max(0, (width - mapSize) / 2);
+            int mapY = position == DynamicMinimapSetting.INFO_ABOVE ? panelHeight + gap
+                    : position == DynamicMinimapSetting.INFO_BELOW ? 0 : Math.max(0, (height - mapSize) / 2);
+            int panelX = position == DynamicMinimapSetting.INFO_RIGHT ? mapSize + gap : side ? 0 : Math.max(0, (width - PANEL_WIDTH) / 2);
+            int panelY = position == DynamicMinimapSetting.INFO_BELOW ? mapSize + gap
+                    : position == DynamicMinimapSetting.INFO_ABOVE ? 0 : Math.max(0, (height - panelHeight) / 2);
+            return new HudLayout(mapSize, panelHeight, gap, width, height, mapX, mapY, panelX, panelY, side);
+        }
 
-        BufferedImage image = new BufferedImage(Math.max(1, width), Math.max(1, height), BufferedImage.TYPE_INT_ARGB);
+        private static boolean isSide(DynamicMinimapSetting settings) {
+            return settings.infoPanelPosition == DynamicMinimapSetting.INFO_LEFT
+                    || settings.infoPanelPosition == DynamicMinimapSetting.INFO_RIGHT;
+        }
+
+        /**
+         * The panel's native text boxes: the brand (row -1), then a heading and a value per shown
+         * readout row. Insets clear the curved panel edge of a round map beside it. Empty when the
+         * panel is hidden.
+         */
+        public java.util.List<PanelLabel> panelLabels(DynamicMinimapSetting settings) {
+            java.util.List<PanelLabel> labels = new java.util.ArrayList<>(9);
+            if (!settings.infoPanelShown()) return labels;
+            int position = settings.infoPanelPosition;
+            boolean curved = settings.isCircle() && this.side;
+            int brandCurve = curved ? 6 : 0;
+            int brandLeft = 8 + (position == DynamicMinimapSetting.INFO_RIGHT ? brandCurve : 0);
+            int brandRight = 8 + (position == DynamicMinimapSetting.INFO_LEFT ? brandCurve : 0);
+            labels.add(new PanelLabel(-1, false, this.panelX + brandLeft, this.panelY + 12,
+                    PANEL_WIDTH - brandLeft - brandRight, 15, 10, 0.35D, true));
+            int cursor = this.panelY + 30;
+            for (int row = 0; row < 4; row++) {
+                if (!readoutShown(settings, row)) continue;
+                int curve = curved ? (row == 0 || row == 3 ? 12 : 22) : 0;
+                int left = 8 + (position == DynamicMinimapSetting.INFO_RIGHT ? curve : 0);
+                int right = 8 + (position == DynamicMinimapSetting.INFO_LEFT ? curve : 0);
+                int x = this.panelX + left, width = PANEL_WIDTH - left - right;
+                labels.add(new PanelLabel(row, false, x, cursor + 3, width, 15, 9, 0.95D, false)); // Heading.
+                labels.add(new PanelLabel(row, true, x, cursor + 19, width, 19, 11, 0.0D, false)); // Value.
+                cursor += ROW_HEIGHT;
+            }
+            return labels;
+        }
+    }
+
+    /**
+     * One info-panel text box in logical HUD units. {@code row} -1 is the brand; otherwise the
+     * readout row's heading ({@code value} false) or its value.
+     */
+    public record PanelLabel(int row, boolean value, int x, int y, int width, int height,
+                             int fontSize, double letterSpacing, boolean bold) { }
+
+    /** The info panel's glass on a widget-sized canvas (panel shown only). */
+    private static BufferedImage renderHudChromeImage(DynamicMinimapSetting settings, HudLayout layout) {
+        int panelX = layout.panelX(), panelY = layout.panelY();
+        int panelWidth = HudLayout.PANEL_WIDTH, panelHeight = layout.panelHeight();
+        BufferedImage image = new BufferedImage(Math.max(1, layout.width()), Math.max(1, layout.height()), BufferedImage.TYPE_INT_ARGB);
         Graphics2D graphics = DapperMapUtil.antialiased(image);
 
         Color panel = settings.colours.awt(PANEL, 168);
@@ -523,10 +591,9 @@ public final class DynamicMinimapRenderer {
     /** HUD layers: compass ring (per heading), info panel, and the fixed bezel under the ring. */
     public record NativeHudParts(byte[] frame, byte[] readout, byte[] bezel) {}
 
-    /** Native value labels make the panel independent of changing telemetry. */
-    public static NativeHudParts renderNativeHudParts(DynamicMinimapSetting settings, int mapSize,
-                                                      int sidePanelWidth, int panelHeight, int gap, double angle) {
-        return nativeHudParts(settings, mapSize, sidePanelWidth, panelHeight, gap, angle, false);
+    /** Native value labels make the panel independent of changing telemetry. Layout: {@link HudLayout#of}. */
+    public static NativeHudParts renderNativeHudParts(DynamicMinimapSetting settings, int mapSize, double angle) {
+        return nativeHudParts(settings, mapSize, angle, false);
     }
 
     /**
@@ -534,27 +601,22 @@ public final class DynamicMinimapRenderer {
      * world thread publish a layout change at once when possible and hand a cache miss
      * (25-80 ms of drawing) to the render pool instead of stalling the world tick.
      */
-    public static NativeHudParts cachedNativeHudParts(DynamicMinimapSetting settings, int mapSize,
-                                                      int sidePanelWidth, int panelHeight, int gap, double angle) {
-        return nativeHudParts(settings, mapSize, sidePanelWidth, panelHeight, gap, angle, true);
+    public static NativeHudParts cachedNativeHudParts(DynamicMinimapSetting settings, int mapSize, double angle) {
+        return nativeHudParts(settings, mapSize, angle, true);
     }
 
-    private static NativeHudParts nativeHudParts(DynamicMinimapSetting settings, int mapSize, int sidePanelWidth,
-                                                 int panelHeight, int gap, double angle, boolean cachedOnly) {
-        boolean side = settings.infoPanelPosition == DynamicMinimapSetting.INFO_LEFT
-                || settings.infoPanelPosition == DynamicMinimapSetting.INFO_RIGHT;
-        int width = !settings.infoPanelShown() ? mapSize : side ? mapSize + gap + sidePanelWidth : Math.max(mapSize, sidePanelWidth);
-        int height = !settings.infoPanelShown() ? mapSize : side ? Math.max(mapSize, panelHeight) : mapSize + gap + panelHeight;
+    private static NativeHudParts nativeHudParts(DynamicMinimapSetting settings, int mapSize, double angle, boolean cachedOnly) {
+        HudLayout layout = HudLayout.of(settings, mapSize);
         int flags = (settings.infoPanelShown() ? 16 : 0) | (settings.showCoordinates ? 1 : 0)
                 | (settings.showCompass ? 2 : 0) | (settings.showClock ? 4 : 0) | (settings.showBiome ? 8 : 0);
         // The live panel is text-free glass (headings and values are native client labels), so text
         // alignment no longer changes its pixels: key it as 0 to share one cached panel per layout.
-        var key = new RowLayerKey(new OverlayLayout(mapSize, width, height, panelHeight, gap,
+        var key = new RowLayerKey(new OverlayLayout(mapSize, layout.width(), layout.height(), layout.panelHeight(), layout.gap(),
                 settings.shape, settings.infoPanelPosition, 0, flags, settings.colours), -2, "native");
         byte[] panel = OVERLAY_LAYERS.get(key);
         if (panel == null) {
             if (cachedOnly) return null;
-            BufferedImage image = renderHudOverlayImage(settings, mapSize, sidePanelWidth, panelHeight, gap, 0, false);
+            BufferedImage image = renderHudOverlayImage(settings, layout, 0, false);
             if (image == null) return null;
             panel = toPng(image);
             OVERLAY_LAYERS.put(key, panel);
@@ -605,9 +667,9 @@ public final class DynamicMinimapRenderer {
      * terrain, markers and player arrow are independent layers underneath this overlay. It holds no
      * text: brand, headings, values and N/E/S/W are native labels (on the HUD and in the preview).
      */
-    private static BufferedImage renderHudOverlayImage(DynamicMinimapSetting settings, int mapSize,
-                                                       int sidePanelWidth, int panelHeight, int gap,
+    private static BufferedImage renderHudOverlayImage(DynamicMinimapSetting settings, HudLayout layout,
                                                        double frameAngle, boolean includeFrame) {
+        int mapSize = layout.mapSize();
         if (!settings.infoPanelShown()) {
             try {
                 BufferedImage overlay = new BufferedImage(mapSize, mapSize, BufferedImage.TYPE_INT_ARGB);
@@ -625,22 +687,12 @@ public final class DynamicMinimapRenderer {
         try {
             // Chrome is an intermediate raster, not a transfer asset. Paint onto
             // it directly instead of encoding, decoding and expanding a PNG.
-            BufferedImage overlay = renderHudChromeImage(settings, mapSize, sidePanelWidth, panelHeight, gap);
+            BufferedImage overlay = renderHudChromeImage(settings, layout);
             Graphics2D graphics = DapperMapUtil.antialiased(overlay);
             graphics.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
-
-            boolean side = settings.infoPanelPosition == DynamicMinimapSetting.INFO_LEFT
-                    || settings.infoPanelPosition == DynamicMinimapSetting.INFO_RIGHT;
-            int panelWidth = sidePanelWidth;
-            int mapX = settings.infoPanelPosition == DynamicMinimapSetting.INFO_LEFT
-                    ? panelWidth + gap : (side ? 0
-                    : Math.max(0, (overlay.getWidth() - mapSize) / 2));
-            int mapY = settings.infoPanelPosition == DynamicMinimapSetting.INFO_ABOVE
-                    ? panelHeight + gap : Math.max(0, (overlay.getHeight() - mapSize) / 2);
-            if (settings.infoPanelPosition == DynamicMinimapSetting.INFO_BELOW) mapY = 0;
             BufferedImage frame = includeFrame ? renderFrameImage(settings, frameAngle) : null;
             if (frame != null) {
-                graphics.drawImage(frame, mapX, mapY, mapSize, mapSize, null);
+                graphics.drawImage(frame, layout.mapX(), layout.mapY(), mapSize, mapSize, null);
             }
             graphics.dispose();
             return overlay;
@@ -689,30 +741,18 @@ public final class DynamicMinimapRenderer {
         DynamicMinimapSetting preview = settings.copy();
         preview.normalize();
         int mapSize = DapperMapUtil.clamp(preview.sizePixels, DynamicMinimapSetting.SIZE_MIN, DynamicMinimapSetting.SIZE_MAX);
-        int panelWidth = 148;
-        int gap = preview.isCircle() ? 8 : 16;
-        int panelHeight = 24 + 12;
-        if (preview.showCoordinates) panelHeight += 43;
-        if (preview.showCompass) panelHeight += 43;
-        if (preview.showClock) panelHeight += 43;
-        if (preview.showBiome) panelHeight += 43;
+        // The live HUD's own layout, so the preview's map, panel and labels sit exactly as in game.
+        HudLayout layout = HudLayout.of(preview, mapSize);
 
         // The overlay is composited directly (it used to be PNG encoded and decoded first).
-        BufferedImage overlay = renderHudOverlayImage(preview, mapSize, panelWidth, panelHeight, gap,
-                snapshot.frameAngle(), true);
+        BufferedImage overlay = renderHudOverlayImage(preview, layout, snapshot.frameAngle(), true);
         if (overlay == null) return null;
         // Decoded terrain and icons for this snapshot, shared by every preview render of the page.
         DecodedPreview decoded = decodedPreview(snapshot);
         try {
             BufferedImage hud = new BufferedImage(overlay.getWidth(), overlay.getHeight(), BufferedImage.TYPE_INT_ARGB);
             Graphics2D g = DapperMapUtil.antialiased(hud);
-            boolean side = preview.infoPanelPosition == DynamicMinimapSetting.INFO_LEFT
-                    || preview.infoPanelPosition == DynamicMinimapSetting.INFO_RIGHT;
-            int mapX = !preview.infoPanelShown() ? 0 : (preview.infoPanelPosition == DynamicMinimapSetting.INFO_LEFT ? panelWidth + gap
-                    : (side ? 0 : Math.max(0, (hud.getWidth() - mapSize) / 2)));
-            int mapY = !preview.infoPanelShown() ? 0 : (preview.infoPanelPosition == DynamicMinimapSetting.INFO_ABOVE ? panelHeight + gap
-                    : (preview.infoPanelPosition == DynamicMinimapSetting.INFO_BELOW ? 0
-                    : Math.max(0, (hud.getHeight() - mapSize) / 2)));
+            int mapX = layout.mapX(), mapY = layout.mapY();
 
             Shape oldClip = g.getClip();
             double apertureInset = mapSize * APERTURE_INSET / STATIC_ASSET_LOGICAL_SIZE;
@@ -824,14 +864,9 @@ public final class DynamicMinimapRenderer {
             int scaleReferenceWidth = hud.getWidth();
             int scaleReferenceHeight = hud.getHeight();
             if (!preview.infoPanelShown()) {
-                boolean referenceSide = preview.infoPanelPosition == DynamicMinimapSetting.INFO_LEFT
-                        || preview.infoPanelPosition == DynamicMinimapSetting.INFO_RIGHT;
-                scaleReferenceWidth = referenceSide
-                        ? mapSize + gap + panelWidth
-                        : Math.max(mapSize, panelWidth);
-                scaleReferenceHeight = referenceSide
-                        ? Math.max(mapSize, panelHeight)
-                        : mapSize + gap + panelHeight;
+                HudLayout reference = HudLayout.withPanel(preview, mapSize);
+                scaleReferenceWidth = reference.width();
+                scaleReferenceHeight = reference.height();
             }
             double scale = Math.min((stageW - 8.0) / scaleReferenceWidth,
                     (stageH - 8.0) / scaleReferenceHeight);
@@ -842,8 +877,7 @@ public final class DynamicMinimapRenderer {
             if (texts != null) {
                 // Same stage transform as the HUD image above (hud pixels -> stage pixels).
                 double scaleX = (double)w / hud.getWidth(), scaleY = (double)h / hud.getHeight();
-                previewTexts(texts, preview, snapshot, mapX, mapY, mapSize, panelWidth, panelHeight, gap,
-                        hud.getWidth(), hud.getHeight(), (stageW - w) / 2, (stageH - h) / 2, scaleX, scaleY);
+                previewTexts(texts, preview, snapshot, layout, (stageW - w) / 2, (stageH - h) / 2, scaleX, scaleY);
             }
             return stage;
         } catch (Exception ignored) { return null; }
@@ -966,23 +1000,6 @@ public final class DynamicMinimapRenderer {
     }
 
     /** Every public instance field of the settings, except the HUD position (the base does not depend on it). */
-    private static final java.lang.reflect.Field[] PREVIEW_FIELDS = java.util.Arrays.stream(
-                    DynamicMinimapSetting.class.getFields())
-            .filter(field -> !java.lang.reflect.Modifier.isStatic(field.getModifiers()))
-            .filter(field -> !field.getName().equals("hudPositionX") && !field.getName().equals("hudPositionY"))
-            .toArray(java.lang.reflect.Field[]::new);
-
-    /** True when two drafts give the same preview HUD (every field equal except the X/Y position). */
-    private static boolean samePreviewHud(DynamicMinimapSetting first, DynamicMinimapSetting second) {
-        try {
-            for (java.lang.reflect.Field field : PREVIEW_FIELDS)
-                if (!java.util.Objects.equals(field.get(first), field.get(second))) return false;
-            return true;
-        } catch (IllegalAccessException unexpected) {
-            return false;
-        }
-    }
-
     /**
      * Renders the Position-tab preview as a complete screen rather than a close-up of the HUD.
      * The HUD image is the same settings preview used by the other tabs, scaled and placed from
@@ -994,7 +1011,7 @@ public final class DynamicMinimapRenderer {
         PositionPreviewBase base = null;
         synchronized (POSITION_BASES) {
             for (CachedPositionBase cached : POSITION_BASES)
-                if (cached.snapshot() == snapshot && samePreviewHud(cached.settings(), draft)) { base = cached.base(); break; }
+                if (cached.snapshot() == snapshot && cached.settings().sameExceptPosition(draft)) { base = cached.base(); break; }
         }
         if (base == null) {
             base = positionPreviewBase(draft, snapshot);
@@ -1098,6 +1115,8 @@ public final class DynamicMinimapRenderer {
 
     /** Info-panel headings, indexed like the readout rows (coordinates, bearing, world time, region). */
     public static final String[] READOUT_HEADINGS = {"COORDINATES", "BEARING", "WORLD TIME", "REGION"};
+    /** Value text colour per readout row. */
+    public static final DynamicMinimapColours.Key[] READOUT_COLOURS = {COORDS_TEXT, COMPASS_TEXT, CLOCK_TEXT, BIOME_TEXT};
 
     /** Whether readout row {@code i} (coordinates, bearing, world time, region) is shown. */
     public static boolean readoutShown(DynamicMinimapSetting settings, int row) {
@@ -1141,9 +1160,9 @@ public final class DynamicMinimapRenderer {
      * and the N/E/S/W letters, converted from HUD pixels to stage pixels.
      */
     private static void previewTexts(java.util.List<PreviewText> out, DynamicMinimapSetting settings,
-                                     LiveSnapshot snapshot, int mapX, int mapY, int mapSize,
-                                     int panelWidth, int panelHeight, int gap, int hudWidth, int hudHeight,
+                                     LiveSnapshot snapshot, HudLayout layout,
                                      int offsetX, int offsetY, double scaleX, double scaleY) {
+        int mapX = layout.mapX(), mapY = layout.mapY(), mapSize = layout.mapSize();
         java.util.function.DoubleUnaryOperator sx = value -> offsetX + value * scaleX;
         java.util.function.DoubleUnaryOperator sy = value -> offsetY + value * scaleY;
         if (settings.showCompassLetters) {
@@ -1158,36 +1177,22 @@ public final class DynamicMinimapRenderer {
                         sy.applyAsDouble(y), box * scaleX, box * scaleY, font * scaleY, colour, true, 0, 1));
             }
         }
-        if (!settings.infoPanelShown()) return;
-        int position = settings.infoPanelPosition;
-        boolean side = position == DynamicMinimapSetting.INFO_LEFT || position == DynamicMinimapSetting.INFO_RIGHT;
-        int panelX = position == DynamicMinimapSetting.INFO_RIGHT ? mapSize + gap
-                : side ? 0 : Math.max(0, (hudWidth - panelWidth) / 2);
-        int panelY = position == DynamicMinimapSetting.INFO_BELOW ? mapSize + gap
-                : position == DynamicMinimapSetting.INFO_ABOVE ? 0 : Math.max(0, (hudHeight - panelHeight) / 2);
-        int alignment = settings.infoPanelTextAlignment;
-        // Brand, then heading + value per shown row: the insets and steps of DynamicMinimapHud.
-        int brandCurve = settings.isCircle() && side ? 6 : 0;
-        int brandLeft = 8 + (position == DynamicMinimapSetting.INFO_RIGHT ? brandCurve : 0);
-        int brandRight = 8 + (position == DynamicMinimapSetting.INFO_LEFT ? brandCurve : 0);
-        out.add(new PreviewText("PreviewBrand", "DapperMap", sx.applyAsDouble(panelX + brandLeft),
-                sy.applyAsDouble(panelY + 12), (panelWidth - brandLeft - brandRight) * scaleX, 15 * scaleY,
-                10 * scaleY, settings.colours.hex(BRAND_TEXT), true, 0.35 * scaleX, alignment));
+        // Brand, then heading + value per shown row: the same boxes as the live HUD's labels.
         String[] values = {snapshot.coords(), snapshot.compass(), snapshot.clock(), snapshot.biome()};
-        DynamicMinimapColours.Key[] colours = {COORDS_TEXT, COMPASS_TEXT, CLOCK_TEXT, BIOME_TEXT};
-        int cursor = panelY + 30;
-        for (int i = 0; i < 4; i++) {
-            if (!readoutShown(settings, i)) continue;
-            int curve = settings.isCircle() && side ? (i == 0 || i == 3 ? 12 : 22) : 0;
-            int left = 8 + (position == DynamicMinimapSetting.INFO_RIGHT ? curve : 0);
-            int right = 8 + (position == DynamicMinimapSetting.INFO_LEFT ? curve : 0);
-            double x = sx.applyAsDouble(panelX + left), width = (panelWidth - left - right) * scaleX;
-            out.add(new PreviewText("PreviewHeading" + i, READOUT_HEADINGS[i], x, sy.applyAsDouble(cursor + 3),
-                    width, 15 * scaleY, 9 * scaleY, settings.colours.hex(INFO_HEADERS), false, 0.95 * scaleX, alignment));
-            out.add(new PreviewText("PreviewValue" + i, values[i] == null ? "" : values[i], x,
-                    sy.applyAsDouble(cursor + 19), width, 19 * scaleY, 11 * scaleY,
-                    settings.colours.hex(colours[i]), false, 0, alignment));
-            cursor += 43;
+        int alignment = settings.infoPanelTextAlignment;
+        for (PanelLabel label : layout.panelLabels(settings)) {
+            String id, text;
+            DynamicMinimapColours.Key colour;
+            if (label.row() < 0) { id = "PreviewBrand"; text = "DapperMap"; colour = BRAND_TEXT; }
+            else if (!label.value()) { id = "PreviewHeading" + label.row(); text = READOUT_HEADINGS[label.row()]; colour = INFO_HEADERS; }
+            else {
+                id = "PreviewValue" + label.row();
+                text = values[label.row()] == null ? "" : values[label.row()];
+                colour = READOUT_COLOURS[label.row()];
+            }
+            out.add(new PreviewText(id, text, sx.applyAsDouble(label.x()), sy.applyAsDouble(label.y()),
+                    label.width() * scaleX, label.height() * scaleY, label.fontSize() * scaleY,
+                    settings.colours.hex(colour), label.bold(), label.letterSpacing() * scaleX, alignment));
         }
     }
 

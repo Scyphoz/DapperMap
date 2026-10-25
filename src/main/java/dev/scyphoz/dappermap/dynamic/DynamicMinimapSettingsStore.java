@@ -260,41 +260,13 @@ public final class DynamicMinimapSettingsStore {
         StringBuilder out = new StringBuilder(256).append("{\n  \"format\": ").append(FORMAT);
         int empty = out.length();
         boolean all = b == null;
-        if (all || s.enabled != b.enabled) field(out, "enabled", s.enabled);
-        if (all || s.rotationMode != b.rotationMode) field(out, "rotationMode", s.rotationMode);
-        if (all || s.zoomBlocks != b.zoomBlocks) field(out, "zoomBlocks", s.zoomBlocks);
-        if (all || s.sizePixels != b.sizePixels) field(out, "sizePixels", s.sizePixels);
-        if (all || s.textureResolution != b.textureResolution) field(out, "textureResolution", s.textureResolution);
-        if (all || s.interfaceScalePercent != b.interfaceScalePercent) field(out, "interfaceScalePercent", s.interfaceScalePercent);
-        if (all || s.shape != b.shape) field(out, "shape", s.shape);
-        if (all || s.showOtherPlayers != b.showOtherPlayers) field(out, "showOtherPlayers", s.showOtherPlayers);
-        if (all || s.showEntities != b.showEntities) field(out, "showEntities", s.showEntities);
-        if (all || s.creatureMarkerLimit != b.creatureMarkerLimit) field(out, "creatureMarkerLimit", s.creatureMarkerLimit);
-        if (all || s.creatureIcons != b.creatureIcons) field(out, "creatureIcons", s.creatureIcons);
-        if (all || s.hostileCreaturesOnly != b.hostileCreaturesOnly) field(out, "hostileCreaturesOnly", s.hostileCreaturesOnly);
-        if (all || s.playerIcons != b.playerIcons) field(out, "playerIcons", s.playerIcons);
-        if (all || s.playerIconHelmets != b.playerIconHelmets) field(out, "playerIconHelmets", s.playerIconHelmets);
-        if (all || s.showDeathMarker != b.showDeathMarker) field(out, "showDeathMarker", s.showDeathMarker);
-        if (all || s.showWorldMapMarkers != b.showWorldMapMarkers) field(out, "showWorldMapMarkers", s.showWorldMapMarkers);
-        if (all || s.limitMobHeight != b.limitMobHeight) field(out, "limitMobHeight", s.limitMobHeight);
-        if (all || s.mobVerticalRange != b.mobVerticalRange) field(out, "mobVerticalRange", s.mobVerticalRange);
-        if (all || s.hudPositionX != b.hudPositionX) field(out, "hudPositionX", s.hudPositionX);
-        if (all || s.hudPositionY != b.hudPositionY) field(out, "hudPositionY", s.hudPositionY);
-        if (all || s.infoPanelEnabled != b.infoPanelEnabled) field(out, "infoPanelEnabled", s.infoPanelEnabled);
-        if (all || s.infoPanelPosition != b.infoPanelPosition) field(out, "infoPanelPosition", s.infoPanelPosition);
-        if (all || s.infoPanelTextAlignment != b.infoPanelTextAlignment) field(out, "infoPanelTextAlignment", s.infoPanelTextAlignment);
-        if (all || s.updateSpeed != b.updateSpeed) field(out, "updateSpeed", s.updateSpeed);
-        if (all || s.clock24Hour != b.clock24Hour) field(out, "clock24Hour", s.clock24Hour);
-        if (all || s.showCoordinates != b.showCoordinates) field(out, "showCoordinates", s.showCoordinates);
-        if (all || s.showClock != b.showClock) field(out, "showClock", s.showClock);
-        if (all || s.showCompass != b.showCompass) field(out, "showCompass", s.showCompass);
-        if (all || s.showBiome != b.showBiome) field(out, "showBiome", s.showBiome);
-        if (all || s.showCompassLetters != b.showCompassLetters) field(out, "showCompassLetters", s.showCompassLetters);
-        if (all || s.showCompassDashes != b.showCompassDashes) field(out, "showCompassDashes", s.showCompassDashes);
-        if (all || s.showCardinalDashes != b.showCardinalDashes) field(out, "showCardinalDashes", s.showCardinalDashes);
-        if (all || s.betterMapEnabled != b.betterMapEnabled) field(out, "betterMapEnabled", s.betterMapEnabled);
-        if (all || s.betterMapMarkersEnabled != b.betterMapMarkersEnabled) field(out, "betterMapMarkersEnabled", s.betterMapMarkersEnabled);
-        if (all || s.betterMapCaveModeEnabled != b.betterMapCaveModeEnabled) field(out, "betterMapCaveModeEnabled", s.betterMapCaveModeEnabled);
+        // One "key": value line per setting that differs from the base, in Field (file) order.
+        for (DynamicMinimapSetting.Field field : DynamicMinimapSetting.Field.all()) {
+            int value = field.get(s);
+            if (!all && value == field.get(b)) continue;
+            out.append(",\n  \"").append(field.key).append("\": ");
+            if (field.bool) out.append(value != 0); else out.append(value);
+        }
         // Colours are compared one by one, so changing one colour never pins the others.
         if (all || !s.colours.equals(b.colours)) {
             for (DynamicMinimapColours.Key key : DynamicMinimapColours.Key.values()) {
@@ -303,10 +275,6 @@ public final class DynamicMinimapSettingsStore {
             }
         }
         return out.length() == empty ? null : out.append("\n}\n").toString();
-    }
-
-    private static void field(StringBuilder out, String key, boolean value) {
-        out.append(",\n  \"").append(key).append("\": ").append(value);
     }
 
     private static void field(StringBuilder out, String key, int value) {
@@ -364,57 +332,29 @@ public final class DynamicMinimapSettingsStore {
                 Integer ticks = extractColour(json, "colour_" + DynamicMinimapColours.Key.TICKS.storeId);
                 if (ticks != null && (format == null || format < 3))
                     settings.colours = settings.colours.with(DynamicMinimapColours.Key.COMPASS_DASHES, ticks);
-                // Every key is optional: a missing key keeps the inherited value.
-                Boolean bool;
-                Integer number;
-                if ((bool = extractBool(json, "enabled")) != null) settings.enabled = bool;
-                if ((number = extractInt(json, "rotationMode")) != null) settings.rotationMode = number;
-                if ((number = extractInt(json, "zoomBlocks")) != null) settings.zoomBlocks = number;
-                if ((number = extractInt(json, "sizePixels")) != null) settings.sizePixels = number;
-                if ((number = extractInt(json, "textureResolution")) != null) settings.textureResolution = number;
-                if ((number = extractInt(json, "interfaceScalePercent")) != null) settings.interfaceScalePercent = number;
-                if ((number = extractInt(json, "shape")) != null) settings.shape = number;
-                if ((bool = extractBool(json, "showOtherPlayers")) != null) settings.showOtherPlayers = bool;
-                if ((bool = extractBool(json, "showEntities")) != null) settings.showEntities = bool;
-                if ((bool = extractBool(json, "showDeathMarker")) != null) settings.showDeathMarker = bool;
-                if ((bool = extractBool(json, "showWorldMapMarkers")) != null) settings.showWorldMapMarkers = bool;
-                if ((bool = extractBool(json, "limitMobHeight")) != null) settings.limitMobHeight = bool;
-                if ((number = extractInt(json, "creatureMarkerLimit")) != null) settings.creatureMarkerLimit = number;
-                // Files without this key (pre-v12) take the inherited default (icons, unless an admin changed it).
-                if ((bool = extractBool(json, "creatureIcons")) != null) settings.creatureIcons = bool;
-                if ((bool = extractBool(json, "hostileCreaturesOnly")) != null) settings.hostileCreaturesOnly = bool;
-                // Files without these keys (before 3.1.0 player icons) inherit the defaults (icons, helmets shown).
-                if ((bool = extractBool(json, "playerIcons")) != null) settings.playerIcons = bool;
-                if ((bool = extractBool(json, "playerIconHelmets")) != null) settings.playerIconHelmets = bool;
-                // Legacy files hold the old 32-block default the player never chose: 16 applies instead.
-                if ((number = extractInt(json, "mobVerticalRange")) != null
-                        && !(legacy && number == RETIRED_VERTICAL_RANGE_DEFAULT)) settings.mobVerticalRange = number;
                 // Very old files only have the four-corner "position": convert it to X/Y, unless
-                // the file also has the newer X/Y keys (which then take precedence below).
+                // the file also has the newer X/Y keys (which then take precedence in the loop below).
                 Integer position = extractInt(json, "position");
-                Integer hudPositionX = extractInt(json, "hudPositionX");
-                Integer hudPositionY = extractInt(json, "hudPositionY");
-                if (position != null && (hudPositionX == null || hudPositionY == null)) {
+                if (position != null && (extractInt(json, DynamicMinimapSetting.Field.HUD_POSITION_X.key) == null
+                        || extractInt(json, DynamicMinimapSetting.Field.HUD_POSITION_Y.key) == null)) {
                     settings.applyLegacyPosition(position);
                 }
-                if (hudPositionX != null) settings.hudPositionX = hudPositionX;
-                if (hudPositionY != null) settings.hudPositionY = hudPositionY;
-                if ((bool = extractBool(json, "infoPanelEnabled")) != null) settings.infoPanelEnabled = bool;
-                if ((number = extractInt(json, "infoPanelPosition")) != null) settings.infoPanelPosition = number;
-                if ((number = extractInt(json, "infoPanelTextAlignment")) != null) settings.infoPanelTextAlignment = number;
-                if ((number = extractInt(json, "updateSpeed")) != null) settings.updateSpeed = number;
-                if ((bool = extractBool(json, "clock24Hour")) != null) settings.clock24Hour = bool;
-                if ((bool = extractBool(json, "showCoordinates")) != null) settings.showCoordinates = bool;
-                if ((bool = extractBool(json, "showClock")) != null) settings.showClock = bool;
-                if ((bool = extractBool(json, "showCompass")) != null) settings.showCompass = bool;
-                if ((bool = extractBool(json, "showBiome")) != null) settings.showBiome = bool;
-                // Files without these compass ring keys keep the inherited defaults (all shown).
-                if ((bool = extractBool(json, "showCompassLetters")) != null) settings.showCompassLetters = bool;
-                if ((bool = extractBool(json, "showCompassDashes")) != null) settings.showCompassDashes = bool;
-                if ((bool = extractBool(json, "showCardinalDashes")) != null) settings.showCardinalDashes = bool;
-                if ((bool = extractBool(json, "betterMapEnabled")) != null) settings.betterMapEnabled = bool;
-                if ((bool = extractBool(json, "betterMapMarkersEnabled")) != null) settings.betterMapMarkersEnabled = bool;
-                if ((bool = extractBool(json, "betterMapCaveModeEnabled")) != null) settings.betterMapCaveModeEnabled = bool;
+                // Every key is optional: a missing key (or one of the wrong kind) keeps the inherited
+                // value. Files from before a setting existed simply inherit its default.
+                for (DynamicMinimapSetting.Field field : DynamicMinimapSetting.Field.all()) {
+                    Integer value;
+                    if (field.bool) {
+                        Boolean bool = extractBool(json, field.key);
+                        value = bool == null ? null : bool ? 1 : 0;
+                    } else {
+                        value = extractInt(json, field.key);
+                    }
+                    if (value == null) continue;
+                    // Legacy files hold the old 32-block default the player never chose: 16 applies instead.
+                    if (legacy && field == DynamicMinimapSetting.Field.MOB_VERTICAL_RANGE
+                            && value == RETIRED_VERTICAL_RANGE_DEFAULT) continue;
+                    field.set(settings, value);
+                }
             } catch (IOException unreadable) {
                 // An unreadable file keeps the inherited defaults.
             }

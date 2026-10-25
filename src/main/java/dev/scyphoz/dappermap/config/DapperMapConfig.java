@@ -29,6 +29,8 @@ public class DapperMapConfig {
 
     /** Update speed indexes, fastest first (matches DynamicMinimapSetting.updateSpeed). */
     public static final String[] SPEED_NAMES = {"very-fast", "fast", "normal", "slow"};
+    /** The same speeds as the settings page shows them. */
+    public static final String[] SPEED_LABELS = {"Very fast", "Fast", "Normal", "Slow"};
 
     private boolean enabledByDefault = true;
     private int defaultRadiusBlocks = 96;

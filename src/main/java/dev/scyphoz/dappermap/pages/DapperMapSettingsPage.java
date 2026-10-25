@@ -50,13 +50,8 @@ public final class DapperMapSettingsPage
     private static final Color MUTED = new Color(0x7F89A3);
 
     private static final int[] POSITION_STOPS = {0, 50, 100};
-    /** Only colours consumed by the current live HUD renderer are user-facing. */
-    private static final List<Key> VISIBLE_COLOUR_KEYS = List.of(
-            Key.EDGE, Key.TICKS, Key.COMPASS_DASHES, Key.CARDINAL_TEXT,
-            Key.PANEL, Key.BRAND_TEXT, Key.INFO_HEADERS,
-            Key.COORDS_TEXT, Key.COMPASS_TEXT, Key.CLOCK_TEXT, Key.BIOME_TEXT,
-            Key.SELF, Key.PLAYERS, Key.DEATH, Key.HOSTILE_ACTIVE, Key.HOSTILE, Key.NEUTRAL, Key.FRIENDLY
-    );
+    /** The colour editor's targets: every colour, in Key order (frame, panel, markers). */
+    private static final List<Key> VISIBLE_COLOUR_KEYS = List.of(Key.values());
 
     private static final Row[] ROWS;
     /** Ids of the player-setting dropdown rows (server-limit rows are handled separately). */
@@ -93,29 +88,12 @@ public final class DapperMapSettingsPage
     private boolean betterMapCaveAvailable = false;
     /** Admin page only: unsaved server limits, indexed by DapperMapConfig.Limit ordinal; saved on Apply. */
     private int[] draftLimits;
-    /**
-     * Retained for source compatibility. The authoritative definition now lives in
-     * {@link dev.scyphoz.dappermap.permissions.DapperMapPermissions#ADMIN}, a node kept
-     * deliberately outside the player command tree so player-command wildcard grants
-     * can never reach it.
-     */
-    public static final PermissionQuery ADMIN_PERMISSION = DapperMapPermissions.ADMIN;
+    /** The admin node (outside the player command tree, so player wildcard grants never reach it). */
+    private static final PermissionQuery ADMIN_PERMISSION = DapperMapPermissions.ADMIN;
 
-    public DapperMapSettingsPage(
-            PlayerRef playerRef,
-            DapperMapSessionManager sessions,
-            DapperMapConfig config
-    ) {
-        super(
-                playerRef,
-                CustomPageLifetime.CanDismiss,
-                DapperMapSettingsPage.Ev.CODEC
-        );
-
-        this.playerRef = playerRef;
-        this.sessions = sessions;
-        this.config = config;
-        this.adminMode = false;
+    /** The player's own settings page. */
+    public DapperMapSettingsPage(PlayerRef playerRef, DapperMapSessionManager sessions, DapperMapConfig config) {
+        this(playerRef, sessions, config, false);
     }
 
     public DapperMapSettingsPage(PlayerRef playerRef, DapperMapSessionManager sessions, DapperMapConfig config, boolean adminMode) {
@@ -306,9 +284,7 @@ public final class DapperMapSettingsPage
             builder.set(row + " #ValueLabel.Text", values[index] + "%");
             if (syncSliders) builder.set(row + " #ValueSlider.Value", values[index]);
         }
-        builder.set("#PositionSummary.Text",
-                positionName(settings.hudPositionX, settings.hudPositionY)
-                        + "   •   " + settings.hudPositionX + "% / " + settings.hudPositionY + "%");
+        builder.set("#PositionSummary.Text", positionSummary(settings));
         this.updatePositionGrid(builder, settings);
     }
 
@@ -337,37 +313,38 @@ public final class DapperMapSettingsPage
                                       int previousX, int previousY) {
         int value = index == 0 ? settings.hudPositionX : settings.hudPositionY;
         builder.set("#PositionFineTuneList[" + index + "] #ValueLabel.Text", value + "%");
-        builder.set("#PositionSummary.Text",
-                positionName(settings.hudPositionX, settings.hudPositionY)
-                        + "   •   " + settings.hudPositionX + "% / " + settings.hudPositionY + "%");
+        builder.set("#PositionSummary.Text", positionSummary(settings));
         if (nearestPositionStop(previousX) != nearestPositionStop(settings.hudPositionX)
                 || nearestPositionStop(previousY) != nearestPositionStop(settings.hudPositionY))
             this.updatePositionGrid(builder, settings);
     }
 
+    /** "TOP RIGHT   •   100% / 0%": the Position tab's summary line. */
+    private static String positionSummary(DynamicMinimapSetting settings) {
+        return positionName(settings.hudPositionX, settings.hudPositionY)
+                + "   •   " + settings.hudPositionX + "% / " + settings.hudPositionY + "%";
+    }
+
+    /** Hides the preview image and its labels and shows {@code text} in their place. */
+    private static void showPreviewNotice(UICommandBuilder ui, String text) {
+        ui.set("#PreviewHudImage.Visible", false);
+        ui.set("#PreviewText.Visible", false);
+        ui.set("#PreviewDisabled.Text", text);
+        ui.set("#PreviewDisabled.Visible", true);
+    }
+
     private void updatePreview(UICommandBuilder ui, DynamicMinimapSetting settings) {
         int request = ++this.previewRequest;
         if (!settings.enabled) {
-            ui.set("#PreviewHudImage.Visible", false);
-            ui.set("#PreviewText.Visible", false);
-            ui.set("#PreviewDisabled.Text", "MINIMAP DISABLED");
-            ui.set("#PreviewDisabled.Visible", true);
+            showPreviewNotice(ui, "MINIMAP DISABLED");
             return;
         }
         if (this.previewSnapshot == null) this.previewSnapshot = this.sessions.capturePreview(this.playerRef.getUuid());
         if (this.previewSnapshot == null) {
-            ui.set("#PreviewHudImage.Visible", false);
-            ui.set("#PreviewText.Visible", false);
-            ui.set("#PreviewDisabled.Text", "LIVE HUD PREVIEW UNAVAILABLE");
-            ui.set("#PreviewDisabled.Visible", true);
+            showPreviewNotice(ui, "LIVE HUD PREVIEW UNAVAILABLE");
             return;
         }
-        if (this.previewRevision == 0) {
-            ui.set("#PreviewHudImage.Visible", false);
-            ui.set("#PreviewText.Visible", false);
-            ui.set("#PreviewDisabled.Text", "PREPARING HUD PREVIEW");
-            ui.set("#PreviewDisabled.Visible", true);
-        }
+        if (this.previewRevision == 0) showPreviewNotice(ui, "PREPARING HUD PREVIEW");
         World world = this.previewWorld;
         if (world == null || this.closed) return;
         // Pace renders while sliders or the colour picker are dragged; the newest draft is
@@ -686,8 +663,8 @@ public final class DapperMapSettingsPage
 
         int renderedIndex = 0;
         for (Row row : ROWS) {
-            if (tabFor(row.id) != this.activeTab) continue;
-            boolean limitRow = isLimitRow(row.id);
+            if (row.tab != this.activeTab) continue;
+            boolean limitRow = row.tab == Tab.SERVER;
             if (limitRow && !this.adminMode) continue; // Server limits are admin-page only.
             int index = renderedIndex++;
 
@@ -697,25 +674,18 @@ public final class DapperMapSettingsPage
             } else if (row.kind == Kind.HEADER) {
                 builder.append("#DapperMapSettingsList", "Pages/DapperMapSectionRow.ui");
                 builder.set("#DapperMapSettingsList[" + index + "] #SectionLabel.Text", row.label);
-            } else if (row.kind == Kind.TOGGLE) {
-                if (!this.hasSettingPermission(permissionForSetting(row.id))
-                        || isControlDisabled(row.id, settings)) {
-                    this.disabledRow(builder, index, row, settings);
-                }
-                else this.toggleRow(builder, events, index, row, settings);
+            } else if (!this.hasSettingPermission(permissionForSetting(row.id)) || isControlDisabled(row.id, settings)) {
+                this.disabledRow(builder, index, row); // Not permitted, or a setting it needs is off.
             } else if (row.kind == Kind.DROPDOWN) {
-                if (!this.hasSettingPermission(permissionForSetting(row.id))
-                        || isControlDisabled(row.id, settings)) {
-                    this.disabledRow(builder, index, row, settings);
-                }
-                else if (isBooleanToggle(row.id)) this.toggleRow(builder, events, index, row, settings);
-                else this.dropdownRow(builder, events, index, row, settings);
+                this.dropdownRow(builder, events, index, row, settings);
+            } else {
+                this.toggleRow(builder, events, index, row, settings); // TOGGLE and SWITCH rows.
             }
         }
     }
 
-    private void disabledRow(UICommandBuilder builder, int index, Row row,
-                             DynamicMinimapSetting settings) {
+    /** A row shown greyed out with "Disabled" in place of its control. */
+    private void disabledRow(UICommandBuilder builder, int index, Row row) {
         String selector = "#DapperMapSettingsList[" + index + "]";
         builder.append("#DapperMapSettingsList", "Pages/DapperMapDisabledDropdownRow.ui");
         builder.set(selector + " #RowLabel.Text", row.label);
@@ -783,11 +753,7 @@ public final class DapperMapSettingsPage
         String selector = "#DapperMapSettingsList[" + index + "]";
 
         if (isDropdownDisabled(row.id, settings)) {
-            // Render a non-interactive value while its controlling filter is off.
-            builder.append("#DapperMapSettingsList", "Pages/DapperMapDisabledDropdownRow.ui");
-            builder.set(selector + " #RowLabel.Text", row.label);
-            builder.set(selector + " #RowDescription.Text", description(row.id));
-            builder.set(selector + " #ValueLabel.Text", "Disabled");
+            this.disabledRow(builder, index, row); // Non-interactive while its controlling filter is off.
             return;
         }
 
@@ -1082,7 +1048,7 @@ public final class DapperMapSettingsPage
         boolean[] out = new boolean[ROWS.length];
         for (int i = 0; i < ROWS.length; i++) {
             Row row = ROWS[i];
-            if (row.kind == Kind.HEADER || tabFor(row.id) != this.activeTab || isLimitRow(row.id)) continue;
+            if (row.kind == Kind.HEADER || row.tab != this.activeTab || row.tab == Tab.SERVER) continue;
             out[i] = !this.hasSettingPermission(permissionForSetting(row.id)) || isControlDisabled(row.id, settings);
         }
         return out;
@@ -1099,8 +1065,8 @@ public final class DapperMapSettingsPage
     private int renderedIndex(String id) {
         int index = 0;
         for (Row row : ROWS) {
-            if (tabFor(row.id) != this.activeTab) continue;
-            if (isLimitRow(row.id) && !this.adminMode) continue;
+            if (row.tab != this.activeTab) continue;
+            if (row.tab == Tab.SERVER && !this.adminMode) continue;
             if (row.id.equals(id)) return index;
             index++;
         }
@@ -1118,287 +1084,90 @@ public final class DapperMapSettingsPage
         if (!isIntegrationToggle(id)) builder.set(selector + " #StateLabel.Text", toggleStateLabel(id, settings));
     }
 
+    /** Flips an on/off row (also Map Shape, Map Rotation and Clock Format, which are shown as switches). */
     private void applyToggle(DynamicMinimapSetting settings, String id) {
-        if (isControlDisabled(id, settings)) return;
-        switch (id) {
-            case "enabled" -> settings.enabled = !settings.enabled;
-            case "players" -> settings.showOtherPlayers = !settings.showOtherPlayers;
-            case "entities" -> settings.showEntities = !settings.showEntities;
-            case "death" -> settings.showDeathMarker = !settings.showDeathMarker;
-            case "worldmap" -> settings.showWorldMapMarkers = !settings.showWorldMapMarkers;
-            case "height" -> settings.limitMobHeight = !settings.limitMobHeight;
-            case "info_panel" -> settings.infoPanelEnabled = !settings.infoPanelEnabled;
-            case "clock" -> settings.showClock = !settings.showClock;
-            case "coordinates" -> settings.showCoordinates = !settings.showCoordinates;
-            case "compass" -> settings.showCompass = !settings.showCompass;
-            case "biome" -> settings.showBiome = !settings.showBiome;
-            case "compass_letters" -> settings.showCompassLetters = !settings.showCompassLetters;
-            case "compass_dashes" -> settings.showCompassDashes = !settings.showCompassDashes;
-            case "cardinal_dashes" -> settings.showCardinalDashes = !settings.showCardinalDashes;
-            case "player_helmets" -> settings.playerIconHelmets = !settings.playerIconHelmets;
-            case "bettermap" -> settings.betterMapEnabled = !settings.betterMapEnabled;
-            case "bettermap_markers" -> settings.betterMapMarkersEnabled = !settings.betterMapMarkersEnabled;
-            case "bettermap_caves" -> settings.betterMapCaveModeEnabled = !settings.betterMapCaveModeEnabled;
-            case "shape" -> settings.shape = settings.shape == 1 ? 0 : 1;
-            case "rotation" -> settings.rotationMode = settings.rotationMode == 0 ? 1 : 0;
-            case "clock_format" -> settings.clock24Hour = !settings.clock24Hour;
-        }
+        Row row = row(id);
+        if (row == null || (row.kind != Kind.TOGGLE && row.kind != Kind.SWITCH) || isControlDisabled(id, settings)) return;
+        row.field.set(settings, toggleValue(id, settings) ? 0 : 1);
     }
 
-
+    /** Integration switches keep the control visually quiet (no state label beside it). */
     private static boolean isIntegrationToggle(String id) {
-        return "worldmap".equals(id) || "bettermap".equals(id)
-                || id.startsWith("bettermap_");
+        Row row = row(id);
+        return row != null && row.tab == Tab.INTEGRATIONS && row.kind != Kind.HEADER;
     }
 
+    /** "ENABLED"/"DISABLED", or the switch's own state name ("CIRCLE", "PLAYER FACING", "24 HOUR"). */
     private static String toggleStateLabel(String id, DynamicMinimapSetting settings) {
-        return switch (id) {
-            case "shape" -> settings.shape == 1 ? "CIRCLE" : "SQUARE";
-            case "rotation" -> settings.rotationMode == 1 ? "PLAYER FACING" : "NORTH UP";
-            case "clock_format" -> settings.clock24Hour ? "24 HOUR" : "12 HOUR";
-            default -> toggleValue(id, settings) ? "ENABLED" : "DISABLED";
-        };
+        boolean on = toggleValue(id, settings);
+        Row row = row(id);
+        if (row != null && row.kind == Kind.SWITCH)
+            for (Choice choice : row.options.choices(0)) if (choice.fieldValue() == (on ? 1 : 0)) return choice.state();
+        return on ? "ENABLED" : "DISABLED";
     }
 
+    /** True for a dropdown setting shown as a switch (it also accepts dropdown events). */
     private static boolean isBooleanToggle(String id) {
-        return switch (id) {
-            case "players", "entities", "death", "worldmap", "height", "info_panel",
-                 "clock", "coordinates", "compass", "biome", "bettermap",
-                 "bettermap_markers", "bettermap_caves",
-                 "compass_letters", "compass_dashes", "cardinal_dashes", "player_helmets",
-                 "shape", "rotation", "clock_format" -> true;
-            default -> false;
-        };
+        Row row = row(id);
+        return row != null && row.kind == Kind.SWITCH;
     }
 
+    /** A switch row's state (field value 1); false for every other row. */
     private static boolean toggleValue(String id, DynamicMinimapSetting settings) {
-        return switch (id) {
-            case "enabled" -> settings.enabled;
-            case "info_panel" -> settings.infoPanelEnabled;
-            case "players" -> settings.showOtherPlayers;
-            case "entities" -> settings.showEntities;
-            case "death" -> settings.showDeathMarker;
-            case "worldmap" -> settings.showWorldMapMarkers;
-            case "height" -> settings.limitMobHeight;
-            case "clock" -> settings.showClock;
-            case "coordinates" -> settings.showCoordinates;
-            case "compass" -> settings.showCompass;
-            case "biome" -> settings.showBiome;
-            case "compass_letters" -> settings.showCompassLetters;
-            case "compass_dashes" -> settings.showCompassDashes;
-            case "cardinal_dashes" -> settings.showCardinalDashes;
-            case "player_helmets" -> settings.playerIconHelmets;
-            case "bettermap" -> settings.betterMapEnabled;
-            case "bettermap_markers" -> settings.betterMapMarkersEnabled;
-            case "bettermap_caves" -> settings.betterMapCaveModeEnabled;
-            case "shape" -> settings.shape == 1;
-            case "rotation" -> settings.rotationMode == 1;
-            case "clock_format" -> settings.clock24Hour;
-            default -> false;
-        };
+        Row row = row(id);
+        return row != null && (row.kind == Kind.TOGGLE || row.kind == Kind.SWITCH) && row.field.get(settings) == 1;
     }
 
     private static String description(String id) {
-        return switch (id) {
-            case "enabled" -> "Show or hide your minimap.";
-            case "info_panel" -> "Show or hide the Info Panel while keeping the minimap visible.";
-            case "colours" -> "Choose colours for your minimap and markers.";
-            case "zoom" -> "Choose how far around you the map shows.";
-            case "size" -> "Change the size of the map on your screen. Markers grow with larger maps.";
-            case "interface_scale" -> "Resize the map and its information together.";
-            case "shape" -> "Choose a round or square map.";
-            case "rotation" -> "Keep north at the top, or turn the map with the direction you face.";
-            case "speed" -> "How often the minimap refreshes. Faster uses more server work.";
-            case "move_minimap" -> "Choose where the minimap sits on your screen.";
-            case "panel_position" -> "Choose which side of the map the Info Panel sits on.";
-            case "panel_alignment" -> "Align the Info Panel text left, centre or right.";
-            case "players" -> "Show nearby players on your minimap.";
-            case "entities" -> "Show nearby creatures on your minimap.";
-            case "creature_limit" -> "Show up to 16, 32 or 64 nearby creatures, prioritising the nearest.";
-            case "creature_style" -> "Show creatures as face icons or as threat-coloured dots.";
-            case "creature_filter" -> "Show all creatures, or only hostile and attacking ones.";
-            case "player_style" -> "Show players as head icons or as dots.";
-            case "player_helmets" -> "Show the helmet each player wears on their icon.";
-            case "death" -> "Show death markers on your minimap.";
-            case "worldmap" -> "Show Hytale personal, shared, POI, spawn and respawn world-map markers.";
-            case "height" -> "Hide creatures far above or below you.";
-            case "vrange" -> "How far above and below you creatures are shown.";
-            case "clock" -> "Show the current time in your Hytale world.";
-            case "coordinates" -> "Show your current world coordinates.";
-            case "clock_format" -> "Choose a 12-hour or 24-hour clock.";
-            case "compass" -> "Show the direction you are facing.";
-            case "biome" -> "Show the name of the region (biome) you are in.";
-            case "compass_letters" -> "Show the N, E, S and W letters around the map edge.";
-            case "compass_dashes" -> "Show the small dashes around the map edge.";
-            case "cardinal_dashes" -> "Show the large N, E, S and W dashes. When hidden, the letters take their place.";
-            case "bettermap" -> BetterMapIntegration.isAvailable()
-                    ? "Use BetterMap's waypoints and cave maps on your minimap."
-                    : "BetterMap is not installed or could not be detected.";
-            case "bettermap_markers" -> "Show waypoints with BetterMap icons. When off, they appear with Hytale map markers.";
-            case "bettermap_caves" -> "Show BetterMap's cave terrain while underground.";
-            case "texture_resolution" -> "Sharper map detail. Higher values use more server work and data.";
-            case "limit_speed" -> "Fastest update speed any player's minimap runs at.";
-            case "limit_resolution" -> "Highest texture resolution any player's minimap renders at.";
-            case "limit_zoom" -> "Largest zoom radius any player's minimap can show.";
-            case "limit_creatures" -> "Most creature markers any player's minimap shows.";
-            default -> "";
-        };
+        if ("bettermap".equals(id) && !BetterMapIntegration.isAvailable())
+            return "BetterMap is not installed or could not be detected.";
+        Row row = row(id);
+        return row == null ? "" : row.description;
     }
 
-    /** True when a row's control is unavailable: minimap off, a controlling setting off, or BetterMap missing. */
+    /**
+     * True when a row's control is unavailable: minimap off, a setting it depends on off (see each
+     * row's {@code requires}), or BetterMap (or its cave mode) missing.
+     */
     private boolean isDropdownDisabled(String id, DynamicMinimapSetting settings) {
-        return !settings.enabled
-                || (isInfoPanelSetting(id) && !"info_panel".equals(id) && !settings.infoPanelEnabled)
-                || ("bettermap".equals(id) && !BetterMapIntegration.isAvailable())
-                || (id.startsWith("bettermap_") && (!settings.betterMapEnabled
-                || !BetterMapIntegration.isAvailable()))
-                || ("bettermap_caves".equals(id) && !this.betterMapCaveAvailable)
-                || (("height".equals(id) || "vrange".equals(id) || "creature_limit".equals(id)
-                || "creature_style".equals(id) || "creature_filter".equals(id)) && !settings.showEntities)
-                || (("player_style".equals(id) || "player_helmets".equals(id)) && !settings.showOtherPlayers)
-                || ("player_helmets".equals(id) && !settings.playerIcons)
-                || ("vrange".equals(id) && !settings.limitMobHeight)
-                || ("clock_format".equals(id) && !settings.showClock);
-    }
-
-    private static boolean isInfoPanelSetting(String id) {
-        return switch (id) {
-            case "panel_position", "panel_alignment", "coordinates", "clock",
-                 "clock_format", "compass", "biome" -> true;
-            default -> false;
-        };
+        if (!settings.enabled) return true;
+        Row row = row(id);
+        if (row == null) return false;
+        for (DynamicMinimapSetting.Field field : row.requires) if (field.get(settings) == 0) return true;
+        return (id.startsWith("bettermap") && !BetterMapIntegration.isAvailable())
+                || ("bettermap_caves".equals(id) && !this.betterMapCaveAvailable);
     }
 
     private boolean isControlDisabled(String id, DynamicMinimapSetting settings) {
         return !"enabled".equals(id) && isDropdownDisabled(id, settings);
     }
 
+    /** Stores an offered dropdown value (including an existing custom number) in its setting. */
     private void applyDropdown(DynamicMinimapSetting settings, String id, String value) {
         if (isDropdownDisabled(id, settings)) return;
         if (value == null || value.isBlank()) return;
-        // Accept only an offered value, including an existing custom numeric value.
-        if (dropdownEntries(id, settings).stream().noneMatch(entry -> entry.value().equals(value))) return;
-        switch (id) {
-            case "zoom" -> settings.zoomBlocks = Integer.parseInt(value);
-            case "size" -> settings.sizePixels = Integer.parseInt(value);
-            case "interface_scale" -> settings.interfaceScalePercent = Integer.parseInt(value);
-            case "texture_resolution" -> settings.textureResolution = Integer.parseInt(value);
-            case "speed" -> settings.updateSpeed = Integer.parseInt(value);
-            case "panel_position" -> settings.infoPanelPosition = Integer.parseInt(value);
-            case "panel_alignment" -> settings.infoPanelTextAlignment = Integer.parseInt(value);
-            case "shape" -> settings.shape = Integer.parseInt(value);
-            case "rotation" -> settings.rotationMode = Integer.parseInt(value);
-            case "vrange" -> settings.mobVerticalRange = Integer.parseInt(value);
-            case "creature_limit" -> settings.creatureMarkerLimit = Integer.parseInt(value);
-            case "creature_style" -> settings.creatureIcons = "icons".equals(value);
-            case "creature_filter" -> settings.hostileCreaturesOnly = "hostile".equals(value);
-            case "player_style" -> settings.playerIcons = "icons".equals(value);
-            case "player_helmets" -> settings.playerIconHelmets = Boolean.parseBoolean(value);
-            case "players" -> settings.showOtherPlayers = Boolean.parseBoolean(value);
-            case "entities" -> settings.showEntities = Boolean.parseBoolean(value);
-            case "death" -> settings.showDeathMarker = Boolean.parseBoolean(value);
-            case "worldmap" -> settings.showWorldMapMarkers = Boolean.parseBoolean(value);
-            case "height" -> settings.limitMobHeight = Boolean.parseBoolean(value);
-            case "clock" -> settings.showClock = Boolean.parseBoolean(value);
-            case "clock_format" -> settings.clock24Hour = Boolean.parseBoolean(value);
-            case "coordinates" -> settings.showCoordinates = Boolean.parseBoolean(value);
-            case "compass" -> settings.showCompass = Boolean.parseBoolean(value);
-            case "biome" -> settings.showBiome = Boolean.parseBoolean(value);
-            case "compass_letters" -> settings.showCompassLetters = Boolean.parseBoolean(value);
-            case "compass_dashes" -> settings.showCompassDashes = Boolean.parseBoolean(value);
-            case "cardinal_dashes" -> settings.showCardinalDashes = Boolean.parseBoolean(value);
-            case "bettermap" -> settings.betterMapEnabled = Boolean.parseBoolean(value);
-            case "bettermap_markers" -> settings.betterMapMarkersEnabled = Boolean.parseBoolean(value);
-            case "bettermap_caves" -> settings.betterMapCaveModeEnabled = Boolean.parseBoolean(value);
+        Row row = row(id);
+        if (row == null || row.options == null) return;
+        // Accept only an offered value; the entry says which field value it stands for.
+        for (Choice choice : row.options.choices(row.field.get(settings))) {
+            if (!choice.value().equals(value)) continue;
+            row.field.set(settings, choice.fieldValue());
+            settings.normalize();
+            return;
         }
-        settings.normalize();
     }
 
+    /** A dropdown row's entries, with choices above a server limit tagged (player page). */
     private List<DropdownEntryInfo> dropdownEntries(String id, DynamicMinimapSetting settings) {
         List<DropdownEntryInfo> entries = new ArrayList<>();
-        switch (id) {
-            case "zoom" -> {
-                addNumericEntries(entries, settings.zoomBlocks, DynamicMinimapSetting.ZOOM_MIN, DynamicMinimapSetting.ZOOM_MAX, 16, " blocks");
-                this.markOverLimit(entries, id);
-            }
-            case "size" -> addNumericEntries(entries, settings.sizePixels, DynamicMinimapSetting.SIZE_MIN, DynamicMinimapSetting.SIZE_MAX, 20, " px");
-            case "creature_limit" -> {
-                for (int limit : DynamicMinimapSetting.CREATURE_LIMITS) entries.add(entry(Integer.toString(limit), Integer.toString(limit)));
-                this.markOverLimit(entries, id);
-            }
-            case "creature_style" -> {
-                entries.add(entry("Icons", "icons"));
-                entries.add(entry("Dots", "dots"));
-            }
-            case "creature_filter" -> {
-                entries.add(entry("All", "all"));
-                entries.add(entry("Hostile Only", "hostile"));
-            }
-            case "player_style" -> {
-                entries.add(entry("Icons", "icons"));
-                entries.add(entry("Dots", "dots"));
-            }
-            case "vrange" -> {
-                TreeSet<Integer> values = new TreeSet<>(List.of(DynamicMinimapSetting.HEIGHT_RANGE_MIN));
-                for (int value = 8; value <= DynamicMinimapSetting.HEIGHT_RANGE_MAX; value += 8) values.add(value);
-                values.add(settings.mobVerticalRange);
-                for (int value : values) entries.add(entry(value + " blocks", Integer.toString(value)));
-            }
-            case "interface_scale" -> {
-                TreeSet<Integer> values = new TreeSet<>(List.of(75, 85, 100, 110, 125, 140, 160));
-                values.add(settings.interfaceScalePercent);
-                for (int value : values) entries.add(entry(value + "%", Integer.toString(value)));
-            }
-            case "texture_resolution" -> {
-                TreeSet<Integer> values = resolutionChoices();
-                values.add(settings.textureResolution);
-                for (int value : values) entries.add(entry(value + " px", Integer.toString(value)));
-                this.markOverLimit(entries, id);
-            }
-            case "speed" -> {
-                for (int value = DynamicMinimapSetting.SPEED_FASTEST; value <= DynamicMinimapSetting.SPEED_SLOWEST; value++) entries.add(entry(displaySpeed(value), Integer.toString(value)));
-                this.markOverLimit(entries, id);
-            }
-            case "panel_position" -> {
-                entries.add(entry("Right", Integer.toString(DynamicMinimapSetting.INFO_RIGHT)));
-                entries.add(entry("Left", Integer.toString(DynamicMinimapSetting.INFO_LEFT)));
-                entries.add(entry("Above", Integer.toString(DynamicMinimapSetting.INFO_ABOVE)));
-                entries.add(entry("Below", Integer.toString(DynamicMinimapSetting.INFO_BELOW)));
-            }
-            case "panel_alignment" -> {
-                entries.add(entry("Left", Integer.toString(DynamicMinimapSetting.INFO_ALIGN_LEFT)));
-                entries.add(entry("Centre", Integer.toString(DynamicMinimapSetting.INFO_ALIGN_CENTER)));
-                entries.add(entry("Right", Integer.toString(DynamicMinimapSetting.INFO_ALIGN_RIGHT)));
-            }
-            case "shape" -> {
-                entries.add(entry("Circle", "1"));
-                entries.add(entry("Square", "0"));
-            }
-            case "rotation" -> {
-                entries.add(entry("North Up", "0"));
-                entries.add(entry("Player Facing", "1"));
-            }
-            case "clock_format" -> {
-                entries.add(entry("24-hour", "true"));
-                entries.add(entry("12-hour", "false"));
-            }
-            case "players", "entities", "death", "worldmap", "height", "coordinates", "clock", "compass", "biome",
-                 "bettermap", "bettermap_markers", "bettermap_caves",
-                 "compass_letters", "compass_dashes", "cardinal_dashes", "player_helmets" -> {
-                entries.add(entry("Enabled", "true"));
-                entries.add(entry("Disabled", "false"));
-            }
-            default -> { }
-        }
+        Row row = row(id);
+        if (row == null || row.options == null) return entries;
+        for (Choice choice : row.options.choices(row.field.get(settings))) entries.add(entry(choice.label(), choice.value()));
+        this.markOverLimit(entries, id);
         return entries;
     }
 
     // ---- Server limits (3.1.0) ---------------------------------------------------------
-
-    /** Rows shown only on the admin page that edit dappermap_minimap.json limits. */
-    private static boolean isLimitRow(String id) {
-        return id.startsWith("limit_") || "section_limits".equals(id);
-    }
 
     /** Persists edited limits and re-clamps live minimaps; untouched limits cause no file write. */
     private void saveLimitsIfChanged() {
@@ -1481,49 +1250,13 @@ public final class DapperMapSettingsPage
         return new DropdownEntryInfo(LocalizableString.fromString(label), value);
     }
 
-    private static void addNumericEntries(List<DropdownEntryInfo> entries, int current,
-                                          int min, int max, int step, String suffix) {
-        TreeSet<Integer> values = new TreeSet<>();
-        for (int value = min; value <= max; value += step) values.add(value);
-        values.add(current);
-        for (int value : values) entries.add(entry(value + suffix, Integer.toString(value)));
-    }
-
+    /** The value a dropdown row shows: its matching entry, else the number itself. */
     private static String dropdownValue(String id, DynamicMinimapSetting settings) {
-        return switch (id) {
-            case "zoom" -> Integer.toString(settings.zoomBlocks);
-            case "size" -> Integer.toString(settings.sizePixels);
-            case "interface_scale" -> Integer.toString(settings.interfaceScalePercent);
-            case "texture_resolution" -> Integer.toString(settings.textureResolution);
-            case "speed" -> Integer.toString(settings.updateSpeed);
-            case "panel_position" -> Integer.toString(settings.infoPanelPosition);
-            case "panel_alignment" -> Integer.toString(settings.infoPanelTextAlignment);
-            case "shape" -> Integer.toString(settings.shape);
-            case "rotation" -> Integer.toString(settings.rotationMode);
-            case "vrange" -> Integer.toString(settings.mobVerticalRange);
-            case "creature_limit" -> Integer.toString(settings.creatureMarkerLimit);
-            case "creature_style" -> settings.creatureIcons ? "icons" : "dots";
-            case "creature_filter" -> settings.hostileCreaturesOnly ? "hostile" : "all";
-            case "player_style" -> settings.playerIcons ? "icons" : "dots";
-            case "player_helmets" -> Boolean.toString(settings.playerIconHelmets);
-            case "players" -> Boolean.toString(settings.showOtherPlayers);
-            case "entities" -> Boolean.toString(settings.showEntities);
-            case "death" -> Boolean.toString(settings.showDeathMarker);
-            case "worldmap" -> Boolean.toString(settings.showWorldMapMarkers);
-            case "height" -> Boolean.toString(settings.limitMobHeight);
-            case "clock" -> Boolean.toString(settings.showClock);
-            case "clock_format" -> Boolean.toString(settings.clock24Hour);
-            case "coordinates" -> Boolean.toString(settings.showCoordinates);
-            case "compass" -> Boolean.toString(settings.showCompass);
-            case "biome" -> Boolean.toString(settings.showBiome);
-            case "compass_letters" -> Boolean.toString(settings.showCompassLetters);
-            case "compass_dashes" -> Boolean.toString(settings.showCompassDashes);
-            case "cardinal_dashes" -> Boolean.toString(settings.showCardinalDashes);
-            case "bettermap" -> Boolean.toString(settings.betterMapEnabled);
-            case "bettermap_markers" -> Boolean.toString(settings.betterMapMarkersEnabled);
-            case "bettermap_caves" -> Boolean.toString(settings.betterMapCaveModeEnabled);
-            default -> throw new IllegalArgumentException("Unknown dropdown: " + id);
-        };
+        Row row = row(id);
+        if (row == null || row.options == null) throw new IllegalArgumentException("Unknown dropdown: " + id);
+        int value = row.field.get(settings);
+        for (Choice choice : row.options.choices(value)) if (choice.fieldValue() == value) return choice.value();
+        return Integer.toString(value);
     }
 
     private static int clampPercent(int value) {
@@ -1556,90 +1289,200 @@ public final class DapperMapSettingsPage
         return x < 25 ? "LEFT" : (x > 75 ? "RIGHT" : "CENTRE");
     }
 
+    /** "Very fast" .. "Slow"; anything out of range reads as Normal. */
     private static String displaySpeed(int speed) {
-        return switch (speed) {
-            case 0 -> "Very fast";
-            case 1 -> "Fast";
-            case 3 -> "Slow";
-            case 2 -> "Normal";
-            default -> "Normal";
-        };
+        return DapperMapConfig.SPEED_LABELS[speed >= 0 && speed < DapperMapConfig.SPEED_LABELS.length ? speed : 2];
     }
 
-    private static Tab tabFor(String id) {
-        return switch (id) {
-            case "players", "death", "entities", "height", "vrange", "creature_limit", "creature_style",
-                 "creature_filter", "player_style", "player_helmets",
-                 "section_players", "section_creatures", "section_other" -> Tab.MARKERS;
-            case "section_4", "section_5", "worldmap", "bettermap", "bettermap_markers",
-                 "bettermap_caves" -> Tab.INTEGRATIONS;
-            case "info_panel", "panel_position", "panel_alignment", "section_3",
-                 "coordinates", "clock", "clock_format", "compass", "biome" -> Tab.INTERFACE;
-            // Compass ring and performance rows fall through to Display (the default).
-            case "section_limits", "limit_speed", "limit_resolution", "limit_zoom", "limit_creatures" -> Tab.SERVER;
-            default -> Tab.DISPLAY;
-        };
+    /** The row with this id, or null (headers included; ids are unique). */
+    private static Row row(String id) {
+        return id == null ? null : ROW_BY_ID.get(id);
+    }
+
+    // ---- Row table ---------------------------------------------------------------------
+
+    /** One dropdown entry: its label, the value the client sends back, and the field value it stands for. */
+    private record Choice(String label, String value, int fieldValue, String state) { }
+
+    /** A row's dropdown entries, given the setting's current value (number lists include it). */
+    private interface Options {
+        List<Choice> choices(int current);
+    }
+
+    /** A fixed list of entries. */
+    private record Fixed(List<Choice> list) implements Options {
+        public List<Choice> choices(int current) { return this.list; }
+    }
+
+    /** Numbers in ascending order, plus the current value when it is not one of them (e.g. "128 blocks"). */
+    private record Numbers(int[] base, String unit) implements Options {
+        public List<Choice> choices(int current) {
+            TreeSet<Integer> values = new TreeSet<>();
+            for (int value : this.base) values.add(value);
+            values.add(current);
+            List<Choice> out = new ArrayList<>(values.size());
+            for (int value : values) out.add(new Choice(value + this.unit, Integer.toString(value), value, null));
+            return out;
+        }
+    }
+
+    private static Options choices(Choice... choices) { return new Fixed(List.of(choices)); }
+
+    /** Two entries for a 0/1 setting: the one shown first, then the other. */
+    private static Choice on(String label, String value, String state) { return new Choice(label, value, 1, state); }
+    private static Choice off(String label, String value, String state) { return new Choice(label, value, 0, state); }
+
+    /** Enabled/Disabled for an on/off setting. */
+    private static final Options ON_OFF = choices(on("Enabled", "true", "ENABLED"), off("Disabled", "false", "DISABLED"));
+    private static final Options ICONS_DOTS = choices(on("Icons", "icons", null), off("Dots", "dots", null));
+
+    /** Every value from {@code min} to {@code max} in {@code step}s. */
+    private static int[] steps(int min, int max, int step) {
+        int[] out = new int[(max - min) / step + 1];
+        for (int i = 0; i < out.length; i++) out[i] = min + i * step;
+        return out;
+    }
+
+    /** Integer entries labelled by {@code labels}, valued 0, 1, 2... in the order given by {@code values}. */
+    private static Options indexed(String[] labels, int... values) {
+        Choice[] out = new Choice[values.length];
+        for (int i = 0; i < values.length; i++) out[i] = new Choice(labels[i], Integer.toString(values[i]), values[i], null);
+        return choices(out);
+    }
+
+    private static final List<Row> ROW_LIST = new ArrayList<>();
+    private static final java.util.Map<String, Row> ROW_BY_ID = new java.util.HashMap<>();
+    /** Tab of the rows being added (static initialisation only). */
+    private static Tab addingTab;
+
+    private static void header(String id, String label) {
+        add(new Row(id, label, Kind.HEADER, addingTab, null, null, "", new DynamicMinimapSetting.Field[0]));
+    }
+
+    private static void row(String id, String label, Kind kind, DynamicMinimapSetting.Field field, Options options,
+                            String description, DynamicMinimapSetting.Field... requires) {
+        add(new Row(id, label, kind, addingTab, field, options, description, requires));
+    }
+
+    private static void add(Row row) {
+        ROW_LIST.add(row);
+        ROW_BY_ID.put(row.id, row);
     }
 
     static {
-        ROWS = new Row[]{
-                // Display tab: appearance, then the compass ring, then the settings that cost server work.
-                new Row("enabled", "Minimap", Kind.TOGGLE),
-                new Row("section_0", "MAP APPEARANCE", Kind.HEADER),
-                new Row("zoom", "Zoom Radius", Kind.DROPDOWN),
-                new Row("size", "Map Size", Kind.DROPDOWN),
-                new Row("interface_scale", "Interface Scale", Kind.DROPDOWN),
-                new Row("shape", "Map Shape", Kind.DROPDOWN),
-                new Row("rotation", "Map Rotation", Kind.DROPDOWN),
-                // Compass ring around the map (part of the map, not the Info Panel).
-                new Row("section_compass", "COMPASS RING", Kind.HEADER),
-                new Row("compass_letters", "Compass Letters", Kind.DROPDOWN),
-                new Row("compass_dashes", "Compass Dashes", Kind.DROPDOWN),
-                new Row("cardinal_dashes", "Cardinal Dashes", Kind.DROPDOWN),
-                new Row("section_performance", "PERFORMANCE", Kind.HEADER),
-                new Row("speed", "Update Speed", Kind.DROPDOWN),
-                new Row("texture_resolution", "Texture Resolution", Kind.DROPDOWN),
-                // Admin page only (Server Limits tab): server-wide limits that clamp every live minimap.
-                new Row("section_limits", "PLAYER SETTING LIMITS", Kind.HEADER),
-                new Row("limit_speed", "Fastest Update Speed", Kind.DROPDOWN),
-                new Row("limit_resolution", "Max Texture Resolution", Kind.DROPDOWN),
-                new Row("limit_zoom", "Max Zoom Radius", Kind.DROPDOWN),
-                new Row("limit_creatures", "Max Creature Markers", Kind.DROPDOWN),
-                // Info Panel tab.
-                new Row("info_panel", "Info Panel", Kind.TOGGLE),
-                new Row("panel_position", "Info Panel Position", Kind.DROPDOWN),
-                new Row("panel_alignment", "Info Panel Alignment", Kind.DROPDOWN),
-                // Markers tab.
-                new Row("section_players", "PLAYERS", Kind.HEADER),
-                new Row("players", "Player Markers", Kind.DROPDOWN),
-                new Row("player_style", "Player Marker Style", Kind.DROPDOWN),
-                new Row("player_helmets", "Player Icon Helmets", Kind.DROPDOWN),
-                new Row("section_creatures", "CREATURES", Kind.HEADER),
-                new Row("entities", "Creature Markers", Kind.DROPDOWN),
-                new Row("creature_style", "Creature Marker Style", Kind.DROPDOWN),
-                new Row("creature_filter", "Creature Filter", Kind.DROPDOWN),
-                new Row("creature_limit", "Creature Marker Limit", Kind.DROPDOWN),
-                new Row("height", "Creature Height Filter", Kind.DROPDOWN),
-                new Row("vrange", "Height Filter Range", Kind.DROPDOWN),
-                new Row("section_other", "OTHER", Kind.HEADER),
-                new Row("death", "Death Markers", Kind.DROPDOWN),
-                // Info Panel tab (continued).
-                new Row("section_3", "INFORMATION", Kind.HEADER),
-                new Row("coordinates", "Coordinates", Kind.DROPDOWN),
-                new Row("compass", "Bearing", Kind.DROPDOWN),
-                new Row("clock", "World Time", Kind.DROPDOWN),
-                new Row("clock_format", "Clock Format", Kind.DROPDOWN),
-                new Row("biome", "Region", Kind.DROPDOWN),
-                // Integrations tab.
-                new Row("section_4", "HYTALE", Kind.HEADER),
-                new Row("worldmap", "Hytale World Map Markers", Kind.DROPDOWN),
-                new Row("section_5", "BETTERMAP", Kind.HEADER),
-                new Row("bettermap", "BetterMap", Kind.DROPDOWN),
-                new Row("bettermap_markers", "BetterMap Markers", Kind.DROPDOWN),
-                new Row("bettermap_caves", "BetterMap Cave Mode", Kind.DROPDOWN)
-        };
+        DynamicMinimapSetting.Field F_ENTITIES = DynamicMinimapSetting.Field.SHOW_ENTITIES;
+        DynamicMinimapSetting.Field F_PLAYERS = DynamicMinimapSetting.Field.SHOW_OTHER_PLAYERS;
+        DynamicMinimapSetting.Field F_PANEL = DynamicMinimapSetting.Field.INFO_PANEL_ENABLED;
+        // Display tab: appearance, then the compass ring, then the settings that cost server work.
+        addingTab = Tab.DISPLAY;
+        row("enabled", "Minimap", Kind.TOGGLE, DynamicMinimapSetting.Field.ENABLED, null, "Show or hide your minimap.");
+        header("section_0", "MAP APPEARANCE");
+        row("zoom", "Zoom Radius", Kind.DROPDOWN, DynamicMinimapSetting.Field.ZOOM_BLOCKS,
+                new Numbers(steps(DynamicMinimapSetting.ZOOM_MIN, DynamicMinimapSetting.ZOOM_MAX, 16), " blocks"),
+                "Choose how far around you the map shows.");
+        row("size", "Map Size", Kind.DROPDOWN, DynamicMinimapSetting.Field.SIZE_PIXELS,
+                new Numbers(steps(DynamicMinimapSetting.SIZE_MIN, DynamicMinimapSetting.SIZE_MAX, 20), " px"),
+                "Change the size of the map on your screen. Markers grow with larger maps.");
+        row("interface_scale", "Interface Scale", Kind.DROPDOWN, DynamicMinimapSetting.Field.INTERFACE_SCALE,
+                new Numbers(new int[]{75, 85, 100, 110, 125, 140, 160}, "%"), "Resize the map and its information together.");
+        row("shape", "Map Shape", Kind.SWITCH, DynamicMinimapSetting.Field.SHAPE,
+                choices(on("Circle", "1", "CIRCLE"), off("Square", "0", "SQUARE")), "Choose a round or square map.");
+        row("rotation", "Map Rotation", Kind.SWITCH, DynamicMinimapSetting.Field.ROTATION_MODE,
+                choices(off("North Up", "0", "NORTH UP"), on("Player Facing", "1", "PLAYER FACING")),
+                "Keep north at the top, or turn the map with the direction you face.");
+        // Compass ring around the map (part of the map, not the Info Panel).
+        header("section_compass", "COMPASS RING");
+        row("compass_letters", "Compass Letters", Kind.SWITCH, DynamicMinimapSetting.Field.SHOW_COMPASS_LETTERS, ON_OFF,
+                "Show the N, E, S and W letters around the map edge.");
+        row("compass_dashes", "Compass Dashes", Kind.SWITCH, DynamicMinimapSetting.Field.SHOW_COMPASS_DASHES, ON_OFF,
+                "Show the small dashes around the map edge.");
+        row("cardinal_dashes", "Cardinal Dashes", Kind.SWITCH, DynamicMinimapSetting.Field.SHOW_CARDINAL_DASHES, ON_OFF,
+                "Show the large N, E, S and W dashes. When hidden, the letters take their place.");
+        header("section_performance", "PERFORMANCE");
+        row("speed", "Update Speed", Kind.DROPDOWN, DynamicMinimapSetting.Field.UPDATE_SPEED,
+                indexed(DapperMapConfig.SPEED_LABELS, 0, 1, 2, 3), "How often the minimap refreshes. Faster uses more server work.");
+        row("texture_resolution", "Texture Resolution", Kind.DROPDOWN, DynamicMinimapSetting.Field.TEXTURE_RESOLUTION,
+                new Numbers(DynamicMinimapSetting.TEXTURE_RESOLUTIONS, " px"),
+                "Sharper map detail. Higher values use more server work and data.");
+        // Admin page only (Server Limits tab): server-wide limits that clamp every live minimap.
+        addingTab = Tab.SERVER;
+        header("section_limits", "PLAYER SETTING LIMITS");
+        row("limit_speed", "Fastest Update Speed", Kind.DROPDOWN, null, null, "Fastest update speed any player's minimap runs at.");
+        row("limit_resolution", "Max Texture Resolution", Kind.DROPDOWN, null, null, "Highest texture resolution any player's minimap renders at.");
+        row("limit_zoom", "Max Zoom Radius", Kind.DROPDOWN, null, null, "Largest zoom radius any player's minimap can show.");
+        row("limit_creatures", "Max Creature Markers", Kind.DROPDOWN, null, null, "Most creature markers any player's minimap shows.");
+        // Info Panel tab: every row but the panel switch needs the panel on.
+        addingTab = Tab.INTERFACE;
+        row("info_panel", "Info Panel", Kind.TOGGLE, F_PANEL, null, "Show or hide the Info Panel while keeping the minimap visible.");
+        row("panel_position", "Info Panel Position", Kind.DROPDOWN, DynamicMinimapSetting.Field.INFO_PANEL_POSITION,
+                indexed(new String[]{"Right", "Left", "Above", "Below"}, DynamicMinimapSetting.INFO_RIGHT,
+                        DynamicMinimapSetting.INFO_LEFT, DynamicMinimapSetting.INFO_ABOVE, DynamicMinimapSetting.INFO_BELOW),
+                "Choose which side of the map the Info Panel sits on.", F_PANEL);
+        row("panel_alignment", "Info Panel Alignment", Kind.DROPDOWN, DynamicMinimapSetting.Field.INFO_PANEL_TEXT_ALIGNMENT,
+                indexed(new String[]{"Left", "Centre", "Right"}, DynamicMinimapSetting.INFO_ALIGN_LEFT,
+                        DynamicMinimapSetting.INFO_ALIGN_CENTER, DynamicMinimapSetting.INFO_ALIGN_RIGHT),
+                "Align the Info Panel text left, centre or right.", F_PANEL);
+        // Markers tab: player and creature details need their markers on.
+        addingTab = Tab.MARKERS;
+        header("section_players", "PLAYERS");
+        row("players", "Player Markers", Kind.SWITCH, F_PLAYERS, ON_OFF, "Show nearby players on your minimap.");
+        row("player_style", "Player Marker Style", Kind.DROPDOWN, DynamicMinimapSetting.Field.PLAYER_ICONS, ICONS_DOTS,
+                "Show players as head icons or as dots.", F_PLAYERS);
+        row("player_helmets", "Player Icon Helmets", Kind.SWITCH, DynamicMinimapSetting.Field.PLAYER_ICON_HELMETS, ON_OFF,
+                "Show the helmet each player wears on their icon.", F_PLAYERS, DynamicMinimapSetting.Field.PLAYER_ICONS);
+        header("section_creatures", "CREATURES");
+        row("entities", "Creature Markers", Kind.SWITCH, F_ENTITIES, ON_OFF, "Show nearby creatures on your minimap.");
+        row("creature_style", "Creature Marker Style", Kind.DROPDOWN, DynamicMinimapSetting.Field.CREATURE_ICONS, ICONS_DOTS,
+                "Show creatures as face icons or as threat-coloured dots.", F_ENTITIES);
+        row("creature_filter", "Creature Filter", Kind.DROPDOWN, DynamicMinimapSetting.Field.HOSTILE_CREATURES_ONLY,
+                choices(off("All", "all", null), on("Hostile Only", "hostile", null)),
+                "Show all creatures, or only hostile and attacking ones.", F_ENTITIES);
+        row("creature_limit", "Creature Marker Limit", Kind.DROPDOWN, DynamicMinimapSetting.Field.CREATURE_MARKER_LIMIT,
+                indexed(new String[]{"16", "32", "64"}, DynamicMinimapSetting.CREATURE_LIMITS),
+                "Show up to 16, 32 or 64 nearby creatures, prioritising the nearest.", F_ENTITIES);
+        row("height", "Creature Height Filter", Kind.SWITCH, DynamicMinimapSetting.Field.LIMIT_MOB_HEIGHT, ON_OFF,
+                "Hide creatures far above or below you.", F_ENTITIES);
+        int[] heights = steps(8, DynamicMinimapSetting.HEIGHT_RANGE_MAX, 8);
+        int[] vrange = new int[heights.length + 1];
+        vrange[0] = DynamicMinimapSetting.HEIGHT_RANGE_MIN;
+        System.arraycopy(heights, 0, vrange, 1, heights.length);
+        row("vrange", "Height Filter Range", Kind.DROPDOWN, DynamicMinimapSetting.Field.MOB_VERTICAL_RANGE,
+                new Numbers(vrange, " blocks"), "How far above and below you creatures are shown.",
+                F_ENTITIES, DynamicMinimapSetting.Field.LIMIT_MOB_HEIGHT);
+        header("section_other", "OTHER");
+        row("death", "Death Markers", Kind.SWITCH, DynamicMinimapSetting.Field.SHOW_DEATH_MARKER, ON_OFF,
+                "Show death markers on your minimap.");
+        // Info Panel tab (continued).
+        addingTab = Tab.INTERFACE;
+        header("section_3", "INFORMATION");
+        row("coordinates", "Coordinates", Kind.SWITCH, DynamicMinimapSetting.Field.SHOW_COORDINATES, ON_OFF,
+                "Show your current world coordinates.", F_PANEL);
+        row("compass", "Bearing", Kind.SWITCH, DynamicMinimapSetting.Field.SHOW_COMPASS, ON_OFF,
+                "Show the direction you are facing.", F_PANEL);
+        row("clock", "World Time", Kind.SWITCH, DynamicMinimapSetting.Field.SHOW_CLOCK, ON_OFF,
+                "Show the current time in your Hytale world.", F_PANEL);
+        row("clock_format", "Clock Format", Kind.SWITCH, DynamicMinimapSetting.Field.CLOCK_24_HOUR,
+                choices(on("24-hour", "true", "24 HOUR"), off("12-hour", "false", "12 HOUR")),
+                "Choose a 12-hour or 24-hour clock.", F_PANEL, DynamicMinimapSetting.Field.SHOW_CLOCK);
+        row("biome", "Region", Kind.SWITCH, DynamicMinimapSetting.Field.SHOW_BIOME, ON_OFF,
+                "Show the name of the region (biome) you are in.", F_PANEL);
+        // Integrations tab: BetterMap rows also need BetterMap installed (isDropdownDisabled).
+        addingTab = Tab.INTEGRATIONS;
+        header("section_4", "HYTALE");
+        row("worldmap", "Hytale World Map Markers", Kind.SWITCH, DynamicMinimapSetting.Field.SHOW_WORLD_MAP_MARKERS, ON_OFF,
+                "Show Hytale personal, shared, POI, spawn and respawn world-map markers.");
+        header("section_5", "BETTERMAP");
+        row("bettermap", "BetterMap", Kind.SWITCH, DynamicMinimapSetting.Field.BETTERMAP_ENABLED, ON_OFF,
+                "Use BetterMap's waypoints and cave maps on your minimap.");
+        row("bettermap_markers", "BetterMap Markers", Kind.SWITCH, DynamicMinimapSetting.Field.BETTERMAP_MARKERS, ON_OFF,
+                "Show waypoints with BetterMap icons. When off, they appear with Hytale map markers.",
+                DynamicMinimapSetting.Field.BETTERMAP_ENABLED);
+        row("bettermap_caves", "BetterMap Cave Mode", Kind.SWITCH, DynamicMinimapSetting.Field.BETTERMAP_CAVES, ON_OFF,
+                "Show BetterMap's cave terrain while underground.", DynamicMinimapSetting.Field.BETTERMAP_ENABLED);
+        addingTab = null;
+        ROWS = ROW_LIST.toArray(new Row[0]);
         java.util.Set<String> dropdowns = new java.util.HashSet<>();
-        for (Row row : ROWS) if (row.kind == Kind.DROPDOWN && !isLimitRow(row.id)) dropdowns.add(row.id);
+        for (Row row : ROWS) if ((row.kind == Kind.DROPDOWN || row.kind == Kind.SWITCH) && row.tab != Tab.SERVER) dropdowns.add(row.id);
         DROPDOWN_IDS = java.util.Set.copyOf(dropdowns);
     }
 
@@ -1695,8 +1538,13 @@ public final class DapperMapSettingsPage
     }
 
     private enum Kind {
-        TOGGLE,
+        /** Section heading. */
         HEADER,
+        /** On/off switch that takes toggle events only (Minimap, Info Panel). */
+        TOGGLE,
+        /** A two-value setting shown as a switch; it also takes dropdown events. */
+        SWITCH,
+        /** Dropdown (server limits too, on the Server tab). */
         DROPDOWN
     }
 
@@ -1727,20 +1575,11 @@ public final class DapperMapSettingsPage
         }
     }
 
-    private static final class Row {
-
-        final String id;
-        final String label;
-        final Kind kind;
-
-        Row(
-                String id,
-                String label,
-                Kind kind
-        ) {
-            this.id = id;
-            this.label = label;
-            this.kind = kind;
-        }
-    }
+    /**
+     * One settings-page row: what it edits ({@code field}, null for headers and server limits), the
+     * entries it offers, and the settings that must be on for it to be editable ({@code requires}).
+     * Its permission node comes from SettingPermissions (by id).
+     */
+    private record Row(String id, String label, Kind kind, Tab tab, DynamicMinimapSetting.Field field,
+                       Options options, String description, DynamicMinimapSetting.Field[] requires) { }
 }
