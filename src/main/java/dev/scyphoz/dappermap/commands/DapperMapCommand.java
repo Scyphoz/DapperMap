@@ -4,11 +4,13 @@ import com.hypixel.hytale.component.Ref;
 import com.hypixel.hytale.component.Store;
 import com.hypixel.hytale.server.core.Message;
 import com.hypixel.hytale.server.core.command.system.CommandContext;
+import com.hypixel.hytale.server.core.command.system.CommandSender;
 import com.hypixel.hytale.server.core.command.system.arguments.system.RequiredArg;
 import com.hypixel.hytale.server.core.command.system.arguments.types.ArgTypes;
 import com.hypixel.hytale.server.core.command.system.AbstractCommand;
 import com.hypixel.hytale.server.core.command.system.basecommands.AbstractPlayerCommand;
 import com.hypixel.hytale.server.core.entity.entities.Player;
+import com.hypixel.hytale.server.core.permissions.PermissionQuery;
 import com.hypixel.hytale.server.core.universe.PlayerRef;
 import com.hypixel.hytale.server.core.universe.world.World;
 import com.hypixel.hytale.server.core.universe.world.storage.EntityStore;
@@ -46,11 +48,9 @@ public class DapperMapCommand extends AbstractPlayerCommand {
         super(name, description);
         this.sessions = sessions;
         this.addAliases("dm", "minimap", "mm"); // Root forms: /dappermap, /dm, /minimap, /mm.
-        // The bare command toggles the minimap. Give it its own short node rather than letting the
-        // framework auto-generate one from this command's own name, for the same reason every
-        // sub-command below does: scyphoz.dappermap.command.* should cover it without relying on
-        // what this top-level command happens to be called.
-        this.requirePermission(DapperMapPermissions.player("toggle"));
+        // The bare command toggles the minimap (node command.toggle). hasPermission below also lets
+        // players without it in, when they may use any sub-command; execute() checks toggle itself.
+        this.requirePermission(DapperMapPermissions.player(SettingPermissions.TOGGLE));
 
         // The player-facing tree.
         registerCommands(this, Scope.PLAYER);
@@ -81,13 +81,16 @@ public class DapperMapCommand extends AbstractPlayerCommand {
     }
 
     /**
-     * One command setting. {@code group} is its settings-tab command ("" for a root command),
-     * {@code node} its player permission (scyphoz.dappermap.command.&lt;node&gt;, the same node as
-     * its settings-page control), {@code values} the accepted values shown in usage and help.
+     * One command setting. {@code group} is its settings-tab command ("" for a root command) and
+     * {@code values} the accepted values shown in usage and help. Its player permission is derived
+     * from the command itself: {@code dappermap.command.<group>.<name>} (see {@link #node()}),
+     * the same node as its settings-page control.
      */
-    private record Setting(String group, String name, String node, Arg arg, String values, String description,
+    private record Setting(String group, String name, Arg arg, String values, String description,
                            Applier apply) {
         String path() { return group.isEmpty() ? name : group + " " + name; }
+        /** Permission path below dappermap.command, e.g. "display.zoom" or "position". */
+        String node() { return group.isEmpty() ? name : group + "." + name; }
     }
 
     /** Argument shape of a setting command. */
@@ -105,55 +108,55 @@ public class DapperMapCommand extends AbstractPlayerCommand {
     private static final List<Setting> SETTINGS = new ArrayList<>();
     static {
         // Display
-        add("display", "zoom", "zoom", Arg.WORD, "close|medium|far|<16..256>", "Zoom Radius (presets 48, 96, 160 blocks)", (s, v, e, p) -> {
+        add("display", "zoom", Arg.WORD, "close|medium|far|<16..256>", "Zoom Radius (presets 48, 96, 160 blocks)", (s, v, e, p) -> {
             int zoom = switch (v) { case "close" -> 48; case "medium" -> 96; case "far" -> 160; default -> parseRanged(v, 16, 256); };
             if (zoom < 0) return null;
             s.zoomBlocks = zoom;
             return done("zoom radius: " + zoom + " blocks.");
         });
-        number("display", "size", "size", 120, 360, "Map Size", (s, n) -> s.sizePixels = n, " px");
-        number("display", "scale", "scale", 75, 160, "Interface Scale", (s, n) -> s.interfaceScalePercent = n, "%");
-        add("display", "shape", "shape", Arg.WORD, "circle|square", "Map Shape", (s, v, e, p) -> {
+        number("display", "size", 120, 360, "Map Size", (s, n) -> s.sizePixels = n, " px");
+        number("display", "scale", 75, 160, "Interface Scale", (s, n) -> s.interfaceScalePercent = n, "%");
+        add("display", "shape", Arg.WORD, "circle|square", "Map Shape", (s, v, e, p) -> {
             if (!v.equals("circle") && !v.equals("square")) return null;
             s.shape = v.equals("circle") ? DynamicMinimapSetting.SHAPE_CIRCLE : DynamicMinimapSetting.SHAPE_SQUARE;
             return done("map shape: " + v + ".");
         });
-        add("display", "rotation", "rotation", Arg.WORD, "north|player", "Map Rotation: North Up or Player Facing", (s, v, e, p) -> {
+        add("display", "rotation", Arg.WORD, "north|player", "Map Rotation: North Up or Player Facing", (s, v, e, p) -> {
             if (!v.equals("north") && !v.equals("player")) return null;
             s.rotationMode = v.equals("player") ? DynamicMinimapSetting.ROTATION_PLAYER_UP : DynamicMinimapSetting.ROTATION_NORTH_UP;
             return done("map rotation: " + v + ".");
         });
-        toggle("display", "compass-letters", "compass", "Compass Letters (N, E, S, W)", (s, on) -> s.showCompassLetters = on);
-        toggle("display", "compass-dashes", "compass", "Compass Dashes (small dashes around the map edge)", (s, on) -> s.showCompassDashes = on);
-        toggle("display", "cardinal-dashes", "compass", "Cardinal Dashes (large N, E, S, W dashes)", (s, on) -> s.showCardinalDashes = on);
-        add("display", "speed", "speed", Arg.WORD, "very-fast|fast|normal|slow", "Update Speed", (s, v, e, p) -> {
+        toggle("display", "compass-letters", "Compass Letters (N, E, S, W)", (s, on) -> s.showCompassLetters = on);
+        toggle("display", "compass-dashes", "Compass Dashes (small dashes around the map edge)", (s, on) -> s.showCompassDashes = on);
+        toggle("display", "cardinal-dashes", "Cardinal Dashes (large N, E, S, W dashes)", (s, on) -> s.showCardinalDashes = on);
+        add("display", "speed", Arg.WORD, "very-fast|fast|normal|slow", "Update Speed", (s, v, e, p) -> {
             int speed = Arrays.asList(DapperMapConfig.SPEED_NAMES).indexOf(v);
             if (speed < 0) return null;
             s.updateSpeed = speed;
             return done("update speed: " + s.updateSpeedName() + ".");
         });
-        number("display", "resolution", "resolution", 256, 1024, "Texture Resolution", (s, n) -> s.textureResolution = n, " px");
+        number("display", "resolution", 256, 1024, "Texture Resolution", (s, n) -> s.textureResolution = n, " px");
         // Markers
-        toggle("markers", "players", "markers", "Player Markers", (s, on) -> s.showOtherPlayers = on);
-        choice("markers", "player-style", "markers", "icons", "dots", "Player Marker Style", (s, first) -> s.playerIcons = first);
-        toggle("markers", "player-helmets", "markers", "Player Icon Helmets", (s, on) -> s.playerIconHelmets = on);
-        toggle("markers", "creatures", "markers", "Creature Markers", (s, on) -> s.showEntities = on);
-        choice("markers", "creature-style", "markers", "icons", "dots", "Creature Marker Style", (s, first) -> s.creatureIcons = first);
-        choice("markers", "creature-filter", "markers", "all", "hostile", "Creature Filter: all creatures, or only hostile and attacking ones",
+        toggle("markers", "players", "Player Markers", (s, on) -> s.showOtherPlayers = on);
+        choice("markers", "player-style", "icons", "dots", "Player Marker Style", (s, first) -> s.playerIcons = first);
+        toggle("markers", "player-helmets", "Player Icon Helmets", (s, on) -> s.playerIconHelmets = on);
+        toggle("markers", "creatures", "Creature Markers", (s, on) -> s.showEntities = on);
+        choice("markers", "creature-style", "icons", "dots", "Creature Marker Style", (s, first) -> s.creatureIcons = first);
+        choice("markers", "creature-filter", "all", "hostile", "Creature Filter: all creatures, or only hostile and attacking ones",
                 (s, first) -> s.hostileCreaturesOnly = !first);
-        add("markers", "creature-limit", "markers", Arg.NUMBER, "16|32|64", "Creature Marker Limit", (s, v, e, p) -> {
+        add("markers", "creature-limit", Arg.NUMBER, "16|32|64", "Creature Marker Limit", (s, v, e, p) -> {
             int limit = parseRanged(v, 16, 64);
             if (limit != 16 && limit != 32 && limit != 64) return null;
             s.creatureMarkerLimit = limit;
             return done("creature marker limit: " + limit + ".");
         });
-        toggle("markers", "height-filter", "height", "Creature Height Filter", (s, on) -> s.limitMobHeight = on);
-        number("markers", "height-range", "height-range", 4, 256, "Height Filter Range (blocks above and below you)",
+        toggle("markers", "height-filter", "Creature Height Filter", (s, on) -> s.limitMobHeight = on);
+        number("markers", "height-range", 4, 256, "Height Filter Range (blocks above and below you)",
                 (s, n) -> s.mobVerticalRange = n, " blocks");
-        toggle("markers", "death", "markers", "Death Markers", (s, on) -> s.showDeathMarker = on);
+        toggle("markers", "death", "Death Markers", (s, on) -> s.showDeathMarker = on);
         // Info Panel
-        toggle("info", "panel", "info", "Info Panel", (s, on) -> s.infoPanelEnabled = on);
-        add("info", "position", "panel", Arg.WORD, "below|above|left|right", "Info Panel Position", (s, v, e, p) -> {
+        toggle("info", "panel", "Info Panel", (s, on) -> s.infoPanelEnabled = on);
+        add("info", "position", Arg.WORD, "below|above|left|right", "Info Panel Position", (s, v, e, p) -> {
             int position = switch (v) {
                 case "below" -> DynamicMinimapSetting.INFO_BELOW;
                 case "above" -> DynamicMinimapSetting.INFO_ABOVE;
@@ -165,7 +168,7 @@ public class DapperMapCommand extends AbstractPlayerCommand {
             s.infoPanelPosition = position;
             return done("Info Panel position: " + v + ".");
         });
-        add("info", "alignment", "panel", Arg.WORD, "left|centre|right", "Info Panel Alignment", (s, v, e, p) -> {
+        add("info", "alignment", Arg.WORD, "left|centre|right", "Info Panel Alignment", (s, v, e, p) -> {
             int alignment = switch (v) {
                 case "left" -> DynamicMinimapSetting.INFO_ALIGN_LEFT;
                 case "centre" -> DynamicMinimapSetting.INFO_ALIGN_CENTER;
@@ -176,27 +179,26 @@ public class DapperMapCommand extends AbstractPlayerCommand {
             s.infoPanelTextAlignment = alignment;
             return done("Info Panel alignment: " + v + ".");
         });
-        toggle("info", "coordinates", "coordinates", "Coordinates", (s, on) -> s.showCoordinates = on);
-        toggle("info", "bearing", "compass", "Bearing", (s, on) -> s.showCompass = on);
-        add("info", "world-time", "clock", Arg.WORD, "on|off|12|24", "World Time; 12 or 24 also sets the Clock Format", (s, v, e, p) -> {
-            switch (v) {
-                case "on", "off" -> s.showClock = v.equals("on");
-                case "12", "24" -> { s.showClock = true; s.clock24Hour = v.equals("24"); }
-                default -> { return null; }
-            }
-            return done("world time: " + (s.showClock ? (s.clock24Hour ? "on, 24-hour" : "on, 12-hour") : "off") + ".");
+        toggle("info", "coordinates", "Coordinates", (s, on) -> s.showCoordinates = on);
+        toggle("info", "bearing", "Bearing", (s, on) -> s.showCompass = on);
+        toggle("info", "world-time", "World Time", (s, on) -> s.showClock = on);
+        // Its own command (and permission) since 3.2.0; world-time no longer takes 12|24.
+        add("info", "clock-format", Arg.NUMBER, "12|24", "Clock Format: 12-hour or 24-hour", (s, v, e, p) -> {
+            if (!v.equals("12") && !v.equals("24")) return null;
+            s.clock24Hour = v.equals("24");
+            return done("clock format: " + v + "-hour.");
         });
-        toggle("info", "region", "biome", "Region", (s, on) -> s.showBiome = on);
+        toggle("info", "region", "Region", (s, on) -> s.showBiome = on);
         // Integrations
-        toggle("integration", "worldmap", "integration", "Hytale World Map Markers", (s, on) -> s.showWorldMapMarkers = on);
-        add("integration", "bettermap", "integration", Arg.WORD, "on|off", "The BetterMap integration", (s, v, e, p) -> {
+        toggle("integration", "worldmap", "Hytale World Map Markers", (s, on) -> s.showWorldMapMarkers = on);
+        add("integration", "bettermap", Arg.WORD, "on|off", "The BetterMap integration", (s, v, e, p) -> {
             Boolean on = parseOnOff(v);
             if (on == null) return null;
             if (on && !BetterMapIntegration.isAvailable()) return new Result(false, "BetterMap integration unchanged: BetterMap was not detected.");
             s.betterMapEnabled = on;
             return done("BetterMap integration " + onOff(on) + ".");
         });
-        add("integration", "bettermap-markers", "integration", Arg.WORD, "on|off", "BetterMap Markers", (s, v, e, p) -> {
+        add("integration", "bettermap-markers", Arg.WORD, "on|off", "BetterMap Markers", (s, v, e, p) -> {
             Boolean on = parseOnOff(v);
             if (on == null) return null;
             if (!s.betterMapEnabled || !BetterMapIntegration.isAvailable())
@@ -204,7 +206,7 @@ public class DapperMapCommand extends AbstractPlayerCommand {
             s.betterMapMarkersEnabled = on;
             return done("BetterMap markers " + onOff(on) + ".");
         });
-        add("integration", "bettermap-caves", "integration", Arg.WORD, "on|off", "BetterMap Cave Mode (BetterMap cave mode must be active)", (s, v, e, p) -> {
+        add("integration", "bettermap-caves", Arg.WORD, "on|off", "BetterMap Cave Mode (BetterMap cave mode must be active)", (s, v, e, p) -> {
             Boolean on = parseOnOff(v);
             if (on == null) return null;
             if (!s.betterMapEnabled || !BetterMapIntegration.isAvailable())
@@ -215,23 +217,28 @@ public class DapperMapCommand extends AbstractPlayerCommand {
             return done("BetterMap caves " + onOff(on) + ".");
         });
         // Position (its own tab, a root command)
-        add("", "position", "position", Arg.TWO_NUMBERS, "<x 0..100> <y 0..100>", "Place the minimap on screen", (s, v, e, p) -> {
+        add("", "position", Arg.TWO_NUMBERS, "<x 0..100> <y 0..100>", "Place the minimap on screen", (s, v, e, p) -> {
             int x = parseRanged(v, 0, 100), y = parseRanged(e, 0, 100);
             if (x < 0 || y < 0) return null;
             s.hudPositionX = x;
             s.hudPositionY = y;
             return done("position: x=" + x + ", y=" + y + ".");
         });
+        // Every command must have a node in the permission table (fails at start-up, not in play).
+        for (Setting setting : SETTINGS) {
+            if (!SettingPermissions.isNode(setting.node()))
+                throw new IllegalStateException("DapperMap command '" + setting.path() + "' has no permission node");
+        }
     }
 
-    private static void add(String group, String name, String node, Arg arg, String values, String description, Applier apply) {
-        SETTINGS.add(new Setting(group, name, node, arg, values, description, apply));
+    private static void add(String group, String name, Arg arg, String values, String description, Applier apply) {
+        SETTINGS.add(new Setting(group, name, arg, values, description, apply));
     }
 
     /** An on|off setting. */
-    private static void toggle(String group, String name, String node, String description,
+    private static void toggle(String group, String name, String description,
                                java.util.function.BiConsumer<DynamicMinimapSetting, Boolean> set) {
-        add(group, name, node, Arg.WORD, "on|off", description, (s, v, e, p) -> {
+        add(group, name, Arg.WORD, "on|off", description, (s, v, e, p) -> {
             Boolean on = parseOnOff(v);
             if (on == null) return null;
             set.accept(s, on);
@@ -240,9 +247,9 @@ public class DapperMapCommand extends AbstractPlayerCommand {
     }
 
     /** A setting with two named values; {@code set} receives true for the first. */
-    private static void choice(String group, String name, String node, String first, String second, String description,
+    private static void choice(String group, String name, String first, String second, String description,
                                java.util.function.BiConsumer<DynamicMinimapSetting, Boolean> set) {
-        add(group, name, node, Arg.WORD, first + "|" + second, description, (s, v, e, p) -> {
+        add(group, name, Arg.WORD, first + "|" + second, description, (s, v, e, p) -> {
             if (!v.equals(first) && !v.equals(second)) return null;
             set.accept(s, v.equals(first));
             return done(label(description) + ": " + v + ".");
@@ -250,9 +257,9 @@ public class DapperMapCommand extends AbstractPlayerCommand {
     }
 
     /** A whole-number setting within [min, max]. */
-    private static void number(String group, String name, String node, int min, int max, String description,
+    private static void number(String group, String name, int min, int max, String description,
                                java.util.function.ObjIntConsumer<DynamicMinimapSetting> set, String unit) {
-        add(group, name, node, Arg.NUMBER, "<" + min + ".." + max + ">", description, (s, v, e, p) -> {
+        add(group, name, Arg.NUMBER, "<" + min + ".." + max + ">", description, (s, v, e, p) -> {
             int n = parseRanged(v, min, max);
             if (n < 0) return null;
             set.accept(s, n);
@@ -306,20 +313,29 @@ public class DapperMapCommand extends AbstractPlayerCommand {
 
     /**
      * Player node for a non-setting command: on/off share "toggle" (as the settings page's
-     * Minimap switch); settings, status, help, reset and colours use their own name.
+     * Minimap switch); settings, status, help and reset use their own name.
      */
     private static String commandNode(String command) {
-        return command.equals("on") || command.equals("off") ? "toggle" : command;
+        return command.equals("on") || command.equals("off") ? SettingPermissions.TOGGLE : command;
     }
 
     /** Admin scope requires the admin node; player scope the given player node. */
-    private static void gate(AbstractCommand command, Scope scope, String playerNode) {
+    private static PermissionQuery gateFor(Scope scope, String playerNode) {
         // Admin: the "admin" container already gates this subtree, but requiring it again on
         // every leaf means each admin sub-command is safe to reason about on its own.
-        // Player: explicit short node (scyphoz.dappermap.command.<node>), registered against
-        // the default player group via PermissionsModule (see DapperMapPermissions.player).
-        command.requirePermission(scope == Scope.ADMIN ? DapperMapPermissions.ADMIN
-                : DapperMapPermissions.player(playerNode));
+        return scope == Scope.ADMIN ? DapperMapPermissions.ADMIN : DapperMapPermissions.player(playerNode);
+    }
+
+    /**
+     * True when the sender may run at least one of {@code command}'s sub-commands. Containers
+     * (the root and each settings group) use it so they stay usable, and listed in the client's
+     * command list, for a player granted only some settings. Stops at the first allowed one.
+     */
+    private static boolean anySubCommandAllowed(AbstractCommand command, CommandSender sender) {
+        for (AbstractCommand sub : command.getSubCommands().values()) {
+            if (sub.hasPermission(sender)) return true;
+        }
+        return false;
     }
 
     /** Which settings store a command writes to. */
@@ -329,7 +345,23 @@ public class DapperMapCommand extends AbstractPlayerCommand {
     // Running commands
     // ---------------------------------------------------------------------------------
 
+    /**
+     * Allowed for the toggle node, or for any sub-command. Hytale's default check would also
+     * require nothing more here (this is the root), but sub-commands no longer inherit this check:
+     * see {@link GatedCommand#hasPermission}.
+     */
+    @Override
+    public boolean hasPermission(@Nonnull CommandSender sender) {
+        return sender.hasPermission(DapperMapPermissions.player(SettingPermissions.TOGGLE))
+                || anySubCommandAllowed(this, sender);
+    }
+
     protected void execute(@Nonnull CommandContext context, @Nonnull Store<EntityStore> store, @Nonnull Ref<EntityStore> ref, @Nonnull PlayerRef playerRef, @Nonnull World world) {
+        // hasPermission lets in players with any sub-command, so the bare toggle checks its own node.
+        if (!playerRef.hasPermission(DapperMapPermissions.player(SettingPermissions.TOGGLE))) {
+            context.sendMessage(Message.raw("You do not have permission to show or hide DapperMap. Use /dappermap help for your commands."));
+            return;
+        }
         boolean enabled = this.sessions.toggle(store.getComponent(ref, Player.getComponentType()), playerRef,
                 DapperMap.getConfig().get());
         context.sendMessage(Message.raw(enabled ? "DapperMap shown." : "DapperMap hidden."));
@@ -378,7 +410,7 @@ public class DapperMapCommand extends AbstractPlayerCommand {
             switch (command) {
                 case "settings" -> openAdminPage(store, ref, playerRef, player, config);
                 case "help" -> {
-                    showHelp(context, "/dappermap admin ");
+                    showHelp(context, "/dappermap admin ", node -> true);
                     context.sendMessage(Message.raw("Admin defaults take the same settings and values as the player commands."));
                     context.sendMessage(Message.raw("Server: /dappermap admin limit [speed|resolution|zoom|creatures <value|none>] | /dappermap admin stats | /dappermap admin load-shedding on|off"));
                 }
@@ -403,7 +435,7 @@ public class DapperMapCommand extends AbstractPlayerCommand {
         DynamicMinimapSetting settings = this.sessions.getSettings(playerRef.getUuid(), config);
         switch (command) {
             case "settings" -> player.getPageManager().openCustomPage(ref, store, new DapperMapSettingsPage(playerRef, this.sessions, config));
-            case "help" -> showHelp(context, "/dappermap ");
+            case "help" -> showHelp(context, "/dappermap ", SettingPermissions.forPlayer(playerRef));
             case "status" -> {
                 for (String line : status(settings)) context.sendMessage(Message.raw(line));
                 String note = limitNote(settings);
@@ -452,7 +484,7 @@ public class DapperMapCommand extends AbstractPlayerCommand {
             }
             if (args.isEmpty()) { context.sendMessage(Message.raw(COLOURS_USAGE.replace("/dappermap ", "/dappermap admin "))); return; }
             DynamicMinimapSetting defaults = this.sessions.getAdminDefaults(config).copy();
-            var result = executeColourCommand(defaults, args);
+            var result = executeColourCommand(defaults, args, node -> true); // Admin: every colour.
             if (result.changed()) this.sessions.setAdminDefaults(defaults);
             context.sendMessage(Message.raw(result.message()));
             return;
@@ -464,7 +496,8 @@ public class DapperMapCommand extends AbstractPlayerCommand {
             if (player != null) player.getPageManager().openCustomPage(ref, store, DapperMapSettingsPage.colours(playerRef, this.sessions, config));
             return;
         }
-        var result = executeColourCommand(settings, args);
+        // Each colour has its own node (colours.<target>); list and the editor need any one of them.
+        var result = executeColourCommand(settings, args, SettingPermissions.forPlayer(playerRef));
         if (result.changed()) this.sessions.applySettings(playerRef, settings);
         context.sendMessage(Message.raw(result.message()));
     }
@@ -490,30 +523,51 @@ public class DapperMapCommand extends AbstractPlayerCommand {
     private static final String COLOURS_USAGE =
             "Colours: /dappermap colours | /dappermap colours list | /dappermap colours <target> <#RRGGBB|R G B> | /dappermap colours reset <target|all>";
 
-    /** Every command, grouped like the settings tabs. {@code prefix} is "/dappermap " or "/dappermap admin ". */
-    private static void showHelp(CommandContext context, String prefix) {
+    /**
+     * Every command the caller may use, grouped like the settings tabs. {@code prefix} is
+     * "/dappermap " or "/dappermap admin "; {@code allowed} tests a player node path (always true
+     * for admin help, whose commands are all covered by the admin node).
+     */
+    private static void showHelp(CommandContext context, String prefix, java.util.function.Predicate<String> allowed) {
         context.sendMessage(Message.raw("DapperMap commands (/dappermap, /dm, /minimap or /mm):"));
-        context.sendMessage(Message.raw(prefix.equals("/dappermap ")
-                ? "/dappermap | /dappermap on|off | /dappermap status | /dappermap settings | /dappermap reset | /dappermap help"
-                : "/dappermap admin | /dappermap admin on|off | /dappermap admin status | /dappermap admin reset | /dappermap admin help"));
-        for (String group : GROUPS.keySet()) context.sendMessage(Message.raw(groupHelp(prefix, group)));
-        context.sendMessage(Message.raw("Position: " + prefix + "position <x 0..100> <y 0..100>"));
-        context.sendMessage(Message.raw(COLOURS_USAGE.replace("/dappermap ", prefix)));
+        if (prefix.equals("/dappermap ")) {
+            // General commands, each shown only when its node is granted.
+            List<String> general = new ArrayList<>(6);
+            if (allowed.test(SettingPermissions.TOGGLE)) general.add("/dappermap | /dappermap on|off");
+            for (String command : new String[]{SettingPermissions.STATUS, SettingPermissions.SETTINGS,
+                    SettingPermissions.RESET, SettingPermissions.HELP}) {
+                if (allowed.test(command)) general.add("/dappermap " + command);
+            }
+            if (!general.isEmpty()) context.sendMessage(Message.raw(String.join(" | ", general)));
+        } else {
+            context.sendMessage(Message.raw("/dappermap admin | /dappermap admin on|off | /dappermap admin status | /dappermap admin reset | /dappermap admin help"));
+        }
+        for (String group : GROUPS.keySet()) {
+            String line = groupHelp(prefix, group, allowed);
+            if (line != null) context.sendMessage(Message.raw(line));
+        }
+        if (allowed.test(SettingPermissions.POSITION))
+            context.sendMessage(Message.raw("Position: " + prefix + "position <x 0..100> <y 0..100>"));
+        if (SettingPermissions.anyColour(allowed))
+            context.sendMessage(Message.raw(COLOURS_USAGE.replace("/dappermap ", prefix)));
     }
 
-    /** "Display: /mm display zoom close|... | size <120..360> | ..." for one group. */
-    private static String groupHelp(String prefix, String group) {
+    /**
+     * "Display: /mm display zoom close|... | size <120..360> | ..." for one group, listing only
+     * the settings {@code allowed} permits; null when it permits none of them.
+     */
+    private static String groupHelp(String prefix, String group, java.util.function.Predicate<String> allowed) {
         String title = GROUPS.get(group);
         StringBuilder out = new StringBuilder(title.substring(0, title.indexOf(':') + 1)).append(' ')
                 .append(prefix).append(group).append(' ');
         boolean first = true;
         for (Setting setting : SETTINGS) {
-            if (!setting.group().equals(group)) continue;
+            if (!setting.group().equals(group) || !allowed.test(setting.node())) continue;
             if (!first) out.append(" | ");
             out.append(setting.name()).append(' ').append(setting.values());
             first = false;
         }
-        return out.toString();
+        return first ? null : out.toString();
     }
 
     /** Every setting, grouped and named exactly as its command takes it. */
@@ -535,7 +589,7 @@ public class DapperMapCommand extends AbstractPlayerCommand {
                 "info: panel " + onOff(s.infoPanelEnabled) + ", position " + panelPositionName(s.infoPanelPosition)
                         + ", alignment " + panelAlignmentName(s.infoPanelTextAlignment)
                         + ", coordinates " + onOff(s.showCoordinates) + ", bearing " + onOff(s.showCompass)
-                        + ", world-time " + (s.showClock ? (s.clock24Hour ? "24" : "12") : "off")
+                        + ", world-time " + onOff(s.showClock) + ", clock-format " + (s.clock24Hour ? "24" : "12")
                         + ", region " + onOff(s.showBiome),
                 "integration: worldmap " + onOff(s.showWorldMapMarkers) + ", bettermap " + onOff(s.betterMapEnabled)
                         + ", bettermap-markers " + onOff(s.betterMapMarkersEnabled)
@@ -612,28 +666,43 @@ public class DapperMapCommand extends AbstractPlayerCommand {
 
     private record ColourCommandResult(boolean changed, String message) { }
 
-    /** {@code list | <target> <#RRGGBB|R G B> | reset <target|all>} against {@code settings}. */
-    private static ColourCommandResult executeColourCommand(DynamicMinimapSetting settings, String arguments) {
+    /**
+     * {@code list | <target> <#RRGGBB|R G B> | reset <target|all>} against {@code settings}.
+     * {@code allowed} tests a colour's node ({@code colours.<target>}): a denied colour is never
+     * changed, and {@code reset all} resets only the colours that may be changed.
+     */
+    private static ColourCommandResult executeColourCommand(DynamicMinimapSetting settings, String arguments,
+                                                            java.util.function.Predicate<String> allowed) {
         String[] parts = arguments.trim().split("\\s+", 2);
         String target = parts[0];
 
         if (target.equals("list")) {
+            // Locked colours are still listed (read-only), marked so the player knows why a change fails.
             return new ColourCommandResult(false, "DapperMap colours:\n" + Arrays.stream(Key.values())
-                    .map(key -> key.id + " " + settings.colours.hex(key) + " (" + key.group + " / " + key.label + ")")
+                    .map(key -> key.id + " " + settings.colours.hex(key) + " (" + key.group + " / " + key.label + ")"
+                            + (allowed.test(SettingPermissions.forColour(key)) ? "" : " [locked]"))
                     .collect(Collectors.joining("\n")));
         }
 
         if (target.equals("reset")) {
             String name = parts.length > 1 ? parts[1].trim() : "";
             if (name.equals("all")) {
-                settings.colours = new DynamicMinimapColours();
-                return new ColourCommandResult(true, "DapperMap colours reset to defaults.");
+                int kept = 0;
+                DynamicMinimapColours colours = settings.colours;
+                for (Key key : Key.values()) {
+                    if (allowed.test(SettingPermissions.forColour(key))) colours = colours.reset(key);
+                    else kept++;
+                }
+                settings.colours = colours;
+                return new ColourCommandResult(true, kept == 0 ? "DapperMap colours reset to defaults."
+                        : "DapperMap colours you may change were reset to defaults (" + kept + " locked colour(s) kept).");
             }
             Key key = Key.find(name);
             if (key == null) {
                 return new ColourCommandResult(false,
                         "Usage: /dappermap colours reset <target|all>. Use /dappermap colours list for targets.");
             }
+            if (!allowed.test(SettingPermissions.forColour(key))) return lockedColour(key);
             settings.colours = settings.colours.reset(key);
             return new ColourCommandResult(true, key.label + ": " + settings.colours.hex(key));
         }
@@ -643,6 +712,7 @@ public class DapperMapCommand extends AbstractPlayerCommand {
             return new ColourCommandResult(false,
                     "Usage: /dappermap colours <target> <#RRGGBB|R G B>. Use /dappermap colours list for targets.");
         }
+        if (!allowed.test(SettingPermissions.forColour(key))) return lockedColour(key);
         try {
             int rgb = DynamicMinimapColours.parse(parts[1]);
             settings.colours = settings.colours.with(key, rgb);
@@ -650,6 +720,11 @@ public class DapperMapCommand extends AbstractPlayerCommand {
         } catch (IllegalArgumentException e) {
             return new ColourCommandResult(false, e.getMessage());
         }
+    }
+
+    /** The reply for a colour the player has no permission to change. */
+    private static ColourCommandResult lockedColour(Key key) {
+        return new ColourCommandResult(false, "You do not have permission to change the " + key.label + " colour.");
     }
 
     /** An integer in [min, max], or -1 for anything else. */
@@ -714,8 +789,34 @@ public class DapperMapCommand extends AbstractPlayerCommand {
     // Command classes
     // ---------------------------------------------------------------------------------
 
+    /** Player node checks for a command sender (the page and commands share SettingPermissions' table). */
+    private static java.util.function.Predicate<String> allowedFor(CommandSender sender) {
+        return path -> path == null || sender.hasPermission(DapperMapPermissions.player(path));
+    }
+
+    /**
+     * A command checked against exactly one node. Hytale's default {@code hasPermission} also
+     * requires every parent command's node (it recurses up the tree), which in 3.1.x silently
+     * made each setting depend on the root's {@code toggle} and the group's {@code help} nodes.
+     * Here only the command's own node counts, so a deny or grant on one setting affects only it.
+     */
+    private abstract static class GatedCommand extends AbstractPlayerCommand {
+        private final PermissionQuery gate;
+
+        GatedCommand(String name, String description, PermissionQuery gate) {
+            super(name, description);
+            this.gate = gate;
+            this.requirePermission(gate); // Also what Hytale's help and permission tools show.
+        }
+
+        @Override
+        public boolean hasPermission(@Nonnull CommandSender sender) {
+            return sender.hasPermission(this.gate);
+        }
+    }
+
     /** One setting from {@link #SETTINGS}, with typed arguments and value suggestions. */
-    private static final class SettingCommand extends AbstractPlayerCommand {
+    private static final class SettingCommand extends GatedCommand {
         private final DapperMapCommand root;
         private final Scope scope;
         private final Setting setting;
@@ -724,11 +825,11 @@ public class DapperMapCommand extends AbstractPlayerCommand {
         private final RequiredArg<Integer> second;
 
         SettingCommand(Setting setting, DapperMapCommand root, Scope scope) {
-            super(setting.name(), setting.description());
+            // Player node: dappermap.command.<group>.<name>, e.g. command.display.zoom.
+            super(setting.name(), setting.description(), gateFor(scope, setting.node()));
             this.root = root;
             this.scope = scope;
             this.setting = setting;
-            gate(this, scope, setting.node());
             this.word = setting.arg() == Arg.WORD ? this.withRequiredArg("value", setting.values(), ArgTypes.STRING) : null;
             this.first = setting.arg() != Arg.WORD ? this.withRequiredArg("value", setting.values(), ArgTypes.INTEGER) : null;
             this.second = setting.arg() == Arg.TWO_NUMBERS ? this.withRequiredArg("y", "Vertical position", ArgTypes.INTEGER) : null;
@@ -752,35 +853,46 @@ public class DapperMapCommand extends AbstractPlayerCommand {
         }
     }
 
-    /** A settings-tab group (display, markers, info, integration). Bare, it lists its settings. */
+    /**
+     * A settings-tab group (display, markers, info, integration). It has no node of its own: it
+     * is usable (and listed for the client) when any of its settings is, and bare it lists them.
+     */
     private static final class GroupCommand extends AbstractPlayerCommand {
         private final String group;
+        private final Scope scope;
 
         GroupCommand(String group, String description, DapperMapCommand root, Scope scope) {
             super(group, description);
             this.group = group;
-            // Each setting below checks its own node; the bare group only shows help.
-            gate(this, scope, "help");
+            this.scope = scope;
+            // No generated node (it would be a grantable name that does nothing): see hasPermission.
+            this.requireNoPermission();
+        }
+
+        @Override
+        public boolean hasPermission(@Nonnull CommandSender sender) {
+            return anySubCommandAllowed(this, sender);
         }
 
         @Override
         protected void execute(@Nonnull CommandContext context, @Nonnull Store<EntityStore> store,
                                @Nonnull Ref<EntityStore> ref, @Nonnull PlayerRef playerRef, @Nonnull World world) {
-            String prefix = this.countParents() > 1 ? "/dappermap admin " : "/dappermap ";
-            context.sendMessage(Message.raw(groupHelp(prefix, this.group)));
+            boolean admin = this.scope == Scope.ADMIN;
+            String line = groupHelp(admin ? "/dappermap admin " : "/dappermap ", this.group,
+                    admin ? node -> true : SettingPermissions.forPlayer(playerRef));
+            if (line != null) context.sendMessage(Message.raw(line));
         }
     }
 
     /** settings, on, off, status, help and reset. */
-    private static final class SimpleCommand extends AbstractPlayerCommand {
+    private static final class SimpleCommand extends GatedCommand {
         private final DapperMapCommand root;
         private final Scope scope;
 
         SimpleCommand(String name, String description, DapperMapCommand root, Scope scope) {
-            super(name, description);
+            super(name, description, gateFor(scope, commandNode(name)));
             this.root = root;
             this.scope = scope;
-            gate(this, scope, commandNode(name));
         }
 
         @Override
@@ -790,7 +902,11 @@ public class DapperMapCommand extends AbstractPlayerCommand {
         }
     }
 
-    /** {@code colours} with free text: list, a target and colour, or reset. Bare, it opens the editor. */
+    /**
+     * {@code colours} with free text: list, a target and colour, or reset. Bare, it opens the editor.
+     * Each colour has its own node ({@code colours.<target>}), so the player command is usable
+     * with any one of them; runColours checks the target's own node.
+     */
     private static final class ColoursCommand extends AbstractPlayerCommand {
         private final DapperMapCommand root;
         private final Scope scope;
@@ -799,8 +915,15 @@ public class DapperMapCommand extends AbstractPlayerCommand {
             super("colours", "Configure colours");
             this.root = root;
             this.scope = scope;
-            gate(this, scope, "colours");
+            if (scope == Scope.ADMIN) this.requirePermission(DapperMapPermissions.ADMIN);
+            else this.requireNoPermission(); // Per-colour nodes: see hasPermission.
             this.setAllowsExtraArguments(true); // Plain values: /dappermap colours compass-dashes #FFAA00
+        }
+
+        @Override
+        public boolean hasPermission(@Nonnull CommandSender sender) {
+            return this.scope == Scope.ADMIN ? sender.hasPermission(DapperMapPermissions.ADMIN)
+                    : SettingPermissions.anyColour(allowedFor(sender));
         }
 
         @Override
@@ -815,21 +938,16 @@ public class DapperMapCommand extends AbstractPlayerCommand {
      * the commands are registered onto it by {@link #registerCommands}.
      *
      * <p>Gated on {@link DapperMapPermissions#ADMIN}, a node deliberately kept outside the
-     * player command tree (see that class's javadoc). Requiring it explicitly matters:
-     * generated command nodes are permissive unless something requires them, so without
-     * this any player could reach the admin tree.
+     * player command tree (see that class's javadoc). Not setPermissionGroups(GROUP_ADMIN): that
+     * is a coarse "anyone in this group" path that skips the deny-aware node check. ADMIN_NODE
+     * is registered against GROUP_ADMIN the deny-respecting way in DapperMapPermissions.register().
      */
-    private static final class AdminDispatchCommand extends AbstractPlayerCommand {
+    private static final class AdminDispatchCommand extends GatedCommand {
         private final DapperMapCommand root;
 
         AdminDispatchCommand(DapperMapCommand root) {
-            super("admin", "Configure server defaults for new DapperMap players");
+            super("admin", "Configure server defaults for new DapperMap players", DapperMapPermissions.ADMIN);
             this.root = root;
-            this.requirePermission(DapperMapPermissions.ADMIN);
-            // Not setPermissionGroups(GROUP_ADMIN) here: that call is a coarse "anyone in this
-            // group" fast path that bypasses the node-specific deny-aware check (see
-            // DapperMapPermissions.DEFAULT_PLAYER_GROUP javadoc). ADMIN_NODE is already
-            // registered against GROUP_ADMIN the deny-respecting way in DapperMapPermissions.register().
         }
 
         @Override
@@ -840,13 +958,12 @@ public class DapperMapCommand extends AbstractPlayerCommand {
     }
 
     /** Admin-only server tools (limit, stats, load-shedding). */
-    private static final class AdminToolCommand extends AbstractPlayerCommand {
+    private static final class AdminToolCommand extends GatedCommand {
         private final DapperMapCommand root;
 
         AdminToolCommand(String name, String description, DapperMapCommand root) {
-            super(name, description);
+            super(name, description, DapperMapPermissions.ADMIN);
             this.root = root;
-            this.requirePermission(DapperMapPermissions.ADMIN);
             this.setAllowsExtraArguments(true); // Plain values: /dappermap admin limit speed fast
         }
 

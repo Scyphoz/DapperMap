@@ -219,8 +219,8 @@ public final class DapperMapSettingsPage
     private void updateEditorAvailability(UICommandBuilder builder, DynamicMinimapSetting settings) {
         boolean colours = this.activeTab == Tab.COLOURS;
         boolean position = this.activeTab == Tab.POSITION;
-        boolean canEditColours = this.hasSettingPermission("colours");
-        boolean canEditPosition = this.hasSettingPermission("position");
+        boolean canEditColours = this.canEditAnyColour();
+        boolean canEditPosition = this.hasSettingPermission(SettingPermissions.POSITION);
         builder.set("#DapperMapColourEditor.Visible", colours && settings.enabled && canEditColours);
         builder.set("#ColourDisabledNotice.Visible", colours && (!settings.enabled || !canEditColours));
         builder.set("#ColourDisabledNotice.Text", canEditColours
@@ -232,14 +232,17 @@ public final class DapperMapSettingsPage
     }
 
     private void bindColourEditor(UICommandBuilder builder, UIEventBuilder events, DynamicMinimapSetting settings) {
-        builder.set("#ColourTarget.Entries", VISIBLE_COLOUR_KEYS.stream()
+        // Each colour has its own node: the target list holds only the ones this player may change.
+        List<Key> keys = this.colourKeys();
+        if (!keys.isEmpty() && !keys.contains(this.selectedColour)) this.selectedColour = keys.get(0);
+        builder.set("#ColourTarget.Entries", keys.stream()
                 .map(key -> new DropdownEntryInfo(LocalizableString.fromString(key.group + " / " + key.label), key.id))
                 .toList());
         builder.set("#ColourTarget.Value", this.selectedColour.id);
         builder.set("#ColourPicker.Color", settings.colours.hex(this.selectedColour));
         builder.set("#ColourDescription.Text", this.selectedColour.description);
         builder.set("#ColourHex.Text", settings.colours.hex(this.selectedColour));
-        boolean allowed = this.hasSettingPermission("colours");
+        boolean allowed = !keys.isEmpty();
         if (allowed) {
             events.addEventBinding(CustomUIEventBindingType.ValueChanged, "#ColourTarget",
                     EventData.of("Action", "colour_target").append("@Target", "#ColourTarget.Value"), false);
@@ -265,7 +268,7 @@ public final class DapperMapSettingsPage
 
     private void bindPositionEditor(UICommandBuilder builder, UIEventBuilder events,
                                     DynamicMinimapSetting settings) {
-        boolean allowed = this.hasSettingPermission("position");
+        boolean allowed = this.hasSettingPermission(SettingPermissions.POSITION);
         String[] labels = {"Horizontal Position", "Vertical Position"};
         String[] actions = {"position_slider_x", "position_slider_y"};
         for (int index = 0; index < labels.length; index++) {
@@ -438,7 +441,7 @@ public final class DapperMapSettingsPage
         DynamicMinimapSetting draft = this.draftSettings;
         if (draft == null || !draft.enabled) return;
         boolean changed = false;
-        if (this.hasSettingPermission("position")) {
+        if (this.hasSettingPermission(SettingPermissions.POSITION)) {
             if (event.posX != null && clampPercent(event.posX) != draft.hudPositionX) {
                 draft.hudPositionX = clampPercent(event.posX);
                 changed = true;
@@ -448,8 +451,8 @@ public final class DapperMapSettingsPage
                 changed = true;
             }
         }
-        if (event.colour != null && this.hasSettingPermission("colours")
-                && VISIBLE_COLOUR_KEYS.contains(this.selectedColour)) {
+        if (event.colour != null && VISIBLE_COLOUR_KEYS.contains(this.selectedColour)
+                && this.hasSettingPermission(SettingPermissions.forColour(this.selectedColour))) {
             int rgb = (Byte.toUnsignedInt(event.colour.red) << 16)
                     | (Byte.toUnsignedInt(event.colour.green) << 8)
                     | Byte.toUnsignedInt(event.colour.blue);
@@ -564,7 +567,7 @@ public final class DapperMapSettingsPage
                 "Pages/BasicTextButton.ui"
         );
 
-        boolean canReset = this.hasSettingPermission("reset");
+        boolean canReset = this.hasSettingPermission(SettingPermissions.RESET);
         builder.set(
                 "#DapperMapResetButtonLabel.TextSpans",
                 Message.raw(this.adminMode ? "RESET TO MOD DEFAULTS" : "RESET TO DEFAULTS")
@@ -617,43 +620,54 @@ public final class DapperMapSettingsPage
 
     private boolean canOpenTab(Tab tab) {
         return switch (tab) {
-            case COLOURS -> this.hasSettingPermission("colours");
+            case COLOURS -> this.canEditAnyColour();
             case SERVER -> this.adminMode; // Server limits: admin page only.
-            case POSITION -> this.hasSettingPermission("position");
-            default -> true;
+            case POSITION -> this.hasSettingPermission(SettingPermissions.POSITION);
+            default -> true; // Rows this player may not change are shown disabled.
         };
     }
 
-    /** Maps UI-only row identifiers onto the canonical command permission nodes. */
+    /** True when at least one colour may be changed (each colour has its own node). */
+    private boolean canEditAnyColour() {
+        return SettingPermissions.anyColour(this::hasSettingPermission);
+    }
+
+    /** The editor's colours this player may change, in editor order (every colour on the admin page). */
+    private List<Key> colourKeys() {
+        if (this.adminMode) return VISIBLE_COLOUR_KEYS;
+        List<Key> keys = new ArrayList<>(VISIBLE_COLOUR_KEYS.size());
+        for (Key key : VISIBLE_COLOUR_KEYS) {
+            if (this.hasSettingPermission(SettingPermissions.forColour(key))) keys.add(key);
+        }
+        return keys;
+    }
+
+    /**
+     * The node guarding a settings-page row (from the shared table in SettingPermissions), or
+     * null for rows without one (section headers). Always the same node as the row's command.
+     */
     private static String permissionForSetting(String id) {
-        return switch (id) {
-            case "enabled" -> "toggle";
-            case "interface_scale" -> "scale";
-            case "texture_resolution" -> "resolution";
-            case "info_panel" -> "info";
-            case "panel_position", "panel_alignment" -> "panel";
-            case "players", "entities", "death", "creature_limit", "creature_style", "creature_filter",
-                 "player_style", "player_helmets" -> "markers";
-            case "vrange" -> "height-range";
-            case "clock_format" -> "clock";
-            case "worldmap", "bettermap", "bettermap_markers", "bettermap_caves" -> "integration";
-            case "move_minimap" -> "position";
-            // Compass ring markings share the Bearing ("compass") node: no new node to grant.
-            case "compass_letters", "compass_dashes", "cardinal_dashes" -> "compass";
-            default -> id;
-        };
+        return SettingPermissions.forRow(id);
     }
 
-    private static String permissionForAction(String action) {
-        if (action.startsWith("position_")) return "position";
-        if (action.startsWith("colour_")) return "colours";
-        if (action.startsWith("toggle_")) {
-            return permissionForSetting(action.substring("toggle_".length()));
+    /**
+     * Whether this page may act on {@code action}. Toggle and dropdown events for unknown row ids
+     * (a malformed or forged event) are refused rather than treated as unguarded.
+     */
+    private boolean actionAllowed(String action) {
+        if (action.startsWith("position_")) return this.hasSettingPermission(SettingPermissions.POSITION);
+        if (action.startsWith("colour_")) {
+            return switch (action) {
+                // Changing the selected colour needs that colour's own node.
+                case "colour_value", "colour_reset" -> this.hasSettingPermission(SettingPermissions.forColour(this.selectedColour));
+                default -> this.canEditAnyColour(); // colour_target, colour_reset_all (permitted colours only).
+            };
         }
-        if (action.startsWith("dropdown_")) {
-            return permissionForSetting(action.substring("dropdown_".length()));
-        }
-        return null;
+        String row = action.startsWith("toggle_") ? action.substring("toggle_".length())
+                : action.startsWith("dropdown_") ? action.substring("dropdown_".length()) : null;
+        if (row == null) return true;
+        String node = permissionForSetting(row);
+        return node != null && this.hasSettingPermission(node);
     }
 
     private boolean hasAllSettingPermissions() {
@@ -919,7 +933,7 @@ public final class DapperMapSettingsPage
         }
 
         if ("reset_defaults".equals(action)) {
-            if (!this.hasSettingPermission("reset")) return;
+            if (!this.hasSettingPermission(SettingPermissions.RESET)) return;
             DynamicMinimapSetting reset = this.adminMode
                     ? DynamicMinimapSetting.fromConfig(this.config)
                     : this.sessions.getAdminDefaults(this.config).copy();
@@ -953,8 +967,7 @@ public final class DapperMapSettingsPage
         DynamicMinimapSetting settings = this.draftSettings;
         if (settings == null) return;
 
-        String requiredPermission = permissionForAction(action);
-        if (requiredPermission != null && !this.hasSettingPermission(requiredPermission)) return;
+        if (!this.actionAllowed(action)) return;
 
         // Set for toggle/dropdown changes so the reply can update just that row when possible.
         String rowId = null;
@@ -989,7 +1002,7 @@ public final class DapperMapSettingsPage
             settings.hudPositionY = value;
         } else if ("colour_target".equals(action)) {
             Key key = Key.find(event.target);
-            if (key == null || !VISIBLE_COLOUR_KEYS.contains(key)) return;
+            if (key == null || !this.colourKeys().contains(key)) return;
             this.selectedColour = key;
             UICommandBuilder colourUi = new UICommandBuilder();
             this.refreshColourEditor(colourUi, settings, true);
@@ -1005,7 +1018,15 @@ public final class DapperMapSettingsPage
         } else if ("colour_reset".equals(action)) {
             settings.colours = settings.colours.reset(this.selectedColour);
         } else if ("colour_reset_all".equals(action)) {
-            settings.colours = new DynamicMinimapColours();
+            // Only the colours this player may change; locked ones keep their value.
+            if (this.adminMode) settings.colours = new DynamicMinimapColours();
+            else {
+                DynamicMinimapColours colours = settings.colours;
+                for (Key key : Key.values()) {
+                    if (this.hasSettingPermission(SettingPermissions.forColour(key))) colours = colours.reset(key);
+                }
+                settings.colours = colours;
+            }
         } else if (action.startsWith("toggle_")) {
             rowId = action.substring("toggle_".length());
             disabledBefore = this.disabledRows(settings);
