@@ -1,9 +1,9 @@
 $C = "../Common.ui";
-Group { Anchor: (Height: 84); LayoutMode: Left; Padding: (Left: 2, Right: 2, Vertical: 4);
+Group { Anchor: (Height: 66); LayoutMode: Left; Padding: (Left: 2, Right: 2, Top: 6, Bottom: 6);
   Group #Accent { Anchor: (Width: 0); Visible: false; }
   Group #Info { FlexWeight: 1; LayoutMode: Top;
-    Label #RowLabel { Anchor: (Height: 24); Style: (FontSize: 14, TextColor: #cdc7e6, HorizontalAlignment: Start, VerticalAlignment: Center); }
-    Label #RowDescription { Anchor: (Height: 48); Style: (FontSize: 11, Wrap: true, TextColor: #9298ae, HorizontalAlignment: Start, VerticalAlignment: Center); }
+    Label #RowLabel { Anchor: (Height: 20); Style: (FontSize: 14, TextColor: #cdc7e6, HorizontalAlignment: Start, VerticalAlignment: Center); }
+    Label #RowDescription { Anchor: (Height: 32); Style: (FontSize: 11, Wrap: true, TextColor: #9298ae, HorizontalAlignment: Start, VerticalAlignment: Start); }
   }
   Group { Anchor: (Width: 4); }
   // The stock dropdown macro has a wide intrinsic size. A fixed parent with a

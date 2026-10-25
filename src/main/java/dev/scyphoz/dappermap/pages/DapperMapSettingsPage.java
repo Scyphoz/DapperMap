@@ -52,8 +52,8 @@ public final class DapperMapSettingsPage
     private static final int[] POSITION_STOPS = {0, 50, 100};
     /** Only colours consumed by the current live HUD renderer are user-facing. */
     private static final List<Key> VISIBLE_COLOUR_KEYS = List.of(
-            Key.EDGE, Key.TICKS, Key.PANEL,
-            Key.CARDINAL_TEXT, Key.BRAND_TEXT, Key.INFO_HEADERS,
+            Key.EDGE, Key.TICKS, Key.COMPASS_DASHES, Key.CARDINAL_TEXT,
+            Key.PANEL, Key.BRAND_TEXT, Key.INFO_HEADERS,
             Key.COORDS_TEXT, Key.COMPASS_TEXT, Key.CLOCK_TEXT, Key.BIOME_TEXT,
             Key.SELF, Key.PLAYERS, Key.DEATH, Key.HOSTILE_ACTIVE, Key.HOSTILE, Key.NEUTRAL, Key.FRIENDLY
     );
@@ -205,10 +205,10 @@ public final class DapperMapSettingsPage
         builder.set("#DapperMapPositionEditor.Visible", this.activeTab == Tab.POSITION);
         builder.set("#PageSectionTitle.Text", this.activeTab.label.toUpperCase(java.util.Locale.ROOT));
         String sectionDescription = switch (this.activeTab) {
-            case DISPLAY -> "Customize how DapperMap appears in-game.";
+            case DISPLAY -> "Choose how the minimap looks and how hard it works.";
             case MARKERS -> "Choose the navigation markers shown on your minimap.";
             case INTEGRATIONS -> "Connect Hytale and BetterMap map features to your minimap.";
-            case INTERFACE -> "Tune the information, compass and HUD presentation.";
+            case INTERFACE -> "Choose what the Info Panel shows and where it sits.";
             case POSITION -> "Place the minimap on-screen and fine-tune its position.";
             case COLOURS -> "Tune the DapperMap palette and preview every change live.";
             case SERVER -> "Cap the most expensive settings for every player. Saved player choices are kept.";
@@ -1125,6 +1125,7 @@ public final class DapperMapSettingsPage
             case "compass_letters" -> settings.showCompassLetters = !settings.showCompassLetters;
             case "compass_dashes" -> settings.showCompassDashes = !settings.showCompassDashes;
             case "cardinal_dashes" -> settings.showCardinalDashes = !settings.showCardinalDashes;
+            case "player_helmets" -> settings.playerIconHelmets = !settings.playerIconHelmets;
             case "bettermap" -> settings.betterMapEnabled = !settings.betterMapEnabled;
             case "bettermap_markers" -> settings.betterMapMarkersEnabled = !settings.betterMapMarkersEnabled;
             case "bettermap_caves" -> settings.betterMapCaveModeEnabled = !settings.betterMapCaveModeEnabled;
@@ -1143,7 +1144,7 @@ public final class DapperMapSettingsPage
     private static String toggleStateLabel(String id, DynamicMinimapSetting settings) {
         return switch (id) {
             case "shape" -> settings.shape == 1 ? "CIRCLE" : "SQUARE";
-            case "rotation" -> settings.rotationMode == 1 ? "ENABLED" : "DISABLED";
+            case "rotation" -> settings.rotationMode == 1 ? "PLAYER FACING" : "NORTH UP";
             case "clock_format" -> settings.clock24Hour ? "24 HOUR" : "12 HOUR";
             default -> toggleValue(id, settings) ? "ENABLED" : "DISABLED";
         };
@@ -1154,7 +1155,7 @@ public final class DapperMapSettingsPage
             case "players", "entities", "death", "worldmap", "height", "info_panel",
                  "clock", "coordinates", "compass", "biome", "bettermap",
                  "bettermap_markers", "bettermap_caves",
-                 "compass_letters", "compass_dashes", "cardinal_dashes",
+                 "compass_letters", "compass_dashes", "cardinal_dashes", "player_helmets",
                  "shape", "rotation", "clock_format" -> true;
             default -> false;
         };
@@ -1176,6 +1177,7 @@ public final class DapperMapSettingsPage
             case "compass_letters" -> settings.showCompassLetters;
             case "compass_dashes" -> settings.showCompassDashes;
             case "cardinal_dashes" -> settings.showCardinalDashes;
+            case "player_helmets" -> settings.playerIconHelmets;
             case "bettermap" -> settings.betterMapEnabled;
             case "bettermap_markers" -> settings.betterMapMarkersEnabled;
             case "bettermap_caves" -> settings.betterMapCaveModeEnabled;
@@ -1192,14 +1194,14 @@ public final class DapperMapSettingsPage
             case "info_panel" -> "Show or hide the Info Panel while keeping the minimap visible.";
             case "colours" -> "Choose colours for your minimap and markers.";
             case "zoom" -> "Choose how far around you the map shows.";
-            case "size" -> "Change the size of the map on your screen.";
+            case "size" -> "Change the size of the map on your screen. Markers grow with larger maps.";
             case "interface_scale" -> "Resize the map and its information together.";
             case "shape" -> "Choose a round or square map.";
-            case "rotation" -> "Enable or disable player-facing map rotation.";
-            case "speed" -> "Choose how often the minimap refreshes.";
+            case "rotation" -> "Keep north at the top, or turn the map with the direction you face.";
+            case "speed" -> "How often the minimap refreshes. Faster uses more server work.";
             case "move_minimap" -> "Choose where the minimap sits on your screen.";
-            case "panel_position" -> "Choose which side shows the map information.";
-            case "panel_alignment" -> "Align the information panel text left, centre or right.";
+            case "panel_position" -> "Choose which side of the map the Info Panel sits on.";
+            case "panel_alignment" -> "Align the Info Panel text left, centre or right.";
             case "players" -> "Show nearby players on your minimap.";
             case "entities" -> "Show nearby creatures on your minimap.";
             case "creature_limit" -> "Show up to 16, 32 or 64 nearby creatures, prioritising the nearest.";
@@ -1210,21 +1212,21 @@ public final class DapperMapSettingsPage
             case "death" -> "Show death markers on your minimap.";
             case "worldmap" -> "Show Hytale personal, shared, POI, spawn and respawn world-map markers.";
             case "height" -> "Hide creatures far above or below you.";
-            case "vrange" -> "Set how far above and below to show creatures.";
+            case "vrange" -> "How far above and below you creatures are shown.";
             case "clock" -> "Show the current time in your Hytale world.";
             case "coordinates" -> "Show your current world coordinates.";
             case "clock_format" -> "Choose a 12-hour or 24-hour clock.";
             case "compass" -> "Show the direction you are facing.";
-            case "biome" -> "Show the name of the biome you are in.";
+            case "biome" -> "Show the name of the region (biome) you are in.";
             case "compass_letters" -> "Show the N, E, S and W letters around the map edge.";
             case "compass_dashes" -> "Show the small dashes around the map edge.";
             case "cardinal_dashes" -> "Show the large N, E, S and W dashes. When hidden, the letters take their place.";
             case "bettermap" -> BetterMapIntegration.isAvailable()
-                    ? "Enable BetterMap waypoints and cave terrain. Surface maps use shared Hytale images."
+                    ? "Use BetterMap's waypoints and cave maps on your minimap."
                     : "BetterMap is not installed or could not be detected.";
             case "bettermap_markers" -> "Show waypoints with BetterMap icons. When off, they appear with Hytale map markers.";
             case "bettermap_caves" -> "Show BetterMap's cave terrain while underground.";
-            case "texture_resolution" -> "Choose the resolution used to render minimap textures.";
+            case "texture_resolution" -> "Sharper map detail. Higher values use more server work and data.";
             case "limit_speed" -> "Fastest update speed any player's minimap runs at.";
             case "limit_resolution" -> "Highest texture resolution any player's minimap renders at.";
             case "limit_zoom" -> "Largest zoom radius any player's minimap can show.";
@@ -1281,7 +1283,7 @@ public final class DapperMapSettingsPage
             case "creature_style" -> settings.creatureIcons = "icons".equals(value);
             case "creature_filter" -> settings.hostileCreaturesOnly = "hostile".equals(value);
             case "player_style" -> settings.playerIcons = "icons".equals(value);
-            case "player_helmets" -> settings.playerIconHelmets = "shown".equals(value);
+            case "player_helmets" -> settings.playerIconHelmets = Boolean.parseBoolean(value);
             case "players" -> settings.showOtherPlayers = Boolean.parseBoolean(value);
             case "entities" -> settings.showEntities = Boolean.parseBoolean(value);
             case "death" -> settings.showDeathMarker = Boolean.parseBoolean(value);
@@ -1326,10 +1328,6 @@ public final class DapperMapSettingsPage
                 entries.add(entry("Icons", "icons"));
                 entries.add(entry("Dots", "dots"));
             }
-            case "player_helmets" -> {
-                entries.add(entry("Shown", "shown"));
-                entries.add(entry("Hidden", "hidden"));
-            }
             case "vrange" -> {
                 TreeSet<Integer> values = new TreeSet<>(List.of(4));
                 for (int value = 8; value <= 256; value += 8) values.add(value);
@@ -1367,8 +1365,8 @@ public final class DapperMapSettingsPage
                 entries.add(entry("Square", "0"));
             }
             case "rotation" -> {
-                entries.add(entry("Disabled", "0"));
-                entries.add(entry("Enabled", "1"));
+                entries.add(entry("North Up", "0"));
+                entries.add(entry("Player Facing", "1"));
             }
             case "clock_format" -> {
                 entries.add(entry("24-hour", "true"));
@@ -1376,7 +1374,7 @@ public final class DapperMapSettingsPage
             }
             case "players", "entities", "death", "worldmap", "height", "coordinates", "clock", "compass", "biome",
                  "bettermap", "bettermap_markers", "bettermap_caves",
-                 "compass_letters", "compass_dashes", "cardinal_dashes" -> {
+                 "compass_letters", "compass_dashes", "cardinal_dashes", "player_helmets" -> {
                 entries.add(entry("Enabled", "true"));
                 entries.add(entry("Disabled", "false"));
             }
@@ -1548,7 +1546,7 @@ public final class DapperMapSettingsPage
             case "creature_style" -> settings.creatureIcons ? "icons" : "dots";
             case "creature_filter" -> settings.hostileCreaturesOnly ? "hostile" : "all";
             case "player_style" -> settings.playerIcons ? "icons" : "dots";
-            case "player_helmets" -> settings.playerIconHelmets ? "shown" : "hidden";
+            case "player_helmets" -> Boolean.toString(settings.playerIconHelmets);
             case "players" -> Boolean.toString(settings.showOtherPlayers);
             case "entities" -> Boolean.toString(settings.showEntities);
             case "death" -> Boolean.toString(settings.showDeathMarker);
@@ -1605,12 +1603,13 @@ public final class DapperMapSettingsPage
     private static Tab tabFor(String id) {
         return switch (id) {
             case "players", "death", "entities", "height", "vrange", "creature_limit", "creature_style",
-                 "creature_filter", "player_style", "player_helmets" -> Tab.MARKERS;
+                 "creature_filter", "player_style", "player_helmets",
+                 "section_players", "section_creatures", "section_other" -> Tab.MARKERS;
             case "section_4", "section_5", "worldmap", "bettermap", "bettermap_markers",
                  "bettermap_caves" -> Tab.INTEGRATIONS;
             case "info_panel", "panel_position", "panel_alignment", "section_3",
-                 "coordinates", "clock", "clock_format", "compass", "biome",
-                 "section_compass", "compass_letters", "compass_dashes", "cardinal_dashes" -> Tab.INTERFACE;
+                 "coordinates", "clock", "clock_format", "compass", "biome" -> Tab.INTERFACE;
+            // Compass ring and performance rows fall through to Display (the default).
             case "section_limits", "limit_speed", "limit_resolution", "limit_zoom", "limit_creatures" -> Tab.SERVER;
             default -> Tab.DISPLAY;
         };
@@ -1618,6 +1617,7 @@ public final class DapperMapSettingsPage
 
     static {
         ROWS = new Row[]{
+                // Display tab: appearance, then the compass ring, then the settings that cost server work.
                 new Row("enabled", "Minimap", Kind.TOGGLE),
                 new Row("section_0", "MAP APPEARANCE", Kind.HEADER),
                 new Row("zoom", "Zoom Radius", Kind.DROPDOWN),
@@ -1625,6 +1625,12 @@ public final class DapperMapSettingsPage
                 new Row("interface_scale", "Interface Scale", Kind.DROPDOWN),
                 new Row("shape", "Map Shape", Kind.DROPDOWN),
                 new Row("rotation", "Map Rotation", Kind.DROPDOWN),
+                // Compass ring around the map (part of the map, not the Info Panel).
+                new Row("section_compass", "COMPASS RING", Kind.HEADER),
+                new Row("compass_letters", "Compass Letters", Kind.DROPDOWN),
+                new Row("compass_dashes", "Compass Dashes", Kind.DROPDOWN),
+                new Row("cardinal_dashes", "Cardinal Dashes", Kind.DROPDOWN),
+                new Row("section_performance", "PERFORMANCE", Kind.HEADER),
                 new Row("speed", "Update Speed", Kind.DROPDOWN),
                 new Row("texture_resolution", "Texture Resolution", Kind.DROPDOWN),
                 // Admin page only (Server Limits tab): server-wide limits that clamp every live minimap.
@@ -1632,31 +1638,33 @@ public final class DapperMapSettingsPage
                 new Row("limit_speed", "Fastest Update Speed", Kind.DROPDOWN),
                 new Row("limit_resolution", "Max Texture Resolution", Kind.DROPDOWN),
                 new Row("limit_zoom", "Max Zoom Radius", Kind.DROPDOWN),
-                new Row("limit_creatures", "Max Creature Limit", Kind.DROPDOWN),
+                new Row("limit_creatures", "Max Creature Markers", Kind.DROPDOWN),
+                // Info Panel tab.
                 new Row("info_panel", "Info Panel", Kind.TOGGLE),
                 new Row("panel_position", "Info Panel Position", Kind.DROPDOWN),
-                new Row("panel_alignment", "Panel Text Alignment", Kind.DROPDOWN),
+                new Row("panel_alignment", "Info Panel Alignment", Kind.DROPDOWN),
+                // Markers tab.
+                new Row("section_players", "PLAYERS", Kind.HEADER),
                 new Row("players", "Player Markers", Kind.DROPDOWN),
                 new Row("player_style", "Player Marker Style", Kind.DROPDOWN),
                 new Row("player_helmets", "Player Icon Helmets", Kind.DROPDOWN),
-                new Row("death", "Death Markers", Kind.DROPDOWN),
+                new Row("section_creatures", "CREATURES", Kind.HEADER),
                 new Row("entities", "Creature Markers", Kind.DROPDOWN),
                 new Row("creature_style", "Creature Marker Style", Kind.DROPDOWN),
-                new Row("creature_filter", "Creatures Shown", Kind.DROPDOWN),
+                new Row("creature_filter", "Creature Filter", Kind.DROPDOWN),
                 new Row("creature_limit", "Creature Marker Limit", Kind.DROPDOWN),
-                new Row("height", "Creature Height Detection", Kind.DROPDOWN),
-                new Row("vrange", "Creature Height Range", Kind.DROPDOWN),
+                new Row("height", "Creature Height Filter", Kind.DROPDOWN),
+                new Row("vrange", "Height Filter Range", Kind.DROPDOWN),
+                new Row("section_other", "OTHER", Kind.HEADER),
+                new Row("death", "Death Markers", Kind.DROPDOWN),
+                // Info Panel tab (continued).
                 new Row("section_3", "INFORMATION", Kind.HEADER),
                 new Row("coordinates", "Coordinates", Kind.DROPDOWN),
                 new Row("compass", "Bearing", Kind.DROPDOWN),
                 new Row("clock", "World Time", Kind.DROPDOWN),
                 new Row("clock_format", "Clock Format", Kind.DROPDOWN),
                 new Row("biome", "Region", Kind.DROPDOWN),
-                // Compass ring around the map (not part of the Info Panel, so never disabled by it).
-                new Row("section_compass", "COMPASS RING", Kind.HEADER),
-                new Row("compass_letters", "Compass Letters", Kind.DROPDOWN),
-                new Row("compass_dashes", "Compass Dashes", Kind.DROPDOWN),
-                new Row("cardinal_dashes", "Cardinal Dashes", Kind.DROPDOWN),
+                // Integrations tab.
                 new Row("section_4", "HYTALE", Kind.HEADER),
                 new Row("worldmap", "Hytale World Map Markers", Kind.DROPDOWN),
                 new Row("section_5", "BETTERMAP", Kind.HEADER),

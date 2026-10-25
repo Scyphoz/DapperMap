@@ -1844,8 +1844,9 @@ public final class DynamicMinimapRenderer {
             double outer = (center - (diagonal ? 13 : 18)) / divisor;
             double inner = (center - (diagonal ? 24 : 22)) / divisor;
             float width = diagonal ? 2.8F : 1.8F;
-            drawRadialTick(g, (int)center, (int)center, outer, inner, bearing, width + 2, colours.awt(TICKS, 40));
-            drawRadialTick(g, (int)center, (int)center, outer, inner, bearing, width, colours.awt(TICKS, 245));
+            // Small dashes have their own colour (Compass Dashes); the large ones use Cardinal Dashes.
+            drawRadialTick(g, (int)center, (int)center, outer, inner, bearing, width + 2, colours.awt(COMPASS_DASHES, 40));
+            drawRadialTick(g, (int)center, (int)center, outer, inner, bearing, width, colours.awt(COMPASS_DASHES, 245));
         }
         if (!letters && !cardinalDashes) return;
         double badgeSize = cardinalBadgeSize(cardinalDashes);

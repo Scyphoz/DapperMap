@@ -36,7 +36,7 @@ The minimap can be controlled in two ways:
 1. Run `/dappermap settings` to use the in-game settings interface.
 2. Use the individual `/dappermap` commands for direct changes.
 
-Commands can also be written as `/minimap`, `/mm` or `/dm`.
+Commands can also be written as `/dm`, `/minimap` or `/mm`.
 
 Running any base DapperMap command (e.g. `/dappermap`) without any subcommand toggles the minimap on and off.
 
@@ -49,7 +49,7 @@ DapperMap renders the terrain around the player using Hytale's native world-map 
 Players can configure:
 
 - **Zoom radius:** Controls how many blocks around the player are visible, from 16 to 256 blocks.
-- **Map size:** Changes the on-screen map size from 120 to 360 pixels.
+- **Map size:** Changes the on-screen map size from 120 to 360 pixels. Above the default 220 pixels, every marker (creatures, players, dots, world-map, BetterMap and death markers) grows with the map so it keeps the same size relative to it.
 - **Texture resolution:** Changes the internal rendered texture resolution from 256 to 1024 pixels. Higher values produce more detail but require more processing and network delivery.
 - **Interface scale:** Scales the complete map and information display from 75% to 160% without changing the world area being shown.
 - **Map shape:** Selects a circular or square minimap.
@@ -62,6 +62,12 @@ DapperMap supports two orientation modes:
 - **Player facing:** The map rotates with the player's view so the forward direction remains at the top.
 
 The optional compass readout shows the player's current bearing and facing direction.
+
+The compass ring around the map edge has three parts that can each be turned on or off (all on by default):
+
+- **Compass Letters:** The N, E, S and W letters. They are drawn in Hytale's own font, so they stay sharp at any interface scale. When the letters are off, the large cardinal dashes move inside the map edge like the other dashes, and edge markers sit right at the map edge.
+- **Compass Dashes:** The small dashes around the map edge.
+- **Cardinal Dashes:** The large dashes at N, E, S and W. When these are off and the letters are on, the letters move out to where the large dashes were. Edge markers then sit at the map edge too, stepping in only to clear a letter.
 
 ### Update speed
 
@@ -116,13 +122,13 @@ Other players can be shown in one of two styles:
 - **Icons (default):** Each player is shown as a small picture of their own head, built from their skin (skin tone, face, eyes, hair and head cosmetics, including modded cosmetics), with an outline in the player marker colour. If a player's head cannot be drawn, a disc showing their initials is used.
 - **Dots:** Each player is shown as a dot in the player marker colour.
 
-**Player Icon Helmets** chooses whether icons show the helmet each player wears (**Shown**, default) or always their bare head (**Hidden**). A helmet is never shown when its wearer has chosen to hide it in game. Player markers always draw above creature markers, including hostile and attacking creatures.
+**Player Icon Helmets** chooses whether icons show the helmet each player wears (**Enabled**, default) or always their bare head (**Disabled**). A helmet is never shown when its wearer has chosen to hide it in game. Player markers always draw above creature markers, including hostile and attacking creatures.
 
 When PvP is enabled in the world and another player attacks you, that player's marker switches to the attacking colour (icons pulse like attacking creatures). It returns to the player colour once that player has not attacked you for 15 seconds, or when they die. Dead players are not shown until they respawn.
 
 Each player's icon is built once per look (skin and helmet) and shared by every viewer; it is rebuilt only when that player changes their skin or helmet.
 
-#### Creatures shown
+#### Creature filter
 
 **All (default)** shows every nearby creature. **Hostile Only** shows only hostile creatures and creatures currently attacking the player; a normally neutral creature appears while it is attacking. Player markers are not affected by this filter. The filter applies to both icons and dots.
 
@@ -130,7 +136,7 @@ Each player's icon is built once per look (skin and helmet) and shared by every 
 
 The number of visible creature markers is selectable as **16 (default), 32 or 64**, nearest first. In Hostile Only mode the limit is filled with the nearest hostile creatures, so nearby passive animals do not hide more distant threats. Player and integration markers do not use this creature limit.
 
-Creature height detection can hide entities that are too far above or below the player. The vertical range is configurable from 4 to 256 blocks.
+The **Creature Height Filter** can hide creatures that are too far above or below the player. Its **Height Filter Range** is configurable from 4 to 256 blocks.
 
 ### Death markers
 
@@ -154,18 +160,15 @@ BetterMap is optional. DapperMap remains fully functional without it.
 
 The in-game colour editor provides a live preview and lets players customise:
 
-- Map edge and compass ticks
-- Panel border, heading and label colours
-- DapperMap title and information text
-- Player locator and other player markers (player dots and player icon outlines)
-- Death markers
-- Attacking, hostile, neutral and friendly creature markers (used for creature dots and creature icon outlines; the attacking colour also marks players who attack you in PvP)
+- **Frame:** Map Edge, Cardinal Dashes (the large N, E, S, W dashes), Compass Dashes (the small dashes) and Compass Letters
+- **Info Panel:** Background, Title, Headings, and the Coordinates, Bearing, World Time and Region text
+- **Markers:** Your Locator, Other Players (player dots and player icon outlines), Death Markers, and Attacking, Hostile, Neutral and Friendly creatures (creature dots and icon outlines; Attacking also marks players who attack you in PvP)
 
 Colours may also be changed through commands using hexadecimal `#RRGGBB` values or decimal RGB channels.
 
 ### In-game settings interface
 
-The settings interface is divided into Display, Markers, Interface, Position and Colours sections. Changes can be previewed before they are applied.
+The settings interface is divided into Display, Markers, Info Panel, Position, Colours and Integrations tabs (plus Server Limits on the admin page). Display holds the map's appearance, the compass ring and the performance settings; Markers is grouped into Players, Creatures and Other. Changes can be previewed before they are applied.
 
 If a player lacks permission for a setting, that control is disabled and displays **Permission denied**. Permission checks are also repeated on the server when changes are applied, so a hidden or forged UI event cannot alter a blocked setting.
 
@@ -179,100 +182,131 @@ Administrator defaults are stored separately from player preferences and can be 
 
 ## Commands
 
-The primary command is `/dappermap`.
+The command is `/dappermap`, which can also be written as `/dm`, `/minimap` or `/mm`.
 
-Aliases: `/minimap`, `/mm`, `/dm`
+Commands are grouped like the settings page tabs: `/dappermap display`, `/dappermap markers`, `/dappermap info` and `/dappermap integration`, each followed by a setting and its value. Each setting has exactly one command and one set of accepted values; on/off settings always take `on` or `off`. Typing a group on its own (for example `/dappermap display`) lists its settings.
 
 All DapperMap commands require a live player context because they operate on a player's HUD or open an in-game page. Administrator commands are therefore run in-game by an authorised player rather than from the dedicated server console.
 
-### General commands
+### General
 
 | Command | Description |
 | --- | --- |
 | `/dappermap` | Toggle the minimap |
-| `/dappermap settings` | Open the player settings page |
+| `/dappermap on\|off` | Show or hide the minimap |
+| `/dappermap settings` | Open the settings page |
+| `/dappermap status` | Show every current setting |
+| `/dappermap help` | List commands and accepted values |
+| `/dappermap reset` | Reset your settings to the current server defaults, the same as **Reset to Defaults** in the settings page |
+
+### Display
+
+| Command | Description |
+| --- | --- |
+| `/dappermap display zoom close\|medium\|far\|<16..256>` | Zoom Radius; presets are 48, 96 and 160 blocks |
+| `/dappermap display size <120..360>` | Map Size |
+| `/dappermap display scale <75..160>` | Interface Scale |
+| `/dappermap display shape circle\|square` | Map Shape |
+| `/dappermap display rotation north\|player` | Map Rotation: North Up or Player Facing |
+| `/dappermap display compass-letters on\|off` | Compass Letters (N, E, S, W) |
+| `/dappermap display compass-dashes on\|off` | Compass Dashes (the small dashes around the map edge) |
+| `/dappermap display cardinal-dashes on\|off` | Cardinal Dashes (the large N, E, S, W dashes) |
+| `/dappermap display speed very-fast\|fast\|normal\|slow` | Update Speed |
+| `/dappermap display resolution <256..1024>` | Texture Resolution |
+
+### Markers
+
+| Command | Description |
+| --- | --- |
+| `/dappermap markers players on\|off` | Player Markers |
+| `/dappermap markers player-style icons\|dots` | Player Marker Style |
+| `/dappermap markers player-helmets on\|off` | Player Icon Helmets |
+| `/dappermap markers creatures on\|off` | Creature Markers |
+| `/dappermap markers creature-style icons\|dots` | Creature Marker Style |
+| `/dappermap markers creature-filter all\|hostile` | Creature Filter: all creatures, or only hostile and attacking ones |
+| `/dappermap markers creature-limit 16\|32\|64` | Creature Marker Limit |
+| `/dappermap markers height-filter on\|off` | Creature Height Filter |
+| `/dappermap markers height-range <4..256>` | Height Filter Range, in blocks above and below you |
+| `/dappermap markers death on\|off` | Death Markers |
+
+### Info Panel
+
+| Command | Description |
+| --- | --- |
+| `/dappermap info panel on\|off` | Show or hide the Info Panel |
+| `/dappermap info position below\|above\|left\|right` | Info Panel Position |
+| `/dappermap info alignment left\|centre\|right` | Info Panel Alignment |
+| `/dappermap info coordinates on\|off` | Coordinates |
+| `/dappermap info bearing on\|off` | Bearing |
+| `/dappermap info world-time on\|off\|12\|24` | World Time; `12` or `24` also sets the Clock Format |
+| `/dappermap info region on\|off` | Region |
+
+### Position
+
+| Command | Description |
+| --- | --- |
+| `/dappermap position <x 0..100> <y 0..100>` | Place the minimap on screen (0 = left/top, 100 = right/bottom) |
+
+### Integrations
+
+| Command | Description |
+| --- | --- |
+| `/dappermap integration worldmap on\|off` | Hytale World Map Markers |
+| `/dappermap integration bettermap on\|off` | The BetterMap integration |
+| `/dappermap integration bettermap-markers on\|off` | BetterMap Markers |
+| `/dappermap integration bettermap-caves on\|off` | BetterMap Cave Mode; BetterMap cave mode must already be active |
+
+### Colours
+
+| Command | Description |
+| --- | --- |
 | `/dappermap colours` | Open the colour editor |
-| `/dappermap on` | Show the minimap |
-| `/dappermap off` | Hide the minimap |
-| `/dappermap help` | List command syntax and accepted values |
-| `/dappermap status` | Show the current settings |
-| `/dappermap reset` | Reset the player's values to the current server (administrator) defaults, the same as **Reset to Defaults** in the settings page |
+| `/dappermap colours list` | List colour targets, their current values and their names in the editor |
+| `/dappermap colours <target> <#RRGGBB>` | Set a colour using hexadecimal RGB |
+| `/dappermap colours <target> <R G B>` | Set a colour using decimal RGB channels from 0 to 255 |
+| `/dappermap colours reset <target\|all>` | Reset one colour, or the complete palette |
 
-### Display and placement commands
-
-| Command | Description |
-| --- | --- |
-| `/dappermap zoom close\|medium\|far\|<16..256>` | Set the visible map radius; presets are 48, 96 and 160 blocks |
-| `/dappermap size <120..360>` | Set the logical on-screen map size |
-| `/dappermap scale <75..160>` | Scale the complete minimap interface |
-| `/dappermap resolution <256..1024>` | Set the rendered map texture resolution |
-| `/dappermap speed very-fast\|fast\|normal\|slow` | Select an update-speed profile |
-| `/dappermap shape circle\|square` | Select the map shape |
-| `/dappermap rotation north\|player` | Select north-up or player-facing rotation |
-| `/dappermap position <x 0..100> <y 0..100>` | Position the complete HUD |
-| `/dappermap info on\|off` | Show or hide the complete information panel |
-| `/dappermap panel below\|above\|left\|right` | Position the information panel relative to the map |
-| `/dappermap panel-alignment left\|centre\|right` | Align information-panel text (`center` is also accepted) |
-
-### Marker and information commands
-
-| Command | Description |
-| --- | --- |
-| `/dappermap markers players\|entities\|death\|worldmap on\|off` | Enable or disable a marker category |
-| `/dappermap creature-markers icons\|dots` | Show creatures as icons (default) or dots (`creature-icons`, `creature-style` aliases) |
-| `/dappermap creature-filter all\|hostile` | Show all creatures (default) or only hostile and attacking ones (`creatures-shown`, `hostile-only` aliases) |
-| `/dappermap player-markers icons\|dots` | Show other players as head icons (default) or dots (`player-icons`, `player-style` aliases) |
-| `/dappermap player-helmets shown\|hidden` | Show helmets on player icons (default) or always show the bare head (`player-helmet`, `helmets` aliases) |
-| `/dappermap creature-limit 16\|32\|64` | Set the maximum visible creature markers |
-| `/dappermap height on\|off` | Enable or disable creature height filtering |
-| `/dappermap height-range <4..256>` | Set the allowed creature distance above and below the player |
-| `/dappermap coordinates on\|off` | Show or hide coordinates |
-| `/dappermap compass on\|off` | Show or hide Bearing (`bearing` alias) |
-| `/dappermap clock on\|off\|12\|24` | Control World Time and Clock Format (`world-time` alias) |
-| `/dappermap biome on\|off` | Show or hide Region (`region` alias) |
-| `/dappermap integration native on\|off` | Control Hytale world-map markers |
-| `/dappermap integration bettermap enable\|disable` | Control the BetterMap master integration |
-| `/dappermap integration bettermap markers on\|off` | Control BetterMap waypoint markers |
-| `/dappermap integration bettermap caves on\|off` | Control cave terrain; BetterMap cave mode must already be active |
-
-### Colour commands
-
-| Command | Description |
-| --- | --- |
-| `/dappermap colours list` | List available colour targets and their current values |
-| `/dappermap colour <target> <#RRGGBB>` | Set a colour using hexadecimal RGB |
-| `/dappermap colour <target> <R G B>` | Set a colour using decimal RGB channels from 0 to 255 |
-| `/dappermap colour reset <target>` | Reset one colour target |
-| `/dappermap colour reset all` | Reset the complete palette |
+Colour targets match the colour editor: `map-edge`, `cardinal-dashes`, `compass-dashes`, `compass-letters`, `panel-background`, `panel-title`, `panel-headings`, `coordinates`, `bearing`, `world-time`, `region`, `locator`, `players`, `death`, `attacking`, `hostile`, `neutral` and `friendly`.
 
 ### Administrator commands
 
-The administrator branch uses the same settings and values as the player branch, but changes the defaults inherited by new and uncustomised players.
+The administrator branch takes the same commands and values as the player commands, but changes the defaults inherited by new and uncustomised players.
 
 ```text
-/dappermap admin settings
+/dappermap admin                     (opens the admin settings page; /dappermap admin settings does the same)
 /dappermap admin status
 /dappermap admin help
 /dappermap admin reset
-/dappermap admin <setting> <value>
+/dappermap admin <group> <setting> <value>
 ```
 
 Examples:
 
 ```text
-/dappermap admin zoom far
-/dappermap admin shape circle
-/dappermap admin markers entities off
-/dappermap admin clock 24
-/dappermap admin panel-alignment centre
-/dappermap admin creature-limit 32
-/dappermap admin creature-markers dots
-/dappermap admin creature-filter hostile
-/dappermap admin player-helmets hidden
-/dappermap admin integration bettermap enable
+/dappermap admin display zoom far
+/dappermap admin display shape circle
+/dappermap admin display cardinal-dashes off
+/dappermap admin markers creatures off
+/dappermap admin markers creature-style dots
+/dappermap admin markers creature-filter hostile
+/dappermap admin markers creature-limit 32
+/dappermap admin markers player-helmets off
+/dappermap admin info world-time 24
+/dappermap admin info alignment centre
+/dappermap admin integration bettermap on
+/dappermap admin colours compass-dashes #57D8D0
 ```
 
-`/dappermap admin settings` opens the administrator version of the settings interface. Administrator mode is governed only by the admin permission and does not require each player-setting permission.
+Server controls (admin only):
+
+| Command | Description |
+| --- | --- |
+| `/dappermap admin limit` | Show the server limits |
+| `/dappermap admin limit speed\|resolution\|zoom\|creatures <value\|none>` | Cap a setting for every player (`none` removes the cap). Players keep their own choice and use it again if the limit is lifted |
+| `/dappermap admin stats` | Show DapperMap server load figures |
+| `/dappermap admin load-shedding on\|off` | Step live minimaps down one update speed while the server is busy |
+
+Administrator mode is governed only by the admin permission and does not require each player-setting permission.
 
 ## Permissions
 
@@ -331,35 +365,33 @@ scyphoz.dappermap.command.toggle
 
 | Permission | Controls |
 | --- | --- |
-| `scyphoz.dappermap.command.toggle` | Bare `/dappermap` toggle and the Enabled control in the settings page |
+| `scyphoz.dappermap.command.toggle` | `/dappermap`, `/dappermap on\|off` and the Minimap switch in the settings page |
 | `scyphoz.dappermap.command.settings` | Opening the settings page |
-| `scyphoz.dappermap.command.colours` | Colour editor and colour commands |
-| `scyphoz.dappermap.command.on` | `/dappermap on` |
-| `scyphoz.dappermap.command.off` | `/dappermap off` |
 | `scyphoz.dappermap.command.status` | `/dappermap status` |
-| `scyphoz.dappermap.command.reset` | Resetting player settings |
-| `scyphoz.dappermap.command.zoom` | Zoom radius |
-| `scyphoz.dappermap.command.size` | Map size |
-| `scyphoz.dappermap.command.scale` | Interface scale |
-| `scyphoz.dappermap.command.resolution` | Texture resolution |
-| `scyphoz.dappermap.command.speed` | Update speed |
-| `scyphoz.dappermap.command.shape` | Circle or square map shape |
-| `scyphoz.dappermap.command.rotation` | North-up or player-facing rotation |
-| `scyphoz.dappermap.command.position` | HUD position controls |
-| `scyphoz.dappermap.command.panel` | Information-panel visibility, position and `panel-alignment` |
-| `scyphoz.dappermap.command.markers` | Player, creature, death and Hytale world-map marker controls, plus `creature-limit`, `creature-markers`, `creature-filter`, `player-markers` and `player-helmets` |
-| `scyphoz.dappermap.command.height` | Creature height detection |
-| `scyphoz.dappermap.command.height-range` | Creature vertical range |
-| `scyphoz.dappermap.command.coordinates` | Coordinate readout |
-| `scyphoz.dappermap.command.clock` | World clock and 12/24-hour format |
-| `scyphoz.dappermap.command.compass` | Compass readout |
-| `scyphoz.dappermap.command.biome` | Biome readout |
-| `scyphoz.dappermap.command.integration` | Native and BetterMap master/marker/cave integration controls |
+| `scyphoz.dappermap.command.help` | `/dappermap help`, and listing a group's settings (e.g. `/dappermap display`) |
+| `scyphoz.dappermap.command.reset` | Resetting your settings |
+| `scyphoz.dappermap.command.zoom` | `display zoom` |
+| `scyphoz.dappermap.command.size` | `display size` |
+| `scyphoz.dappermap.command.scale` | `display scale` |
+| `scyphoz.dappermap.command.shape` | `display shape` |
+| `scyphoz.dappermap.command.rotation` | `display rotation` |
+| `scyphoz.dappermap.command.speed` | `display speed` |
+| `scyphoz.dappermap.command.resolution` | `display resolution` |
+| `scyphoz.dappermap.command.compass` | `display compass-letters`, `display compass-dashes`, `display cardinal-dashes` and `info bearing` |
+| `scyphoz.dappermap.command.markers` | `markers players`, `player-style`, `player-helmets`, `creatures`, `creature-style`, `creature-filter`, `creature-limit` and `death` |
+| `scyphoz.dappermap.command.height` | `markers height-filter` |
+| `scyphoz.dappermap.command.height-range` | `markers height-range` |
+| `scyphoz.dappermap.command.info` | `info panel` |
+| `scyphoz.dappermap.command.panel` | `info position` and `info alignment` |
+| `scyphoz.dappermap.command.coordinates` | `info coordinates` |
+| `scyphoz.dappermap.command.clock` | `info world-time` (World Time and Clock Format) |
+| `scyphoz.dappermap.command.biome` | `info region` |
+| `scyphoz.dappermap.command.position` | Position tab and `/dappermap position` |
+| `scyphoz.dappermap.command.integration` | Every `integration` command (Hytale World Map Markers and BetterMap) |
+| `scyphoz.dappermap.command.colours` | Colour editor and `/dappermap colours` |
 | `scyphoz.dappermap.command.*` | Every player-facing DapperMap command and setting |
 
-`help` uses `scyphoz.dappermap.command.help`. New direct commands intentionally reuse the permissions of their matching UI controls: `panel-alignment` uses `panel`, and `creature-limit`, `creature-markers`, `creature-filter`, `player-markers` and `player-helmets` use `markers`. Info Panel visibility uses `scyphoz.dappermap.command.info`.
-
-Command aliases use the permission assigned to their canonical command. For example, `coords` uses the `coordinates` permission and `update` uses the `speed` permission.
+Each command uses the same permission as its settings-page control. Permission names were kept from earlier versions so existing server permission set-ups keep working, which is why a few differ from their command (for example `info world-time` uses `clock` and `info region` uses `biome`).
 
 ### Administrator permission
 

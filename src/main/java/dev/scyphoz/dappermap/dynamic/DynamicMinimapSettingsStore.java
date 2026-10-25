@@ -20,8 +20,11 @@ import dev.scyphoz.dappermap.util.DapperMapUtil;
  * are read as before and rewritten sparse on their next save.
  */
 public final class DynamicMinimapSettingsStore {
-    /** Written into every file; its absence marks a pre-3.1.0 full-snapshot file. */
-    private static final int FORMAT = 2;
+    /**
+     * Written into every file; its absence marks a pre-3.1.0 full-snapshot file. 3: Compass Dashes
+     * has its own colour (format 2 and older files had one "ticks" colour for every dash).
+     */
+    private static final int FORMAT = 3;
     /**
      * Colour defaults that 3.1.0 changed (colour id -> the 3.0.x default). In a pre-3.1.0 file
      * every colour was saved, so a value equal to its old default was never chosen by the player:
@@ -296,7 +299,7 @@ public final class DynamicMinimapSettingsStore {
         if (all || !s.colours.equals(b.colours)) {
             for (DynamicMinimapColours.Key key : DynamicMinimapColours.Key.values()) {
                 int rgb = s.colours.rgb(key);
-                if (all || rgb != b.colours.rgb(key)) field(out, "colour_" + key.id, rgb);
+                if (all || rgb != b.colours.rgb(key)) field(out, "colour_" + key.storeId, rgb);
             }
         }
         return out.length() == empty ? null : out.append("\n}\n").toString();
@@ -349,12 +352,18 @@ public final class DynamicMinimapSettingsStore {
                 // No "format" key: a pre-3.1.0 file holding every value, defaults included.
                 boolean legacy = !json.containsKey("format");
                 for (DynamicMinimapColours.Key key : DynamicMinimapColours.Key.values()) {
-                    Integer rgb = extractColour(json, "colour_" + key.id);
+                    Integer rgb = extractColour(json, "colour_" + key.storeId);
                     if (rgb == null) continue;
                     // A legacy file's copy of a since-changed default was never the player's choice.
-                    if (legacy && rgb.equals(RETIRED_COLOUR_DEFAULTS.get(key.id))) continue;
+                    if (legacy && rgb.equals(RETIRED_COLOUR_DEFAULTS.get(key.storeId))) continue;
                     settings.colours = settings.colours.with(key, rgb);
                 }
+                // Format 2 and older: one "ticks" colour drew every dash, so a saved custom one keeps
+                // colouring the small dashes too. (Newer files save Compass Dashes on its own.)
+                Integer format = extractInt(json, "format");
+                Integer ticks = extractColour(json, "colour_" + DynamicMinimapColours.Key.TICKS.storeId);
+                if (ticks != null && (format == null || format < 3))
+                    settings.colours = settings.colours.with(DynamicMinimapColours.Key.COMPASS_DASHES, ticks);
                 // Every key is optional: a missing key keeps the inherited value.
                 Boolean bool;
                 Integer number;
