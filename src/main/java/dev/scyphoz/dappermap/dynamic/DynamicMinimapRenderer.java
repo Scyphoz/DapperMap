@@ -145,6 +145,14 @@ public final class DynamicMinimapRenderer {
                 return dx * dx + dz * dz;
             }));
             int requests = 0;
+            // World-map image requests this render may start. Gated renders only ask for loaded
+            // chunks, whose images are cheap to build (no disk loads), so every missing one is
+            // requested at once: with BetterMap, Hytale's own map tracker treats chunks it already
+            // sent as done for good (view radius 999), so after Hytale drops an area's images
+            // (about 60 s unseen) nothing else rebuilds them. At 16 per render a full HUD took
+            // a dozen partial redraws (about 12 s) to fill. Requests for a chunk already queued
+            // reuse Hytale's pending future, so repeats cost nothing. Ungated renders keep 16.
+            int surfaceBudget = gated ? chunkHashes.length : 16;
             // One scratch image for chunk pixels, decoded straight into its backing array and
             // recreated only when a chunk has another size (BetterMap cave chunks differ).
             BufferedImage chunkImage = null;
@@ -170,7 +178,7 @@ public final class DynamicMinimapRenderer {
                             // World-map chunk index == ChunkStore column index (both 32 blocks,
                             // ChunkUtil.indexChunk): no conversion. Unloaded: no request slot used.
                             if (gated && !chunkLoaded.test(ChunkUtil.indexChunk(chunkX, chunkZ))) ++unloaded;
-                            else if (requests < 16) {
+                            else if (requests < surfaceBudget) {
                                 ++requests;
                                 image = worldMapManager.getImageAsync(chunkX, chunkZ).getNow(null);
                             }
@@ -366,15 +374,51 @@ public final class DynamicMinimapRenderer {
         int indexOf(int chunkX, int chunkZ) { return (chunkZ - this.minZ) * width() + (chunkX - this.minX); }
     }
 
-    /** Sampled hash of one chunk image (dimensions, bit depth, packed indices and palette). */
+    /**
+     * Hash of what a chunk image looks like: its size and the colour of every pixel, so it does
+     * not depend on palette order. Hytale builds the palette from a pooled hash set whose order
+     * depends on which builder made the image, so a rebuild of an unchanged chunk often has the
+     * same colours in a different palette order (and different packed indices). Hashing the raw
+     * palette and indices made those rebuilds look like terrain changes and redrew the HUD each
+     * time, which BetterMap's heavy image churn turned into repeated redraws after a teleport.
+     * Each image is decoded once: the result is cached by image object (see {@link #PIXEL_HASHES}).
+     */
     private static long chunkHash(MapImage image) {
-        long chunkHash = 1L;
-        chunkHash = 31L * chunkHash + (long)image.width;
-        chunkHash = 31L * chunkHash + (long)image.height;
-        chunkHash = 31L * chunkHash + (long)Byte.toUnsignedInt(image.bitsPerIndex);
-        chunkHash = 31L * chunkHash + sampleHash(image.packedIndices);
-        chunkHash = 31L * chunkHash + sampleHash(image.palette);
-        return chunkHash;
+        Long key = ((long) image.width << 48 | (long) image.height << 32) ^ (System.identityHashCode(image) & 0xFFFFFFFFL);
+        PixelHash cached = PIXEL_HASHES.get(key);
+        if (cached != null && cached.image.get() == image) return cached.hash; // Same image object: no decode.
+        long hash = pixelHash(image);
+        if (PIXEL_HASHES.size() >= PIXEL_HASH_CACHE_MAX) PIXEL_HASHES.clear(); // Bounded; refills from probes.
+        PIXEL_HASHES.put(key, new PixelHash(new java.lang.ref.WeakReference<>(image), hash));
+        return hash;
+    }
+
+    /** Cached pixel hash for one image object; weak, so cached entries never keep old images alive. */
+    private record PixelHash(java.lang.ref.WeakReference<MapImage> image, long hash) {}
+    /** Pixel hashes by image identity (identity hash mixed with size). Shared by all players and worlds. */
+    private static final java.util.concurrent.ConcurrentHashMap<Long, PixelHash> PIXEL_HASHES = new java.util.concurrent.ConcurrentHashMap<>();
+    /** About 3x a full-size HUD buffer for several players; clearing just costs one decode per image. */
+    private static final int PIXEL_HASH_CACHE_MAX = 16_384;
+
+    /** Size plus every pixel's colour in order (palette order does not matter). 1 decode per image. */
+    private static long pixelHash(MapImage image) {
+        long hash = 31L * (31L + image.width) + image.height;
+        int[] palette = image.palette;
+        if (palette == null || palette.length == 0) return 31L * hash + 7L;
+        int count = image.width * image.height;
+        byte[] packed = image.packedIndices;
+        int bits = Byte.toUnsignedInt(image.bitsPerIndex);
+        if (packed != null && packed.length != 0 && bits > 0 && count > 0) {
+            BitFieldArr indices = new BitFieldArr(bits, count);
+            indices.set(packed);
+            for (int i = 0; i < count; ++i) {
+                int index = indices.get(i);
+                hash = 31L * hash + (index >= 0 && index < palette.length ? palette[index] : palette[0]);
+            }
+        } else {
+            for (int colour : palette) hash = 31L * hash + colour; // Unpacked: palette holds the pixels.
+        }
+        return hash;
     }
 
     /** chunkHash for a present image, never 0 (0 marks a missing chunk in the hash arrays). */
@@ -2133,30 +2177,6 @@ public final class DynamicMinimapRenderer {
         }
         if (target == null) chunkImage.setRGB(0, 0, width, height, pixels, 0, width);
         return true;
-    }
-
-    private static long sampleHash(byte[] bytes) {
-        if (bytes == null || bytes.length == 0) return 0L;
-        int length = bytes.length;
-        long hash = length;
-        hash = 31L * hash + (long)Byte.toUnsignedInt(bytes[0]);
-        hash = 31L * hash + (long)Byte.toUnsignedInt(bytes[length / 4]);
-        hash = 31L * hash + (long)Byte.toUnsignedInt(bytes[length / 2]);
-        hash = 31L * hash + (long)Byte.toUnsignedInt(bytes[length * 3 / 4]);
-        hash = 31L * hash + (long)Byte.toUnsignedInt(bytes[length - 1]);
-        return hash;
-    }
-
-    private static long sampleHash(int[] ints) {
-        if (ints == null || ints.length == 0) return 0L;
-        int length = ints.length;
-        long hash = length;
-        hash = 31L * hash + (long)ints[0];
-        hash = 31L * hash + (long)ints[length / 4];
-        hash = 31L * hash + (long)ints[length / 2];
-        hash = 31L * hash + (long)ints[length * 3 / 4];
-        hash = 31L * hash + (long)ints[length - 1];
-        return hash;
     }
 
     /**
