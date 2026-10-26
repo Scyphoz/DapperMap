@@ -199,7 +199,8 @@ public final class DapperMapServerLoad {
                 + " (very-fast " + speeds[0] + ", fast " + speeds[1] + ", normal " + speeds[2] + ", slow " + speeds[3] + ")");
         if (config != null) {
             lines.add("Limits: " + (config.hasLimits() ? config.describeLimits() : "none")
-                    + (manager == null ? "" : " - " + manager.limitedPlayerCount() + " player(s) currently limited"));
+                    + (manager == null ? "" : " - " + manager.limitedPlayerCount() + " player(s) currently limited")
+                    + "; terrain colours " + DapperMapConfig.terrainColoursText(config.getTerrainColours()));
             lines.add("Load shedding: " + (!config.isLoadShedding() ? "disabled"
                     : sheddingLevel > 0 ? "ACTIVE (" + sheddingReason + ")" : "enabled, not active")
                     + " [trigger: " + config.getLoadSheddingRejectionsPerMinute() + " refused/min"

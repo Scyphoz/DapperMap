@@ -88,6 +88,10 @@ public final class DapperMapSettingsPage
     private boolean betterMapCaveAvailable = false;
     /** Admin page only: unsaved server limits, indexed by DapperMapConfig.Limit ordinal; saved on Apply. */
     private int[] draftLimits;
+    /** Admin page only: unsaved terrain colour reduction (0 = off, -1 = not loaded); saved on Apply. */
+    private int draftTerrainColours = -1;
+    /** Admin Server tab row for the server-wide terrain colour reduction (not a per-player limit). */
+    private static final String TERRAIN_COLOURS_ROW = "terrain_colours";
     /** The admin node (outside the player command tree, so player wildcard grants never reach it). */
     private static final PermissionQuery ADMIN_PERMISSION = DapperMapPermissions.ADMIN;
 
@@ -136,6 +140,7 @@ public final class DapperMapSettingsPage
                     : this.sessions.getSettings(this.playerRef.getUuid(), this.config)).copy();
         }
         if (this.adminMode && this.draftLimits == null) this.draftLimits = this.config.limits();
+        if (this.adminMode && this.draftTerrainColours < 0) this.draftTerrainColours = this.config.getTerrainColours();
         if (this.previewSnapshot == null) this.previewSnapshot = this.sessions.capturePreview(this.playerRef.getUuid());
         DynamicMinimapSetting settings = this.draftSettings;
         this.betterMapCaveAvailable = BetterMapIntegration.isCaveModeEnabled(
@@ -189,7 +194,7 @@ public final class DapperMapSettingsPage
             case INTERFACE -> "Choose what the Info Panel shows and where it sits.";
             case POSITION -> "Place the minimap on-screen and fine-tune its position.";
             case COLOURS -> "Tune the DapperMap palette and preview every change live.";
-            case SERVER -> "Cap the most expensive settings for every player. Saved player choices are kept.";
+            case SERVER -> "Cap the most expensive settings for every player and set server-wide image options. Saved player choices are kept.";
         };
         builder.set("#PageSectionDescription.Text", sectionDescription);
     }
@@ -670,7 +675,8 @@ public final class DapperMapSettingsPage
 
             if (limitRow && row.kind == Kind.DROPDOWN) {
                 // Independent of the defaults draft (stays editable when the default minimap is off).
-                this.limitRow(builder, events, index, row);
+                if (TERRAIN_COLOURS_ROW.equals(row.id)) this.terrainColoursRow(builder, events, index, row);
+                else this.limitRow(builder, events, index, row);
             } else if (row.kind == Kind.HEADER) {
                 builder.append("#DapperMapSettingsList", "Pages/DapperMapSectionRow.ui");
                 builder.set("#DapperMapSettingsList[" + index + "] #SectionLabel.Text", row.label);
@@ -909,6 +915,18 @@ public final class DapperMapSettingsPage
             this.updatePreview(resetBuilder, reset);
             this.updateEditorAvailability(resetBuilder, reset);
             this.sendUpdate(resetBuilder, resetEvents, false);
+            return;
+        }
+
+        if (("dropdown_" + TERRAIN_COLOURS_ROW).equals(action)) {
+            // Admin page only, like the limits: a page draft saved with Apply, dropped on cancel.
+            if (!this.adminMode || this.draftTerrainColours < 0 || event.value == null) return;
+            try {
+                int value = Integer.parseInt(event.value);
+                if (this.terrainColourChoices().contains(value)) this.draftTerrainColours = value; // Only offered values.
+            } catch (NumberFormatException ignored) {
+                // Not a value this dropdown offers: keep the draft.
+            }
             return;
         }
 
@@ -1171,6 +1189,11 @@ public final class DapperMapSettingsPage
 
     /** Persists edited limits and re-clamps live minimaps; untouched limits cause no file write. */
     private void saveLimitsIfChanged() {
+        // Terrain colour reduction: saved and every live terrain redrawn only when it changed.
+        if (this.draftTerrainColours >= 0 && this.draftTerrainColours != this.config.getTerrainColours()) {
+            DapperMap.applyTerrainColours(this.draftTerrainColours);
+            this.sessions.redrawAllTerrain();
+        }
         if (this.draftLimits == null || java.util.Arrays.equals(this.draftLimits, this.config.limits())) return;
         this.config.setLimits(this.draftLimits);
         DapperMap.saveConfig();
@@ -1211,6 +1234,30 @@ public final class DapperMapSettingsPage
         for (int value : values)
             entries.add(entry(limitLabel(limit, value) + (value == limit.noLimit ? " (no limit)" : ""), Integer.toString(value)));
         return entries;
+    }
+
+    /** Admin dropdown for the server-wide terrain colour reduction ("Off" sends exact colours). */
+    private void terrainColoursRow(UICommandBuilder builder, UIEventBuilder events, int index, Row row) {
+        String selector = "#DapperMapSettingsList[" + index + "]";
+        builder.append("#DapperMapSettingsList", "Pages/DapperMapDropdownRow.ui");
+        builder.set(selector + " #RowLabel.Text", row.label);
+        builder.set(selector + " #RowDescription.Text", description(row.id));
+        String dropdownSelector = selector + " #ValueDropdown";
+        List<DropdownEntryInfo> entries = new ArrayList<>();
+        for (int value : this.terrainColourChoices())
+            entries.add(entry(value == 0 ? "Off (exact colours)" : value + " colours", Integer.toString(value)));
+        builder.set(dropdownSelector + ".Entries", entries);
+        builder.set(dropdownSelector + ".Value", Integer.toString(this.draftTerrainColours));
+        events.addEventBinding(CustomUIEventBindingType.ValueChanged, dropdownSelector,
+                EventData.of("Action", "dropdown_" + row.id).append("@Value", dropdownSelector + ".Value"), false);
+    }
+
+    /** The offered colour counts, plus a hand-edited config value so the dropdown can show it. */
+    private TreeSet<Integer> terrainColourChoices() {
+        TreeSet<Integer> values = new TreeSet<>();
+        for (int value : DapperMapConfig.TERRAIN_COLOUR_CHOICES) values.add(value);
+        values.add(this.config.getTerrainColours());
+        return values;
     }
 
     /** Validates an offered value and stores it in the page draft; false when nothing changed. */
@@ -1411,6 +1458,9 @@ public final class DapperMapSettingsPage
         row("limit_resolution", "Max Texture Resolution", Kind.DROPDOWN, null, null, "Highest texture resolution any player's minimap renders at.");
         row("limit_zoom", "Max Zoom Radius", Kind.DROPDOWN, null, null, "Largest zoom radius any player's minimap can show.");
         row("limit_creatures", "Max Creature Markers", Kind.DROPDOWN, null, null, "Most creature markers any player's minimap shows.");
+        header("section_terrain_images", "TERRAIN IMAGES");
+        row(TERRAIN_COLOURS_ROW, "Terrain Colour Reduction", Kind.DROPDOWN, null, null,
+                "Fewer colours make smaller terrain images (less data sent to players) but can shift map colours. Off sends exact colours.");
         // Info Panel tab: every row but the panel switch needs the panel on.
         addingTab = Tab.INTERFACE;
         row("info_panel", "Info Panel", Kind.TOGGLE, F_PANEL, null, "Show or hide the Info Panel while keeping the minimap visible.");

@@ -63,7 +63,7 @@ public class DapperMapCommand extends AbstractPlayerCommand {
         registerCommands(admin, Scope.ADMIN);
         // Admin-only server controls (no player-tree twin): limits, stats and load shedding.
         admin.addSubCommand(new AdminToolCommand("limit",
-                "Server limits: limit [speed|resolution|zoom|creatures <value|none>]", this));
+                "Server limits: limit [speed|resolution|zoom|creatures <value|none> | colours <off|32..256>]", this));
         admin.addSubCommand(new AdminToolCommand("stats", "Show DapperMap server load figures", this));
         admin.addSubCommand(new AdminToolCommand("load-shedding", "Turn adaptive load shedding on|off", this));
         this.addSubCommand(admin);
@@ -388,11 +388,12 @@ public class DapperMapCommand extends AbstractPlayerCommand {
                 case "help" -> {
                     showHelp(context, "/dappermap admin ", node -> true);
                     context.sendMessage(Message.raw("Admin defaults take the same settings and values as the player commands."));
-                    context.sendMessage(Message.raw("Server: /dappermap admin limit [speed|resolution|zoom|creatures <value|none>] | /dappermap admin stats | /dappermap admin load-shedding on|off"));
+                    context.sendMessage(Message.raw("Server: /dappermap admin limit [speed|resolution|zoom|creatures <value|none> | colours <off|32..256>] | /dappermap admin stats | /dappermap admin load-shedding on|off"));
                 }
                 case "status" -> {
                     for (String line : status(this.sessions.getAdminDefaults(config))) context.sendMessage(Message.raw("Admin defaults " + line));
                     context.sendMessage(Message.raw("Server limits: " + (config.hasLimits() ? config.describeLimits() : "none")
+                            + "; terrain colours " + DapperMapConfig.terrainColoursText(config.getTerrainColours())
                             + "; load shedding " + (config.isLoadShedding() ? "on" : "off") + "."));
                 }
                 case "reset" -> {
@@ -580,16 +581,18 @@ public class DapperMapCommand extends AbstractPlayerCommand {
     }
 
     /**
-     * {@code /mm admin limit [speed|resolution|zoom|creatures <value|none>]}. Saves the config and
+     * {@code /mm admin limit [speed|resolution|zoom|creatures <value|none> | colours <off|32..256>]}. Saves the config and
      * re-applies the limits to every live minimap; players' saved settings are kept.
      */
     private String adminLimit(String arguments) {
         DapperMapConfig config = DapperMap.config();
         String usage = "Usage: /dappermap admin limit speed very-fast|fast|normal|slow|none"
-                + " | resolution <256..1024>|none | zoom <16..256>|none | creatures 16|32|64|none";
-        if (arguments.isBlank()) return "DapperMap server limits: " + (config.hasLimits() ? config.describeLimits() : "none") + ".";
+                + " | resolution <256..1024>|none | zoom <16..256>|none | creatures 16|32|64|none"
+                + " | colours off|" + terrainColourValues();
+        if (arguments.isBlank()) return limitsSummary(config) + ".";
         String[] parts = arguments.toLowerCase(java.util.Locale.ROOT).split("\\s+");
         if (parts.length != 2) return usage;
+        if (parts[0].equals("colours")) return this.adminTerrainColours(parts[1], usage);
         DapperMapConfig.Limit limit = DapperMapConfig.Limit.byCommand(parts[0]);
         if (limit == null) return usage;
         // "none" lifts the limit (its widest value); anything else must be a value the limit accepts.
@@ -598,8 +601,41 @@ public class DapperMapCommand extends AbstractPlayerCommand {
         config.setLimit(limit, parsed);
         DapperMap.saveConfig();
         this.sessions.refreshLiveSettings(); // Applies on each minimap's next tick.
+        return limitsSummary(config) + " (" + this.sessions.limitedPlayerCount() + " player(s) currently limited).";
+    }
+
+    /** "DapperMap server limits: ...; terrain colours off" for the limit command's replies. */
+    private static String limitsSummary(DapperMapConfig config) {
         return "DapperMap server limits: " + (config.hasLimits() ? config.describeLimits() : "none")
-                + " (" + this.sessions.limitedPlayerCount() + " player(s) currently limited).";
+                + "; terrain colours " + DapperMapConfig.terrainColoursText(config.getTerrainColours());
+    }
+
+    /** "32|64|96|128|192|256": the colour counts the command and the admin page offer. */
+    private static String terrainColourValues() {
+        StringBuilder out = new StringBuilder();
+        for (int value : DapperMapConfig.TERRAIN_COLOUR_CHOICES) {
+            if (value == 0) continue; // "off" is listed by name.
+            if (!out.isEmpty()) out.append('|');
+            out.append(value);
+        }
+        return out.toString();
+    }
+
+    /**
+     * {@code /mm admin limit colours off|32..256}: the server-wide terrain colour reduction. Saves
+     * the config and redraws every live minimap's terrain with the new setting.
+     */
+    private String adminTerrainColours(String value, String usage) {
+        int colours = -1;
+        if (value.equals("off")) colours = 0;
+        else for (int choice : DapperMapConfig.TERRAIN_COLOUR_CHOICES) if (choice > 0 && Integer.toString(choice).equals(value)) colours = choice;
+        if (colours < 0) return usage;
+        DapperMapConfig config = DapperMap.config();
+        if (config.getTerrainColours() != colours) {
+            DapperMap.applyTerrainColours(colours);
+            this.sessions.redrawAllTerrain();
+        }
+        return limitsSummary(config) + ".";
     }
 
     /** {@code /mm admin load-shedding on|off}; no value shows the current state. */

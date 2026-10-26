@@ -481,6 +481,8 @@ public final class DynamicMinimapSession {
     private volatile boolean rotationCatchUp;
     /** Set when HUD commands are waiting (deliveries, settings refresh): dispatch at the next poll. */
     private volatile boolean flushSoon;
+    /** Set from any thread when every terrain must be drawn again (e.g. terrain colour reduction changed). */
+    private volatile boolean terrainRedrawRequested;
     /** Set by PlayerReady on an existing session: rebuild the client-side HUD in place on the next tick. */
     private volatile boolean clientResyncPending;
     /** When the last map-rotation render was requested; paces rotation by request, not delivery. */
@@ -535,6 +537,12 @@ public final class DynamicMinimapSession {
 
     /** Live settings changed: run a tick at the next heartbeat poll so the change shows promptly. */
     public void requestPromptTick() {
+        this.flushSoon = true;
+    }
+
+    /** Redraws the terrain on the next tick (thread-safe); used when a server-wide image option changes. */
+    public void requestTerrainRedraw() {
+        this.terrainRedrawRequested = true;
         this.flushSoon = true;
     }
 
@@ -874,6 +882,12 @@ public final class DynamicMinimapSession {
                 // signature/recenter event, making the resolution control appear inert.
                 this.forceTerrainRender();
                 this.dropShownTerrain();
+            }
+
+            if (this.terrainRedrawRequested) {
+                // Server-wide image option changed: a fresh render picks it up (the HUD stays as is).
+                this.terrainRedrawRequested = false;
+                this.forceTerrainRender();
             }
 
             if (this.settings.sizePixels != this.builtSize) {

@@ -163,8 +163,11 @@ public class DapperMapConfig {
 
     /** PNG deflate level for generated images: higher = less data sent, more render CPU. */
     private int pngCompressionLevel = dev.scyphoz.dappermap.util.DapperMapUtil.DEFAULT_PNG_COMPRESSION;
-    /** Colours kept in full-colour terrain images (32..256); 0 sends full colour. */
-    private int terrainColours = 256;
+    /** Colours kept in full-colour terrain images (32..256); 0 (the default) sends full colour. */
+    private int terrainColours = 0;
+
+    /** Terrain colour reduction choices for the admin page and {@code admin limit colours} (0 = off). */
+    public static final int[] TERRAIN_COLOUR_CHOICES = {0, 32, 64, 96, 128, 192, 256};
 
     private DapperMapConfig() {
     }
@@ -262,7 +265,13 @@ public class DapperMapConfig {
     public boolean isCreatureIconDiskCache() { return this.creatureIconDiskCache; }
     public long getCreatureIconDiskCacheBytes() { return clamp(this.creatureIconDiskCacheMb, 1, 512) * 1024L * 1024L; }
     public int getPngCompressionLevel() { return clamp(this.pngCompressionLevel, 1, 9); }
-    public int getTerrainColours() { return this.terrainColours <= 0 ? 0 : clamp(this.terrainColours, 32, 256); }
+    public int getTerrainColours() { return normaliseTerrainColours(this.terrainColours); }
+    /** Sets the terrain colour reduction (0 = off, else 32..256); callers save the config and update the renderer. */
+    public void setTerrainColours(int colours) { this.terrainColours = normaliseTerrainColours(colours); }
+    /** 0 (off) or 32..256. */
+    public static int normaliseTerrainColours(int colours) { return colours <= 0 ? 0 : clamp(colours, 32, 256); }
+    /** "off" or "64 colours", for status and command output. */
+    public static String terrainColoursText(int colours) { return colours <= 0 ? "off" : colours + " colours"; }
 
     private static void append(StringBuilder out, String text) {
         if (!out.isEmpty()) out.append(", ");

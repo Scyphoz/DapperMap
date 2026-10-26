@@ -1909,8 +1909,8 @@ public final class DynamicMinimapRenderer {
         return png;
     }
 
-    /** Colour limit for full-colour terrain images (0 = off); set from the config. */
-    private static volatile int terrainColours = 256;
+    /** Colour limit for full-colour terrain images (0 = off, the default); set from the config. */
+    private static volatile int terrainColours = 0;
 
     /** Sets the terrain colour limit: 0 keeps full colour, otherwise 32..256 colours. */
     public static void setTerrainColours(int colours) {
@@ -1926,7 +1926,7 @@ public final class DynamicMinimapRenderer {
     }
 
     /**
-     * A median-cut colour reduction: one colour per box of 5-bit histogram bins, plus room for
+     * A colour reduction ({@link #buildReduction}): one colour per box of 5-bit histogram bins, plus room for
      * up to {@code translucentSlots} exact translucent colours. Immutable once built, so one
      * reduction can be shared by every rotated frame of a player-up terrain.
      */
@@ -1980,17 +1980,36 @@ public final class DynamicMinimapRenderer {
         }
     }
 
+    /*
+     * Channel weights for colour error (roughly how strongly the eye separates red, green and
+     * blue). Weighted squared RGB distance is used for every split and nearest-colour choice.
+     */
+    private static final int WEIGHT_R = 3, WEIGHT_G = 4, WEIGHT_B = 2;
+
     /**
-     * Median cut over the opaque pixels of {@code argb}: each split goes across the widest channel
-     * of the most populated box at the pixel-weighted median; each box becomes its pixel-weighted
-     * average colour. {@code reservedTranslucent} palette entries are left for exact translucent
-     * colours. Null when the pixels hold more than {@link #MAX_TRANSLUCENT} translucent colours.
+     * Error-driven median cut over the opaque pixels of {@code argb}, then one refinement pass.
+     * <ul>
+     * <li>Each split goes to the box with the most colour error (pixels x spread), not the most
+     * pixels. Splitting by pixel count spent the whole budget on large areas (ocean and grass
+     * shades) and left small, distinct colours (roofs, sand, coloured leaves, farmland) sharing a
+     * box with a dominant neighbour. They then showed as that box's average: purple roofs went
+     * grey-blue, teal leaves blue, brown farmland green, so the HUD didn't match the world map.</li>
+     * <li>The split point along the box's widest (weighted-variance) channel is the one that
+     * leaves the least error on both sides.</li>
+     * <li>Every bin is then moved to its nearest palette colour and the colours re-averaged once
+     * (one k-means pass), so no bin keeps a far-off box average.</li>
+     * </ul>
+     * {@code extraTranslucent} palette entries are reserved for exact translucent colours. Null
+     * when the pixels hold more than {@link #MAX_TRANSLUCENT} translucent colours.
+     * Costs about the same as the old pixel-count cut (a few ms per 768px terrain), and PNGs come
+     * out slightly smaller because neighbouring pixels share colours more often.
      */
     static ColourReduction buildReduction(int[] argb, int colours, int extraTranslucent) {
-        int[] count = new int[32768], sumR = new int[32768], sumG = new int[32768], sumB = new int[32768];
+        int[] count = new int[32768];
+        long[] sumR = new long[32768], sumG = new long[32768], sumB = new long[32768];
         int[] translucent = new int[MAX_TRANSLUCENT];
         int translucentCount = 0;
-        // Histogram of opaque colours; translucent colours counted exactly.
+        // Histogram of opaque colours on 5-bit bins; translucent colours counted exactly.
         for (int colour : argb) {
             if ((colour >>> 24) == 255) {
                 int bin = colourBin(colour);
@@ -2006,76 +2025,95 @@ public final class DynamicMinimapRenderer {
         int translucentSlots = Math.min(MAX_TRANSLUCENT, translucentCount + extraTranslucent);
         int occupied = 0;
         for (int c : count) if (c > 0) occupied++;
-        int[] bins = new int[occupied];
-        for (int bin = 0, i = 0; bin < count.length; bin++) if (count[bin] > 0) bins[i++] = bin;
-        long opaquePixels = (long)argb.length;
+        // Occupied bins as parallel arrays: bin index, pixel count and mean colour.
+        int[] bins = new int[occupied], pixels = new int[occupied];
+        float[] meanR = new float[occupied], meanG = new float[occupied], meanB = new float[occupied];
+        for (int bin = 0, i = 0; bin < count.length; bin++) {
+            int c = count[bin];
+            if (c == 0) continue;
+            bins[i] = bin;
+            pixels[i] = c;
+            meanR[i] = (float)sumR[bin] / c;
+            meanG[i] = (float)sumG[bin] / c;
+            meanB[i] = (float)sumB[bin] / c;
+            i++;
+        }
 
-        // Median cut: boxes are ranges of the bins array; split the most populated box until the budget is used.
+        // Boxes are ranges of `order` (a permutation of the occupied bins).
         int budget = Math.max(1, colours - translucentSlots);
+        int[] order = new int[occupied];
+        for (int i = 0; i < occupied; i++) order[i] = i;
         int[] boxStart = new int[budget], boxEnd = new int[budget];
-        long[] boxPixels = new long[budget];
+        double[] boxError = new double[budget];
         int boxes = 1;
-        boxStart[0] = 0;
         boxEnd[0] = occupied;
-        boxPixels[0] = opaquePixels;
+        boxError[0] = Double.MAX_VALUE; // Always split first (unless it is a single bin).
         long[] sortKeys = new long[occupied];
+        // Prefix sums over a sorted box: pixels, weighted channel sums, weighted sum of squares.
+        double[] prefixN = new double[occupied + 1], prefixR = new double[occupied + 1],
+                prefixG = new double[occupied + 1], prefixB = new double[occupied + 1], prefixQ = new double[occupied + 1];
         while (boxes < budget) {
             int pick = -1;
             for (int i = 0; i < boxes; i++)
-                if (boxEnd[i] - boxStart[i] > 1 && (pick < 0 || boxPixels[i] > boxPixels[pick])) pick = i;
-            if (pick < 0) break; // Every box is a single bin: the image fits the budget already.
-            int start = boxStart[pick], end = boxEnd[pick];
-            // Widest channel of this box (5-bit components of the bin index).
-            int axis = widestChannel(bins, start, end);
-            int shift = axis == 0 ? 10 : axis == 1 ? 5 : 0;
-            for (int i = start; i < end; i++) sortKeys[i] = ((long)((bins[i] >>> shift) & 31) << 32) | bins[i];
+                if (boxEnd[i] - boxStart[i] > 1 && boxError[i] > 0 && (pick < 0 || boxError[i] > boxError[pick])) pick = i;
+            if (pick < 0) break; // Every box is exact (one bin or no spread): the image fits already.
+            int start = boxStart[pick], end = boxEnd[pick], length = end - start;
+            // Sort the box along its widest channel (means are >= 0, so float bits sort numerically).
+            float[] axis = widestChannel(order, start, end, pixels, meanR, meanG, meanB);
+            for (int i = start; i < end; i++) sortKeys[i] = ((long)Float.floatToIntBits(axis[order[i]]) << 32) | order[i];
             java.util.Arrays.sort(sortKeys, start, end);
-            for (int i = start; i < end; i++) bins[i] = (int)sortKeys[i];
-            // Split at the pixel-weighted median, keeping at least one bin on each side.
-            long half = boxPixels[pick] / 2, running = 0;
-            int split = start + 1;
-            for (int i = start; i < end - 1; i++) {
-                running += count[bins[i]];
-                split = i + 1;
-                if (running >= half) break;
+            for (int i = start; i < end; i++) order[i] = (int)sortKeys[i];
+            for (int i = start, k = 1; i < end; i++, k++) {
+                int b = order[i];
+                double n = pixels[b], r = meanR[b], g = meanG[b], bl = meanB[b];
+                prefixN[k] = prefixN[k - 1] + n;
+                prefixR[k] = prefixR[k - 1] + n * r;
+                prefixG[k] = prefixG[k - 1] + n * g;
+                prefixB[k] = prefixB[k - 1] + n * bl;
+                prefixQ[k] = prefixQ[k - 1] + n * (WEIGHT_R * r * r + WEIGHT_G * g * g + WEIGHT_B * bl * bl);
             }
-            long left = 0;
-            for (int i = start; i < split; i++) left += count[bins[i]];
-            boxEnd[pick] = split;
-            boxPixels[pick] = left;
-            boxStart[boxes] = split;
+            // Error of a range = weighted sum of squares - |weighted sum|^2 / pixels.
+            int split = 1;
+            double best = Double.MAX_VALUE, leftError = 0, rightError = 0;
+            for (int k = 1; k < length; k++) {
+                double left = prefixQ[k] - weightedSquare(prefixR[k], prefixG[k], prefixB[k]) / prefixN[k];
+                double right = (prefixQ[length] - prefixQ[k]) - weightedSquare(prefixR[length] - prefixR[k],
+                        prefixG[length] - prefixG[k], prefixB[length] - prefixB[k]) / (prefixN[length] - prefixN[k]);
+                if (left + right < best) { best = left + right; split = k; leftError = left; rightError = right; }
+            }
+            boxEnd[pick] = start + split;
+            boxError[pick] = Math.max(0, leftError);
+            boxStart[boxes] = start + split;
             boxEnd[boxes] = end;
-            long right = 0;
-            for (int i = split; i < end; i++) right += count[bins[i]];
-            boxPixels[boxes] = right;
+            boxError[boxes] = Math.max(0, rightError);
             boxes++;
         }
 
-        // Each box's pixel-weighted average colour; bins map to their box (unseen bins stay -1).
+        // Box of each bin, the boxes' mean colours, then one nearest-colour refinement pass.
+        int[] binBox = new int[occupied];
+        for (int box = 0; box < boxes; box++)
+            for (int i = boxStart[box]; i < boxEnd[box]; i++) binBox[order[i]] = box;
+        double[] boxR = new double[boxes], boxG = new double[boxes], boxB = new double[boxes];
+        boxMeans(binBox, pixels, meanR, meanG, meanB, boxR, boxG, boxB);
+        nearestBoxes(binBox, meanR, meanG, meanB, boxR, boxG, boxB);
+        boxMeans(binBox, pixels, meanR, meanG, meanB, boxR, boxG, boxB);
+        nearestBoxes(binBox, meanR, meanG, meanB, boxR, boxG, boxB);
+
         int[] boxColours = new int[boxes];
+        for (int box = 0; box < boxes; box++)
+            boxColours[box] = 0xFF000000 | channel(boxR[box]) << 16 | channel(boxG[box]) << 8 | channel(boxB[box]);
+        // Bins map to their box (unseen bins stay -1, so apply() can detect them).
         short[] binToBox = new short[32768];
         java.util.Arrays.fill(binToBox, (short)-1);
-        for (int box = 0; box < boxes; box++) {
-            long r = 0, g = 0, b = 0, pixels = 0;
-            for (int i = boxStart[box]; i < boxEnd[box]; i++) {
-                int bin = bins[i];
-                r += sumR[bin];
-                g += sumG[bin];
-                b += sumB[bin];
-                pixels += count[bin];
-                binToBox[bin] = (short)box;
-            }
-            pixels = Math.max(1, pixels);
-            boxColours[box] = 0xFF000000 | (int)(r / pixels) << 16 | (int)(g / pixels) << 8 | (int)(b / pixels);
-        }
+        for (int i = 0; i < occupied; i++) binToBox[bins[i]] = (short)binBox[i];
         return new ColourReduction(boxColours, binToBox, translucentSlots);
     }
 
     /**
      * Reduces a full-colour terrain image to at most {@code colours} colours, or null when it
-     * cannot (too many translucent colours). Opaque pixels are grouped on a 5-bit-per-channel
-     * histogram and split by median cut; translucent colours are kept exact. No dithering: flat
-     * areas stay flat, which keeps the PNG small. Render pool only.
+     * cannot (too many translucent colours). Opaque pixels are reduced by {@link #buildReduction};
+     * translucent colours are kept exact. No dithering: flat areas stay flat, which keeps the
+     * PNG small. Render pool only.
      */
     private static BufferedImage reduceColours(BufferedImage source, int[] argb, int colours) {
         ColourReduction reduction = buildReduction(argb, colours, 0);
@@ -2087,17 +2125,94 @@ public final class DynamicMinimapRenderer {
         return -1;
     }
 
-    /** 0 = red, 1 = green, 2 = blue: the channel with the widest range among bins[start..end). */
-    private static int widestChannel(int[] bins, int start, int end) {
-        int minR = 31, maxR = 0, minG = 31, maxG = 0, minB = 31, maxB = 0;
+    /** Weighted squared length of a channel-sum vector (the |sum|^2 term of a box's error). */
+    private static double weightedSquare(double r, double g, double b) {
+        return WEIGHT_R * r * r + WEIGHT_G * g * g + WEIGHT_B * b * b;
+    }
+
+    /** 0..255 channel from a mean. */
+    private static int channel(double value) {
+        return (int)Math.max(0, Math.min(255, Math.round(value)));
+    }
+
+    /** Mean array of the channel with the largest weighted pixel variance among order[start..end). */
+    private static float[] widestChannel(int[] order, int start, int end, int[] pixels,
+                                         float[] meanR, float[] meanG, float[] meanB) {
+        double n = 0, r = 0, g = 0, b = 0, rr = 0, gg = 0, bb = 0;
         for (int i = start; i < end; i++) {
-            int r = (bins[i] >>> 10) & 31, g = (bins[i] >>> 5) & 31, b = bins[i] & 31;
-            minR = Math.min(minR, r); maxR = Math.max(maxR, r);
-            minG = Math.min(minG, g); maxG = Math.max(maxG, g);
-            minB = Math.min(minB, b); maxB = Math.max(maxB, b);
+            int k = order[i];
+            double w = pixels[k];
+            n += w;
+            r += w * meanR[k]; g += w * meanG[k]; b += w * meanB[k];
+            rr += w * meanR[k] * meanR[k]; gg += w * meanG[k] * meanG[k]; bb += w * meanB[k] * meanB[k];
         }
-        int red = maxR - minR, green = maxG - minG, blue = maxB - minB;
-        return green >= red && green >= blue ? 1 : red >= blue ? 0 : 2;
+        double red = WEIGHT_R * (rr - r * r / n), green = WEIGHT_G * (gg - g * g / n), blue = WEIGHT_B * (bb - b * b / n);
+        return green >= red && green >= blue ? meanG : red >= blue ? meanR : meanB;
+    }
+
+    /** Pixel-weighted mean colour of each box (a box left empty by refinement keeps its colour). */
+    private static void boxMeans(int[] binBox, int[] pixels, float[] meanR, float[] meanG, float[] meanB,
+                                 double[] boxR, double[] boxG, double[] boxB) {
+        int boxes = boxR.length;
+        double[] n = new double[boxes], r = new double[boxes], g = new double[boxes], b = new double[boxes];
+        for (int i = 0; i < binBox.length; i++) {
+            int box = binBox[i];
+            double w = pixels[i];
+            n[box] += w; r[box] += w * meanR[i]; g[box] += w * meanG[i]; b[box] += w * meanB[i];
+        }
+        for (int box = 0; box < boxes; box++) {
+            if (n[box] == 0) continue;
+            boxR[box] = r[box] / n[box]; boxG[box] = g[box] / n[box]; boxB[box] = b[box] / n[box];
+        }
+    }
+
+    /**
+     * Moves every bin to its nearest box colour. The palette is sorted by green and searched
+     * outward from the bin's green value, stopping once green alone is further than the best
+     * match, so each bin checks only a handful of the (up to 256) colours.
+     */
+    private static void nearestBoxes(int[] binBox, float[] meanR, float[] meanG, float[] meanB,
+                                     double[] boxR, double[] boxG, double[] boxB) {
+        int boxes = boxR.length;
+        if (boxes < 2) return;
+        // Sort key: green in 1/65536 steps above the box index (box < 256 fits in 8 bits).
+        long[] keys = new long[boxes];
+        for (int box = 0; box < boxes; box++) keys[box] = Math.round(boxG[box] * 65536.0D) << 8 | box;
+        java.util.Arrays.sort(keys);
+        int[] sorted = new int[boxes];
+        double[] sortedG = new double[boxes];
+        for (int i = 0; i < boxes; i++) { sorted[i] = (int)(keys[i] & 0xFF); sortedG[i] = (keys[i] >> 8) / 65536.0D; }
+        for (int i = 0; i < binBox.length; i++) {
+            double r = meanR[i], g = meanG[i], b = meanB[i];
+            int position = java.util.Arrays.binarySearch(sortedG, g);
+            if (position < 0) position = -position - 1;
+            double best = Double.MAX_VALUE;
+            int bestBox = binBox[i];
+            // Walk up and down the green-sorted palette until both directions are out of reach.
+            for (int up = position, down = position - 1; up < boxes || down >= 0; ) {
+                if (up < boxes) {
+                    double dg = sortedG[up] - g, distance = WEIGHT_G * dg * dg;
+                    if (distance >= best) up = boxes;
+                    else {
+                        int box = sorted[up++];
+                        double dr = boxR[box] - r, db = boxB[box] - b;
+                        distance += WEIGHT_R * dr * dr + WEIGHT_B * db * db;
+                        if (distance < best) { best = distance; bestBox = box; }
+                    }
+                }
+                if (down >= 0) {
+                    double dg = g - sortedG[down], distance = WEIGHT_G * dg * dg;
+                    if (distance >= best) down = -1;
+                    else {
+                        int box = sorted[down--];
+                        double dr = boxR[box] - r, db = boxB[box] - b;
+                        distance += WEIGHT_R * dr * dr + WEIGHT_B * db * db;
+                        if (distance < best) { best = distance; bestBox = box; }
+                    }
+                }
+            }
+            binBox[i] = bestBox;
+        }
     }
 
     /** Palette-optimised PNG (exact palette when the image has at most 256 colours). */

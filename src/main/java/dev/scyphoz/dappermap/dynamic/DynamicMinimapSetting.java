@@ -55,7 +55,7 @@ public final class DynamicMinimapSetting {
     /** Logical Hytale UI size of the minimap viewport. */
     public int sizePixels = 220;
     /** Raster resolution used to render minimap textures. Kept separate from UI size. */
-    public int textureResolution = 384;
+    public int textureResolution = 256; // Mod default (was 384 before 3.2.0); sparse settings files follow it unless changed.
     /**
      * Presentation-only scale for the complete custom HUD.
      * 100 means the logical minimap/UI dimensions are sent unchanged.

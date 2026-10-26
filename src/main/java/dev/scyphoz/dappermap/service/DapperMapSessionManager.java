@@ -208,6 +208,11 @@ public class DapperMapSessionManager {
         session.requestPromptTick(); // Idle players would otherwise see the change up to a marker interval late.
     }
 
+    /** Redraws every live minimap's terrain on its next tick (e.g. after the terrain colour reduction changes). */
+    public void redrawAllTerrain() {
+        for (DynamicMinimapSession session : this.sessionsByPlayer.values()) session.requestTerrainRedraw();
+    }
+
     /** Number of players with a running minimap. */
     public int liveSessionCount() {
         return this.sessionsByPlayer.size();

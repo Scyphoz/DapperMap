@@ -122,6 +122,19 @@ public class DapperMap extends JavaPlugin {
      * Single-flight: two saves never write the shared temp file at once. Requests made while
      * one runs coalesce into exactly one more save, which writes the newest values.
      */
+    /**
+     * Sets the server-wide terrain colour reduction (0 = off, else 32..256): stores it in the
+     * config, applies it to new terrain renders and saves the config file. Callers redraw
+     * live minimaps if the change should show straight away.
+     */
+    public static void applyTerrainColours(int colours) {
+        DapperMapConfig current = config();
+        if (current == null) return;
+        current.setTerrainColours(colours);
+        DynamicMinimapRenderer.setTerrainColours(current.getTerrainColours());
+        saveConfig();
+    }
+
     public static void saveConfig() {
         Config<DapperMapConfig> current = config;
         if (current == null) return;
