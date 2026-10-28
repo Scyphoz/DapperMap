@@ -2,16 +2,17 @@
 
 **A lightweight, sophisticated and fully configurable Hytale minimap.**
 
-DapperMap adds a live minimap to the Hytale HUD. It combines nearby terrain, a directional player locator, configurable markers and useful world information in one compact display. Players can tailor the minimap display through an in-game settings interface or commands, while server administrators can control the defaults and decide which options players may change.
+DapperMap adds a live minimap to the Hytale HUD. It combines nearby terrain, a directional player locator, configurable markers and useful world information in one compact display. Players can tailor the minimap display through an in-game settings interface or commands, while server administrators can control the defaults, cap the most demanding settings and decide exactly which options players may change.
 
 ## Highlights
 
-- Live terrain minimap generated from Hytale world-map data
+- Live terrain minimap generated from Hytale world-map data, in the same colours as the world map
 - Circular and square map styles
 - North-up or player-facing rotation
+- Configurable compass ring: letters, small dashes and large cardinal dashes can each be turned on or off
 - Adjustable zoom, map size, interface scale and texture resolution
 - Freely positionable HUD with a movable information panel
-- Player, creature, death and world-map markers
+- Player, creature, death and world-map markers that grow with larger maps
 - Creature icons drawn from each creature's own model, including creatures added by other mods, with threat-coloured outlines (classic coloured dots are also available)
 - Optional hostile-only creature filter
 - Player head icons drawn from each player's own skin, with or without their helmet, that flash in the attacking colour when a player attacks you in PvP
@@ -20,8 +21,10 @@ DapperMap adds a live minimap to the Hytale HUD. It combines nearby terrain, a d
 - Fully configurable colours for the frame, text and marker categories
 - Per-player settings with persistent storage
 - Server-defined defaults for new and uncustomised players
-- Permission-aware settings: blocked controls are disabled and greyed out
-- Separate player and administrator command branches
+- Server limits, load figures and load shedding for administrators
+- Commands grouped to match the settings page tabs
+- One permission per setting and per colour, with tab-level wildcards; blocked controls are disabled and greyed out
+- Separate player and administrator permission branches
 
 ## Integrations
 
@@ -44,13 +47,13 @@ Running any base DapperMap command (e.g. `/dappermap`) without any subcommand to
 
 ### Live terrain map
 
-DapperMap renders the terrain around the player using Hytale's native world-map information. The map pans as the player moves and refreshes the terrain when the surrounding map data changes.
+DapperMap renders the terrain around the player using Hytale's native world-map information, in the same colours as the world map. The map pans as the player moves and refreshes the terrain when the surrounding map data changes, such as blocks being placed or broken. After a teleport, the minimap fills in as quickly as the server loads the surrounding area.
 
 Players can configure:
 
 - **Zoom radius:** Controls how many blocks around the player are visible, from 16 to 256 blocks.
 - **Map size:** Changes the on-screen map size from 120 to 360 pixels. Above the default 220 pixels, every marker (creatures, players, dots, world-map, BetterMap and death markers) grows with the map so it keeps the same size relative to it.
-- **Texture resolution:** Changes the internal rendered texture resolution from 256 to 1024 pixels. Higher values produce more detail but require more processing and network delivery.
+- **Texture resolution:** Changes the internal rendered texture resolution from 256 (default) to 1024 pixels. Higher values produce more detail but require more processing and network delivery.
 - **Interface scale:** Scales the complete map and information display from 75% to 160% without changing the world area being shown.
 - **Map shape:** Selects a circular or square minimap.
 
@@ -58,10 +61,10 @@ Players can configure:
 
 DapperMap supports two orientation modes:
 
-- **North up:** North remains at the top while the player locator rotates.
-- **Player facing:** The map rotates with the player's view so the forward direction remains at the top.
+- **North Up:** North remains at the top while the player locator rotates.
+- **Player Facing:** The map rotates with the player's view so the forward direction remains at the top.
 
-The optional compass readout shows the player's current bearing and facing direction.
+The optional bearing readout in the information panel shows the player's current bearing and facing direction.
 
 The compass ring around the map edge has three parts that can each be turned on or off (all on by default):
 
@@ -86,13 +89,13 @@ Faster profiles make movement and markers feel more responsive, but can take a t
 
 The complete minimap can be positioned horizontally and vertically anywhere from 0% to 100% of the available screen area. The settings page provides quick placement controls as well as fine adjustment sliders.
 
-The information panel can appear above, below, left or right of the map. Its text can be aligned left, centre or right.
+The information panel can appear above, below, left or right of the map. Its text can be aligned left, centre or right (**Info Panel Alignment**).
 
 Individual information rows can be enabled or disabled:
 
 - **Coordinates:** Current world coordinates
 - **Bearing:** Compass bearing and facing direction
-- **World time:** Current Hytale world time in 12-hour or 24-hour format
+- **World Time:** Current Hytale world time, shown in 12-hour or 24-hour format as chosen by **Clock Format**
 - **Region:** Current biome or region name
 
 ### Player and creature markers
@@ -122,7 +125,7 @@ Other players can be shown in one of two styles:
 - **Icons (default):** Each player is shown as a small picture of their own head, built from their skin (skin tone, face, eyes, hair and head cosmetics, including modded cosmetics), with an outline in the player marker colour. If a player's head cannot be drawn, a disc showing their initials is used.
 - **Dots:** Each player is shown as a dot in the player marker colour.
 
-**Player Icon Helmets** chooses whether icons show the helmet each player wears (**Enabled**, default) or always their bare head (**Disabled**). A helmet is never shown when its wearer has chosen to hide it in game. Player markers always draw above creature markers, including hostile and attacking creatures.
+**Player Icon Helmets** is an on/off switch that chooses whether icons show the helmet each player wears (on, default) or always their bare head (off). A helmet is never shown when its wearer has chosen to hide it in game. Player markers always draw above creature markers, including hostile and attacking creatures.
 
 When PvP is enabled in the world and another player attacks you, that player's marker switches to the attacking colour (icons pulse like attacking creatures). It returns to the player colour once that player has not attacked you for 15 seconds, or when they die. Dead players are not shown until they respawn.
 
@@ -160,31 +163,50 @@ BetterMap is optional. DapperMap remains fully functional without it.
 
 The in-game colour editor provides a live preview and lets players customise:
 
-- **Frame:** Map Edge, Cardinal Dashes (the large N, E, S, W dashes), Compass Dashes (the small dashes) and Compass Letters
+- **Frame:** Map Edge, Cardinal Dashes (the large N, E, S, W dashes and letter badge outlines), Compass Dashes (the small dashes) and Compass Letters
 - **Info Panel:** Background, Title, Headings, and the Coordinates, Bearing, World Time and Region text
 - **Markers:** Your Locator, Other Players (player dots and player icon outlines), Death Markers, and Attacking, Hostile, Neutral and Friendly creatures (creature dots and icon outlines; Attacking also marks players who attack you in PvP)
+
+The editor lists only the colours the player has permission to change, and **Reset All** leaves locked colours unchanged.
 
 Colours may also be changed through commands using hexadecimal `#RRGGBB` values or decimal RGB channels.
 
 ### In-game settings interface
 
-The settings interface is divided into Display, Markers, Info Panel, Position, Colours and Integrations tabs (plus Server Limits on the admin page). Display holds the map's appearance, the compass ring and the performance settings; Markers is grouped into Players, Creatures and Other. Changes can be previewed before they are applied.
+The settings interface is divided into Display, Markers, Info Panel, Position, Colours and Integrations tabs (plus Server Limits on the admin page):
 
-If a player lacks permission for a setting, that control is disabled and displays **Permission denied**. Permission checks are also repeated on the server when changes are applied, so a hidden or forged UI event cannot alter a blocked setting.
+- **Display:** Map Appearance, Compass Ring, and Performance (Update Speed and Texture Resolution)
+- **Markers:** Players, Creatures and Other
+- **Server Limits (admin page only):** player setting caps and Terrain Images (Terrain Colour Reduction)
+
+Each setting shows a short description directly under its name. Changes can be previewed before they are applied.
+
+If a player lacks permission for a setting, that control is disabled and greyed out. Permission checks are also repeated on the server when changes are applied, so a hidden or forged UI event cannot alter a blocked setting.
 
 ### Player settings and administrator defaults
 
 New players inherit the current administrator set defaults. Simply joining does not create a personal settings file, so players who have never customised DapperMap continue to receive future administrator-default changes.
 
-Once a player changes and applies a setting, DapperMap saves a personal override for that player. Using **Reset to Defaults** in the settings page removes that override and resumes inheritance from the current administrator defaults.
+Once a player changes and applies a setting, DapperMap saves a personal override for that player. Only the settings the player actually changed are saved, so every other setting keeps following the administrator defaults. Using **Reset to Defaults** in the settings page (or `/dappermap reset`) removes the player's overrides and resumes inheritance from the current administrator defaults. A player with only some setting permissions resets only the settings and colours they are allowed to change.
 
 Administrator defaults are stored separately from player preferences and can be managed through the admin settings page or the `/dappermap admin` command branch.
+
+### Server limits and performance
+
+Administrators can cap the most demanding settings for every player from the admin page's **Server Limits** tab or with `/dappermap admin limit`:
+
+- **Update Speed**, **Texture Resolution**, **Zoom Radius** and **Max Creature Markers** can each be capped. Players above a cap are held at the cap while it applies, but keep their own saved choice and use it again if the limit is lifted.
+- **Terrain Colour Reduction** reduces each terrain image to a set number of colours (32, 64, 96, 128, 192 or 256) to keep downloads small. Fewer colours mean less data sent to players, but map colours can shift slightly. **Off** (the default) sends exact colours, at the cost of noticeably larger terrain images; 256 colours is a good choice where download size matters. A change applies straight away to every live minimap.
+
+`/dappermap admin stats` shows DapperMap's server load figures, and `/dappermap admin load-shedding on|off` steps live minimaps down one update speed while the server is busy.
 
 ## Commands
 
 The command is `/dappermap`, which can also be written as `/dm`, `/minimap` or `/mm`.
 
 Commands are grouped like the settings page tabs: `/dappermap display`, `/dappermap markers`, `/dappermap info` and `/dappermap integration`, each followed by a setting and its value. Each setting has exactly one command and one set of accepted values; on/off settings always take `on` or `off`. Typing a group on its own (for example `/dappermap display`) lists its settings.
+
+Help and group listings show only the commands the player has permission to use, and a group with nothing permitted is hidden from the command list.
 
 All DapperMap commands require a live player context because they operate on a player's HUD or open an in-game page. Administrator commands are therefore run in-game by an authorised player rather than from the dedicated server console.
 
@@ -195,7 +217,7 @@ All DapperMap commands require a live player context because they operate on a p
 | `/dappermap` | Toggle the minimap |
 | `/dappermap on\|off` | Show or hide the minimap |
 | `/dappermap settings` | Open the settings page |
-| `/dappermap status` | Show every current setting |
+| `/dappermap status` | Show every current setting, grouped and named as its command takes it |
 | `/dappermap help` | List commands and accepted values |
 | `/dappermap reset` | Reset your settings to the current server defaults, the same as **Reset to Defaults** in the settings page |
 
@@ -238,7 +260,8 @@ All DapperMap commands require a live player context because they operate on a p
 | `/dappermap info alignment left\|centre\|right` | Info Panel Alignment |
 | `/dappermap info coordinates on\|off` | Coordinates |
 | `/dappermap info bearing on\|off` | Bearing |
-| `/dappermap info world-time on\|off\|12\|24` | World Time; `12` or `24` also sets the Clock Format |
+| `/dappermap info world-time on\|off` | World Time |
+| `/dappermap info clock-format 12\|24` | Clock Format for World Time |
 | `/dappermap info region on\|off` | Region |
 
 ### Position
@@ -261,10 +284,10 @@ All DapperMap commands require a live player context because they operate on a p
 | Command | Description |
 | --- | --- |
 | `/dappermap colours` | Open the colour editor |
-| `/dappermap colours list` | List colour targets, their current values and their names in the editor |
+| `/dappermap colours list` | List colour targets, their current values and their names in the editor; colours you may not change are marked as locked |
 | `/dappermap colours <target> <#RRGGBB>` | Set a colour using hexadecimal RGB |
 | `/dappermap colours <target> <R G B>` | Set a colour using decimal RGB channels from 0 to 255 |
-| `/dappermap colours reset <target\|all>` | Reset one colour, or the complete palette |
+| `/dappermap colours reset <target\|all>` | Reset one colour, or every colour you may change |
 
 Colour targets match the colour editor: `map-edge`, `cardinal-dashes`, `compass-dashes`, `compass-letters`, `panel-background`, `panel-title`, `panel-headings`, `coordinates`, `bearing`, `world-time`, `region`, `locator`, `players`, `death`, `attacking`, `hostile`, `neutral` and `friendly`.
 
@@ -291,18 +314,20 @@ Examples:
 /dappermap admin markers creature-filter hostile
 /dappermap admin markers creature-limit 32
 /dappermap admin markers player-helmets off
-/dappermap admin info world-time 24
+/dappermap admin info clock-format 24
 /dappermap admin info alignment centre
 /dappermap admin integration bettermap on
 /dappermap admin colours compass-dashes #57D8D0
+/dappermap admin limit colours 256
 ```
 
 Server controls (admin only):
 
 | Command | Description |
 | --- | --- |
-| `/dappermap admin limit` | Show the server limits |
+| `/dappermap admin limit` | Show the server limits and terrain colour reduction |
 | `/dappermap admin limit speed\|resolution\|zoom\|creatures <value\|none>` | Cap a setting for every player (`none` removes the cap). Players keep their own choice and use it again if the limit is lifted |
+| `/dappermap admin limit colours off\|32\|64\|96\|128\|192\|256` | Terrain Colour Reduction for every player (`off` sends exact colours) |
 | `/dappermap admin stats` | Show DapperMap server load figures |
 | `/dappermap admin load-shedding on\|off` | Step live minimaps down one update speed while the server is busy |
 
@@ -313,11 +338,15 @@ Administrator mode is governed only by the admin permission and does not require
 DapperMap keeps player permissions and administrator access in separate branches:
 
 ```text
-scyphoz.dappermap.command.<setting>
-scyphoz.dappermap.admin
+dappermap.command.<group>.<setting>
+dappermap.admin
 ```
 
-This separation means that granting every player command with `scyphoz.dappermap.command.*` never grants access to administrator settings.
+Every setting has its own permission node, named exactly like its command. For example, `/dappermap display zoom` uses `dappermap.command.display.zoom` and `/dappermap markers creature-limit` uses `dappermap.command.markers.creature-limit`. The same node controls both the command and the matching settings-page control. Each colour also has its own node, such as `dappermap.command.colours.hostile`.
+
+This separation means that granting every player command with `dappermap.command.*` never grants access to administrator settings.
+
+DapperMap permissions work with Hytale's built-in permission system and with LuckPerms.
 
 ### Default permission behaviour
 
@@ -346,71 +375,135 @@ After changing `GrantPlayerSettingsByDefault`, restart the server so DapperMap c
 For access to the graphical settings page, grant:
 
 ```text
-scyphoz.dappermap.command.settings
+dappermap.command.settings
 ```
 
-Then grant the permissions for the controls that the player may use. To allow every player-facing command and setting at once, grant:
+Then grant the permissions for the settings that the player may use. Each command needs only its own permission. To allow every player-facing command and setting at once, grant:
 
 ```text
-scyphoz.dappermap.command.*
+dappermap.command.*
 ```
 
 To allow only the bare `/dappermap` toggle, grant:
 
 ```text
-scyphoz.dappermap.command.toggle
+dappermap.command.toggle
 ```
+
+### Wildcards
+
+A whole settings tab can be granted or denied with one wildcard:
+
+| Wildcard | Covers |
+| --- | --- |
+| `dappermap.command.display.*` | Every Display setting |
+| `dappermap.command.markers.*` | Every Markers setting |
+| `dappermap.command.info.*` | Every Info Panel setting |
+| `dappermap.command.integration.*` | Every Integrations setting |
+| `dappermap.command.colours.*` | Every colour |
+| `dappermap.command.*` | Every player-facing DapperMap command and setting (never admin) |
+
+Wildcards need the trailing `.*`; granting `dappermap.command.display` on its own grants nothing below it.
+
+An exact node beats a wildcard, so a single setting can be blocked inside a granted tab. For example, granting `dappermap.command.display.*` and denying `dappermap.command.display.zoom` allows every Display setting except zoom.
+
+- **Hytale's built-in permissions:** deny a node by adding it with a leading `-` (for example `-dappermap.command.display.zoom`). A player's own permissions are checked before their groups'. Within one group or player, an exact node beats a wildcard, and a denying wildcard beats a granting one, so avoid combining `-dappermap.command.*` with `dappermap.command.display.*` in the same group; list exact nodes instead.
+- **LuckPerms:** deny a node by setting it to `false` (for example `/lp group default permission set dappermap.command.display.zoom false`). The most specific node wins, and LuckPerms nodes take priority over DapperMap's default grants. This relies on LuckPerms' default `apply-wildcards: true` and `apply-hytale-virtual-groups: true`. With virtual groups turned off, grant `dappermap.command.*` to the LuckPerms `default` group.
 
 ### Player permission reference
 
+All player nodes start with `dappermap.command.`.
+
+**General**
+
 | Permission | Controls |
 | --- | --- |
-| `scyphoz.dappermap.command.toggle` | `/dappermap`, `/dappermap on\|off` and the Minimap switch in the settings page |
-| `scyphoz.dappermap.command.settings` | Opening the settings page |
-| `scyphoz.dappermap.command.status` | `/dappermap status` |
-| `scyphoz.dappermap.command.help` | `/dappermap help`, and listing a group's settings (e.g. `/dappermap display`) |
-| `scyphoz.dappermap.command.reset` | Resetting your settings |
-| `scyphoz.dappermap.command.zoom` | `display zoom` |
-| `scyphoz.dappermap.command.size` | `display size` |
-| `scyphoz.dappermap.command.scale` | `display scale` |
-| `scyphoz.dappermap.command.shape` | `display shape` |
-| `scyphoz.dappermap.command.rotation` | `display rotation` |
-| `scyphoz.dappermap.command.speed` | `display speed` |
-| `scyphoz.dappermap.command.resolution` | `display resolution` |
-| `scyphoz.dappermap.command.compass` | `display compass-letters`, `display compass-dashes`, `display cardinal-dashes` and `info bearing` |
-| `scyphoz.dappermap.command.markers` | `markers players`, `player-style`, `player-helmets`, `creatures`, `creature-style`, `creature-filter`, `creature-limit` and `death` |
-| `scyphoz.dappermap.command.height` | `markers height-filter` |
-| `scyphoz.dappermap.command.height-range` | `markers height-range` |
-| `scyphoz.dappermap.command.info` | `info panel` |
-| `scyphoz.dappermap.command.panel` | `info position` and `info alignment` |
-| `scyphoz.dappermap.command.coordinates` | `info coordinates` |
-| `scyphoz.dappermap.command.clock` | `info world-time` (World Time and Clock Format) |
-| `scyphoz.dappermap.command.biome` | `info region` |
-| `scyphoz.dappermap.command.position` | Position tab and `/dappermap position` |
-| `scyphoz.dappermap.command.integration` | Every `integration` command (Hytale World Map Markers and BetterMap) |
-| `scyphoz.dappermap.command.colours` | Colour editor and `/dappermap colours` |
-| `scyphoz.dappermap.command.*` | Every player-facing DapperMap command and setting |
+| `toggle` | `/dappermap`, `/dappermap on\|off` and the Minimap switch in the settings page |
+| `settings` | Opening the settings page |
+| `status` | `/dappermap status` |
+| `help` | `/dappermap help` |
+| `reset` | Resetting your settings |
+| `position` | Position tab and `/dappermap position` |
 
-Each command uses the same permission as its settings-page control. Permission names were kept from earlier versions so existing server permission set-ups keep working, which is why a few differ from their command (for example `info world-time` uses `clock` and `info region` uses `biome`).
+**Display**
+
+| Permission | Controls |
+| --- | --- |
+| `display.zoom` | Zoom Radius |
+| `display.size` | Map Size |
+| `display.scale` | Interface Scale |
+| `display.shape` | Map Shape |
+| `display.rotation` | Map Rotation |
+| `display.compass-letters` | Compass Letters |
+| `display.compass-dashes` | Compass Dashes |
+| `display.cardinal-dashes` | Cardinal Dashes |
+| `display.speed` | Update Speed |
+| `display.resolution` | Texture Resolution |
+
+**Markers**
+
+| Permission | Controls |
+| --- | --- |
+| `markers.players` | Player Markers |
+| `markers.player-style` | Player Marker Style |
+| `markers.player-helmets` | Player Icon Helmets |
+| `markers.creatures` | Creature Markers |
+| `markers.creature-style` | Creature Marker Style |
+| `markers.creature-filter` | Creature Filter |
+| `markers.creature-limit` | Creature Marker Limit |
+| `markers.height-filter` | Creature Height Filter |
+| `markers.height-range` | Height Filter Range |
+| `markers.death` | Death Markers |
+
+**Info Panel**
+
+| Permission | Controls |
+| --- | --- |
+| `info.panel` | Show or hide the Info Panel |
+| `info.position` | Info Panel Position |
+| `info.alignment` | Info Panel Alignment |
+| `info.coordinates` | Coordinates |
+| `info.bearing` | Bearing |
+| `info.world-time` | World Time |
+| `info.clock-format` | Clock Format |
+| `info.region` | Region |
+
+**Integrations**
+
+| Permission | Controls |
+| --- | --- |
+| `integration.worldmap` | Hytale World Map Markers |
+| `integration.bettermap` | The BetterMap integration |
+| `integration.bettermap-markers` | BetterMap Markers |
+| `integration.bettermap-caves` | BetterMap Cave Mode |
+
+**Colours**
+
+| Permission | Controls |
+| --- | --- |
+| `colours.<target>` | Changing or resetting that colour in the colour editor and with `/dappermap colours`, for example `colours.hostile` or `colours.map-edge` |
+
+The colour editor and `/dappermap colours` are available when the player may change at least one colour.
 
 ### Administrator permission
 
 Administrator access is controlled by one separate permission:
 
 ```text
-scyphoz.dappermap.admin
+dappermap.admin
 ```
 
 This permission allows an in-game player to:
 
 - Open `/dappermap admin settings`
 - View and change all server-default settings
+- Set server limits and terrain colour reduction, view server stats and control load shedding
 - Use every `/dappermap admin <setting>` subcommand
 - Reset administrator defaults to the mod defaults
 
 The admin permission is granted to Hytale's operator group by default. If another permission provider is installed, the same node can be granted or denied through that provider.
 
-Granting `scyphoz.dappermap.command.*` does **not** grant `scyphoz.dappermap.admin`.
+Granting `dappermap.command.*` does **not** grant `dappermap.admin`.
 
 ## Bootstrap configuration
 
@@ -422,5 +515,6 @@ The main `dappermap_minimap.json` file contains the initial mod-level defaults:
 | `DefaultRadiusBlocks` | `96` | Initial zoom radius |
 | `ShowCoordinates` | `true` | Initial coordinate-readout state |
 | `GrantPlayerSettingsByDefault` | `true` | Whether player permissions are granted through Hytale's default player group |
+| `TerrainColours` | `0` | Terrain Colour Reduction: `0` is off (exact colours), otherwise 32 to 256 colours. Best changed with `/dappermap admin limit colours` or the admin page |
 
 The administrator settings page provides the full set of operational defaults. These are stored independently from the bootstrap configuration.
