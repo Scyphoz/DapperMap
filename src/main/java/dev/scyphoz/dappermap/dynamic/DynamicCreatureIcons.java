@@ -602,7 +602,7 @@ public final class DynamicCreatureIcons {
      * v3: depth-buffered model drawing (older icons are redrawn once, then pruned).
      * v4: shape offsets also move a node's children (as the game places them).
      */
-    private static final String CACHE_VERSION = "v4";
+    private static final String CACHE_VERSION = "v5";
     /** Largest file accepted from the cache (a base icon is ~10-15 KB). */
     private static final int CACHE_FILE_LIMIT = 512 * 1024;
     private static final byte[] PNG_SIGNATURE = {(byte) 0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n'};
@@ -1010,8 +1010,9 @@ public final class DynamicCreatureIcons {
         private ModelFace() { }
 
         /** One textured parallelogram: origin, two edge vectors, and its texture rectangle. */
+        /** {@code inverted}: from a negatively stretched (mirrored) shape, so its outward side is b x a reversed. */
         private record Face(double[] origin, double[] a, double[] b, JsonObject layout,
-                            double texWidth, double texHeight, double shade, Texture texture, boolean doubleSided) { }
+                            double texWidth, double texHeight, double shade, Texture texture, boolean doubleSided, boolean inverted) { }
         /** Decoded texture pixels. */
         private record Texture(int[] argb, int width, int height) { }
         /** A node's frame in head space: rotation matrix (row-major 3x3) and origin. */
@@ -1134,7 +1135,7 @@ public final class DynamicCreatureIcons {
             List<Face> turned = new ArrayList<>(faces.size());
             for (Face f : faces)
                 turned.add(new Face(apply(r, f.origin()), apply(r, f.a()), apply(r, f.b()), f.layout(),
-                        f.texWidth(), f.texHeight(), f.shade(), f.texture(), f.doubleSided()));
+                        f.texWidth(), f.texHeight(), f.shade(), f.texture(), f.doubleSided(), f.inverted()));
             return turned;
         }
 
@@ -1249,6 +1250,10 @@ public final class DynamicCreatureIcons {
             double[] offset = vector(shape.get("offset"), 0);
             boolean doubleSided = Boolean.TRUE.equals(jsonBool(shape.get("doubleSided")));
             if (box) {
+                // A negative stretch mirrors the box (e.g. a left ear made from the right one). The
+                // corners below are mirrored with it, which turns every face inside-out, so an odd
+                // number of mirrored axes flips which side of each face is the outside.
+                boolean inverted = stretch[0] * stretch[1] * stretch[2] < 0;
                 double[] half = {size[0] * stretch[0] / 2, size[1] * stretch[1] / 2, size[2] * stretch[2] / 2};
                 for (int k = 0; k < KEYS.length; k++) {
                     JsonObject layout = jsonObject(layouts.get(KEYS[k]));
@@ -1259,7 +1264,7 @@ public final class DynamicCreatureIcons {
                         a[i] = AXIS_A[k][i] * 2 * half[i];
                         b[i] = AXIS_B[k][i] * 2 * half[i];
                     }
-                    faces.add(face(frame, corner, a, b, layout, size[TEX_AXES[k][0]], size[TEX_AXES[k][1]], SHADE[k], texture, doubleSided));
+                    faces.add(face(frame, corner, a, b, layout, size[TEX_AXES[k][0]], size[TEX_AXES[k][1]], SHADE[k], texture, doubleSided, inverted));
                 }
             } else {
                 // A quad is one face in the plane through its offset, facing its normal.
@@ -1276,14 +1281,16 @@ public final class DynamicCreatureIcons {
                     b[i] = AXIS_B[k][i] * lengthB;
                     corner[i] = offset[i] - a[i] / 2 - b[i] / 2;
                 }
-                faces.add(face(frame, corner, a, b, layout, size[0], size[1], SHADE[k], texture, doubleSided));
+                // Only the two in-plane stretches move a quad's corners, so only they can mirror it.
+                boolean inverted = stretch[axisOf(AXIS_A[k])] * stretch[axisOf(AXIS_B[k])] < 0;
+                faces.add(face(frame, corner, a, b, layout, size[0], size[1], SHADE[k], texture, doubleSided, inverted));
             }
         }
 
         private static Face face(Frame frame, double[] corner, double[] a, double[] b, JsonObject layout,
-                                 double texWidth, double texHeight, double shade, Texture texture, boolean doubleSided) {
+                                 double texWidth, double texHeight, double shade, Texture texture, boolean doubleSided, boolean inverted) {
             return new Face(add(frame.origin(), apply(frame.rotation(), corner)), apply(frame.rotation(), a),
-                    apply(frame.rotation(), b), layout, texWidth, texHeight, shade, texture, doubleSided);
+                    apply(frame.rotation(), b), layout, texWidth, texHeight, shade, texture, doubleSided, inverted);
         }
 
         private static int axisOf(double[] direction) {
@@ -1297,6 +1304,7 @@ public final class DynamicCreatureIcons {
             for (Face face : faces) {
                 // Outward normal is b x a; keep faces turned towards the camera.
                 double normalZ = face.b()[0] * face.a()[1] - face.b()[1] * face.a()[0];
+                if (face.inverted()) normalZ = -normalZ; // Mirrored shape: its faces are wound the other way.
                 if (normalZ <= 1e-6 && !face.doubleSided()) continue;
                 visible.add(face);
                 for (int corner = 0; corner < 4; corner++) {
@@ -1330,10 +1338,25 @@ public final class DynamicCreatureIcons {
                 int x1 = Math.min(size - 1, (int) Math.ceil(toPixel(max(xs), centreX, scale, size)));
                 int y0 = Math.max(0, (int) Math.floor(toPixel(min(ys), centreY, scale, size)));
                 int y1 = Math.min(size - 1, (int) Math.ceil(toPixel(max(ys), centreY, scale, size)));
+                // Texture mapping, as the client does it (checked against every NPC model): the UV
+                // offset is where the face's top-left corner lands. Mirroring reverses the face's
+                // own axis, then the angle turns the texture rectangle clockwise about the offset,
+                // so a mirrored or turned rectangle extends left/up from the offset, not right/down.
+                // u = u0 + s*w*su + t*h*tu and v = v0 + s*w*sv + t*h*tv, with (su,sv) and (tu,tv)
+                // the face's two edge directions in the texture.
                 JsonObject mirror = jsonObject(face.layout().get("mirror"));
-                boolean mirrorX = mirror != null && Boolean.TRUE.equals(jsonBool(mirror.get("x")));
-                boolean mirrorY = mirror != null && Boolean.TRUE.equals(jsonBool(mirror.get("y")));
-                int angle = Math.floorMod((int) Math.round(jsonNumber(face.layout().get("angle"), 0)), 360);
+                int sx = mirror != null && Boolean.TRUE.equals(jsonBool(mirror.get("x"))) ? -1 : 1;
+                int ty = mirror != null && Boolean.TRUE.equals(jsonBool(mirror.get("y"))) ? -1 : 1;
+                int quarter = Math.floorMod((int) Math.round(jsonNumber(face.layout().get("angle"), 0) / 90.0), 4);
+                // Edge directions (sx, 0) and (0, ty) turned clockwise by quarter turns (texture v points down).
+                int su, sv, tu, tv;
+                switch (quarter) {
+                    case 1 -> { su = 0; sv = sx; tu = -ty; tv = 0; }
+                    case 2 -> { su = -sx; sv = 0; tu = 0; tv = -ty; }
+                    case 3 -> { su = 0; sv = -sx; tu = ty; tv = 0; }
+                    default -> { su = sx; sv = 0; tu = 0; tv = ty; }
+                }
+                double w = face.texWidth(), h = face.texHeight();
                 JsonObject uv = jsonObject(face.layout().get("offset"));
                 double u0 = uv == null ? 0 : jsonNumber(uv.get("x"), 0), v0 = uv == null ? 0 : jsonNumber(uv.get("y"), 0);
                 Texture texture = face.texture();
@@ -1348,17 +1371,8 @@ public final class DynamicCreatureIcons {
                         double z = face.origin()[2] + s * face.a()[2] + t * face.b()[2];
                         int at = py * size + px;
                         if (z < depth[at] - DEPTH_TIE) continue;
-                        if (mirrorX) s = 1 - s;
-                        if (mirrorY) t = 1 - t;
-                        double w = face.texWidth(), h = face.texHeight();
-                        // Rotated layouts: the texture rectangle is turned in 90-degree steps.
-                        switch (angle) {
-                            case 90 -> { double r = s; s = t; t = 1 - r; w = face.texHeight(); h = face.texWidth(); }
-                            case 180 -> { s = 1 - s; t = 1 - t; }
-                            case 270 -> { double r = s; s = 1 - t; t = r; w = face.texHeight(); h = face.texWidth(); }
-                            default -> { }
-                        }
-                        int u = (int) Math.floor(u0 + s * w), v = (int) Math.floor(v0 + t * h);
+                        double sw = s * w, th = t * h;
+                        int u = (int) Math.floor(u0 + sw * su + th * tu), v = (int) Math.floor(v0 + sw * sv + th * tv);
                         if (u < 0 || v < 0 || u >= texture.width() || v >= texture.height()) continue;
                         int argb = texture.argb()[v * texture.width() + u];
                         if ((argb >>> 24) < 128) continue; // Alpha cut-out, as in game.
