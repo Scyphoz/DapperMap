@@ -485,7 +485,8 @@ public final class DynamicMinimapRenderer {
         }
 
         if (compass) drawTexturedCompass(graphics, logicalSize, settings.isCircle(), bucketAngle(bucket), colours,
-                settings.showCompassLetters, settings.showCompassDashes, settings.showCardinalDashes);
+                settings.showCompassLetters, settings.showCompassDashes, settings.showCardinalDashes,
+                settings.compassLetterScale());
         graphics.dispose();
         return image;
     }
@@ -496,18 +497,63 @@ public final class DynamicMinimapRenderer {
      * the settings preview, so the three always line up. With the panel hidden the widget is the
      * map alone (panelHeight and gap 0).
      */
-    public record HudLayout(int mapSize, int panelHeight, int gap, int width, int height,
+    public record HudLayout(int mapSize, int panelWidth, int panelHeight, int gap, int width, int height,
                             int mapX, int mapY, int panelX, int panelY, boolean side) {
-        /** Info panel width in every orientation. */
+        /** Info panel width at the standard font sizes; it grows and shrinks with the largest of them. */
         public static final int PANEL_WIDTH = 148;
-        private static final int PANEL_PADDING_V = 6, BRAND_HEIGHT = 24, ROW_HEIGHT = 43;
+        private static final int PANEL_PADDING_V = 6;
         private static final int CIRCLE_GAP = 8, SQUARE_GAP = 16;
+        // Standard (100%) text boxes: brand line 15 high; per row a heading 15 high (16 to the
+        // value), a value 19 high, and 3 + 5 units around them (43 per row, as before 3.2.1).
+        private static final int BRAND_TEXT = 15, BRAND_FONT = 10, HEADING_TEXT = 15, HEADING_STEP = 16,
+                HEADING_FONT = 9, VALUE_TEXT = 19, VALUE_FONT = 11;
+
+        /** {@code base} scaled by a Font Size percentage, rounded. */
+        private static int font(int base, int percent) {
+            return percent == 100 ? base : Math.round(base * percent / 100.0F);
+        }
+
+        /** Letter spacing scaled by a Font Size percentage (exactly the standard value at 100%). */
+        private static double spacing(double base, int percent) {
+            return percent == 100 ? base : base * percent / 100.0D;
+        }
+
+        /** Brand block: 6 above, the brand line, 3 below (24 at the standard size). */
+        private static int brandHeight(DynamicMinimapSetting settings) {
+            return 9 + font(BRAND_TEXT, settings.fontTitle);
+        }
+
+        /** One readout row: heading, value and the space around them (43 at the standard sizes). */
+        private static int rowHeight(DynamicMinimapSetting settings) {
+            return 8 + font(HEADING_STEP, settings.fontHeadings) + font(VALUE_TEXT, settings.fontValues);
+        }
+
+        /**
+         * Widest text each area shows at 100% (HUD units, Hytale's font): the title "DapperMap" about
+         * 46, the longest heading ("COORDINATES") about 51, and values up to 110 (long region names;
+         * coordinates are about 56). Values set the standard width; the title and headings have room
+         * to grow before they need a wider panel.
+         */
+        private static final int TITLE_TEXT_WIDTH = 50, HEADING_TEXT_WIDTH = 60, VALUE_TEXT_WIDTH = 110;
+        /** Side insets of the widest-inset row: 8 each side plus 22 to clear a round map's curved edge. */
+        private static final int PANEL_TEXT_INSETS = PANEL_WIDTH - VALUE_TEXT_WIDTH;
+
+        /**
+         * Panel width: just wide enough for the widest text area at its Font Size (148 at the
+         * standard sizes). Fixed per setting rather than measured from the live text, so changing
+         * values never resize the panel (no image re-render or layout rebuild as you move).
+         */
+        private static int panelWidth(DynamicMinimapSetting settings) {
+            int text = Math.max(font(VALUE_TEXT_WIDTH, settings.fontValues),
+                    Math.max(font(TITLE_TEXT_WIDTH, settings.fontTitle), font(HEADING_TEXT_WIDTH, settings.fontHeadings)));
+            return PANEL_TEXT_INSETS + text;
+        }
 
         /** Layout for these settings and map size. */
         public static HudLayout of(DynamicMinimapSetting settings, int mapSize) {
             return settings.infoPanelShown()
                     ? withPanel(settings, mapSize)
-                    : new HudLayout(mapSize, 0, 0, mapSize, mapSize, 0, 0, 0, 0, isSide(settings));
+                    : new HudLayout(mapSize, 0, 0, 0, mapSize, mapSize, 0, 0, 0, 0, isSide(settings));
         }
 
         /**
@@ -517,19 +563,21 @@ public final class DynamicMinimapRenderer {
         public static HudLayout withPanel(DynamicMinimapSetting settings, int mapSize) {
             int position = settings.infoPanelPosition;
             boolean side = isSide(settings);
-            // Padding, the brand line, then one 43-unit row per readout shown.
-            int panelHeight = PANEL_PADDING_V * 2 + BRAND_HEIGHT;
-            for (int row = 0; row < 4; row++) if (readoutShown(settings, row)) panelHeight += ROW_HEIGHT;
+            // Padding, the brand line, then one row per readout shown (sizes follow Font Size).
+            int panelHeight = PANEL_PADDING_V * 2 + brandHeight(settings);
+            int rowHeight = rowHeight(settings);
+            for (int row = 0; row < 4; row++) if (readoutShown(settings, row)) panelHeight += rowHeight;
+            int panelWidth = panelWidth(settings);
             int gap = settings.isCircle() ? CIRCLE_GAP : SQUARE_GAP;
-            int width = side ? mapSize + gap + PANEL_WIDTH : Math.max(mapSize, PANEL_WIDTH);
+            int width = side ? mapSize + gap + panelWidth : Math.max(mapSize, panelWidth);
             int height = side ? Math.max(mapSize, panelHeight) : mapSize + gap + panelHeight;
-            int mapX = position == DynamicMinimapSetting.INFO_LEFT ? PANEL_WIDTH + gap : side ? 0 : Math.max(0, (width - mapSize) / 2);
+            int mapX = position == DynamicMinimapSetting.INFO_LEFT ? panelWidth + gap : side ? 0 : Math.max(0, (width - mapSize) / 2);
             int mapY = position == DynamicMinimapSetting.INFO_ABOVE ? panelHeight + gap
                     : position == DynamicMinimapSetting.INFO_BELOW ? 0 : Math.max(0, (height - mapSize) / 2);
-            int panelX = position == DynamicMinimapSetting.INFO_RIGHT ? mapSize + gap : side ? 0 : Math.max(0, (width - PANEL_WIDTH) / 2);
+            int panelX = position == DynamicMinimapSetting.INFO_RIGHT ? mapSize + gap : side ? 0 : Math.max(0, (width - panelWidth) / 2);
             int panelY = position == DynamicMinimapSetting.INFO_BELOW ? mapSize + gap
                     : position == DynamicMinimapSetting.INFO_ABOVE ? 0 : Math.max(0, (height - panelHeight) / 2);
-            return new HudLayout(mapSize, panelHeight, gap, width, height, mapX, mapY, panelX, panelY, side);
+            return new HudLayout(mapSize, panelWidth, panelHeight, gap, width, height, mapX, mapY, panelX, panelY, side);
         }
 
         private static boolean isSide(DynamicMinimapSetting settings) {
@@ -550,18 +598,24 @@ public final class DynamicMinimapRenderer {
             int brandCurve = curved ? 6 : 0;
             int brandLeft = 8 + (position == DynamicMinimapSetting.INFO_RIGHT ? brandCurve : 0);
             int brandRight = 8 + (position == DynamicMinimapSetting.INFO_LEFT ? brandCurve : 0);
+            // Text box heights, font sizes and letter spacing follow each area's Font Size.
+            int title = settings.fontTitle, headings = settings.fontHeadings, values = settings.fontValues;
             labels.add(new PanelLabel(-1, false, this.panelX + brandLeft, this.panelY + 12,
-                    PANEL_WIDTH - brandLeft - brandRight, 15, 10, 0.35D, true));
-            int cursor = this.panelY + 30;
+                    this.panelWidth - brandLeft - brandRight, font(BRAND_TEXT, title), font(BRAND_FONT, title),
+                    spacing(0.35D, title), true));
+            int cursor = this.panelY + PANEL_PADDING_V + brandHeight(settings);
+            int headingStep = font(HEADING_STEP, headings), rowHeight = rowHeight(settings);
             for (int row = 0; row < 4; row++) {
                 if (!readoutShown(settings, row)) continue;
                 int curve = curved ? (row == 0 || row == 3 ? 12 : 22) : 0;
                 int left = 8 + (position == DynamicMinimapSetting.INFO_RIGHT ? curve : 0);
                 int right = 8 + (position == DynamicMinimapSetting.INFO_LEFT ? curve : 0);
-                int x = this.panelX + left, width = PANEL_WIDTH - left - right;
-                labels.add(new PanelLabel(row, false, x, cursor + 3, width, 15, 9, 0.95D, false)); // Heading.
-                labels.add(new PanelLabel(row, true, x, cursor + 19, width, 19, 11, 0.0D, false)); // Value.
-                cursor += ROW_HEIGHT;
+                int x = this.panelX + left, width = this.panelWidth - left - right;
+                labels.add(new PanelLabel(row, false, x, cursor + 3, width, font(HEADING_TEXT, headings),
+                        font(HEADING_FONT, headings), spacing(0.95D, headings), false)); // Heading.
+                labels.add(new PanelLabel(row, true, x, cursor + 3 + headingStep, width, font(VALUE_TEXT, values),
+                        font(VALUE_FONT, values), 0.0D, false)); // Value.
+                cursor += rowHeight;
             }
             return labels;
         }
@@ -577,7 +631,7 @@ public final class DynamicMinimapRenderer {
     /** The info panel's glass on a widget-sized canvas (panel shown only). */
     private static BufferedImage renderHudChromeImage(DynamicMinimapSetting settings, HudLayout layout) {
         int panelX = layout.panelX(), panelY = layout.panelY();
-        int panelWidth = HudLayout.PANEL_WIDTH, panelHeight = layout.panelHeight();
+        int panelWidth = layout.panelWidth(), panelHeight = layout.panelHeight();
         BufferedImage image = new BufferedImage(Math.max(1, layout.width()), Math.max(1, layout.height()), BufferedImage.TYPE_INT_ARGB);
         Graphics2D graphics = DapperMapUtil.antialiased(image);
 
@@ -604,7 +658,7 @@ public final class DynamicMinimapRenderer {
         return image;
     }
 
-    private record OverlayLayout(int mapSize, int width, int height, int panelHeight, int gap,
+    private record OverlayLayout(int mapSize, int width, int height, int panelWidth, int panelHeight, int gap,
                                  int shape, int position, int alignment, int flags, DynamicMinimapColours colours) {}
     private record RowLayerKey(OverlayLayout layout, int row, String value) {}
     private record FrameLayerKey(int mapSize, int width, int height, int mapX, int mapY,
@@ -655,7 +709,7 @@ public final class DynamicMinimapRenderer {
                 | (settings.showCompass ? 2 : 0) | (settings.showClock ? 4 : 0) | (settings.showBiome ? 8 : 0);
         // The live panel is text-free glass (headings and values are native client labels), so text
         // alignment no longer changes its pixels: key it as 0 to share one cached panel per layout.
-        var key = new RowLayerKey(new OverlayLayout(mapSize, layout.width(), layout.height(), layout.panelHeight(), layout.gap(),
+        var key = new RowLayerKey(new OverlayLayout(mapSize, layout.width(), layout.height(), layout.panelWidth(), layout.panelHeight(), layout.gap(),
                 settings.shape, settings.infoPanelPosition, 0, flags, settings.colours), -2, "native");
         byte[] panel = OVERLAY_LAYERS.get(key);
         if (panel == null) {
@@ -881,7 +935,8 @@ public final class DynamicMinimapRenderer {
                         // A different creature for each sample where possible, edged in that colour.
                         byte[] image = keys.isEmpty() ? null
                                 : DynamicCreatureIcons.previewIcon(keys.get(i % keys.size()), rgb);
-                        int size = image != null ? iconSize : dotSize;
+                        // Sample creatures follow Marker Size: Creatures, as on the live map.
+                        int size = DynamicMinimapSetting.scaledBy(image != null ? iconSize : dotSize, preview.markerCreatures);
                         if (image == null) image = renderDot(rgb);
                         drawPreviewAsset(g, decoded, image,
                                 mapX + samples.get(i)[0] - size / 2.0,
@@ -890,7 +945,7 @@ public final class DynamicMinimapRenderer {
                 }
             }
             g.setClip(oldClip);
-            int arrowSize = Math.max(18, mapSize / 10);
+            int arrowSize = preview.selfArrowSize(mapSize); // Marker Size: Your Arrow.
             drawPreviewAsset(g, decoded, renderSelfArrow(snapshot.selfAngle(), preview.colours),
                     mapX + (mapSize - arrowSize) / 2, mapY + (mapSize - arrowSize) / 2,
                     arrowSize);
@@ -1183,17 +1238,28 @@ public final class DynamicMinimapRenderer {
     public static final double CARDINAL_FONT_SIZE = 13.0D;
 
     /**
+     * Distance (frame units) from the frame edge to a cardinal badge's centre: inside the ring just
+     * past the large dash's inner end (16 units in), or (dashes hidden) out on the rim where the dash
+     * was. Font Size: Compass Letters grows the badge, which moves inwards to keep clear of the dash.
+     * 25 / 9.5 at the standard size, as before 3.2.1.
+     */
+    public static double cardinalBadgeInset(boolean cardinalDashes, double letterScale) {
+        double half = CARDINAL_BADGE_SIZE * letterScale / 2.0D;
+        return cardinalDashes ? 16.0D + half : half + 0.5D;
+    }
+
+    /**
      * Centre of cardinal letter {@code index} (0 N, 1 E, 2 S, 3 W) as a fraction (x, y) of the
      * frame, at the heading bucket the frame image is drawn for. Shared by the frame artwork (its
      * badges), the live HUD's native labels and the settings preview, so all three line up.
      */
-    public static double[] cardinalLetterCentre(int index, double mapAngle, boolean circle, boolean cardinalDashes) {
+    public static double[] cardinalLetterCentre(int index, double mapAngle, boolean circle, boolean cardinalDashes,
+                                                double letterScale) {
         double center = STATIC_ASSET_LOGICAL_SIZE / 2.0D;
         double bearing = -Math.PI / 2 + index * Math.PI / 2 + bucketAngle(rotationBucket(mapAngle));
         double dx = Math.cos(bearing), dy = Math.sin(bearing);
         double divisor = circle ? 1 : Math.max(Math.abs(dx), Math.abs(dy));
-        // Inside the ring beside the large dash, or (dashes hidden) out on the rim where the dash was.
-        double inset = cardinalDashes ? 25.0D : CARDINAL_BADGE_SIZE / 2.0D + 0.5D;
+        double inset = cardinalBadgeInset(cardinalDashes, letterScale);
         double radius = (center - inset) / divisor;
         return new double[]{(center + dx * radius) / STATIC_ASSET_LOGICAL_SIZE,
                 (center + dy * radius) / STATIC_ASSET_LOGICAL_SIZE};
@@ -1211,11 +1277,12 @@ public final class DynamicMinimapRenderer {
         java.util.function.DoubleUnaryOperator sy = value -> offsetY + value * scaleY;
         if (settings.showCompassLetters) {
             boolean dashes = settings.showCardinalDashes;
-            double box = CARDINAL_BADGE_SIZE * mapSize / STATIC_ASSET_LOGICAL_SIZE;
-            double font = CARDINAL_FONT_SIZE * mapSize / STATIC_ASSET_LOGICAL_SIZE;
+            double letterScale = settings.compassLetterScale();
+            double box = CARDINAL_BADGE_SIZE * letterScale * mapSize / STATIC_ASSET_LOGICAL_SIZE;
+            double font = CARDINAL_FONT_SIZE * letterScale * mapSize / STATIC_ASSET_LOGICAL_SIZE;
             String colour = settings.colours.hex(CARDINAL_TEXT);
             for (int i = 0; i < 4; i++) {
-                double[] centre = cardinalLetterCentre(i, snapshot.frameAngle(), settings.isCircle(), dashes);
+                double[] centre = cardinalLetterCentre(i, snapshot.frameAngle(), settings.isCircle(), dashes, letterScale);
                 double x = mapX + centre[0] * mapSize - box / 2, y = mapY + centre[1] * mapSize - box / 2;
                 out.add(new PreviewText("PreviewCardinal" + i, CARDINAL_LETTERS[i], sx.applyAsDouble(x),
                         sy.applyAsDouble(y), box * scaleX, box * scaleY, font * scaleY, colour, true, 0, 1));
@@ -1808,7 +1875,7 @@ public final class DynamicMinimapRenderer {
      */
     private static void drawTexturedCompass(Graphics2D g, int size, boolean circle, double angle,
                                             DynamicMinimapColours colours, boolean letters,
-                                            boolean edgeDashes, boolean cardinalDashes) {
+                                            boolean edgeDashes, boolean cardinalDashes, double letterScale) {
         double center = size / 2.0D;
         // Minor divisions sit on the inner rim; major bars project beyond the outer hairline.
         int divisions = circle ? 32 : 24;
@@ -1836,22 +1903,22 @@ public final class DynamicMinimapRenderer {
             drawRadialTick(g, (int)center, (int)center, outer, inner, bearing, width, colours.awt(COMPASS_DASHES, 245));
         }
         if (!letters && !cardinalDashes) return;
-        double badgeSize = CARDINAL_BADGE_SIZE;
+        double badgeSize = CARDINAL_BADGE_SIZE * letterScale; // Grows with Font Size: Compass Letters.
         for (int i = 0; i < 4; i++) {
             double bearing = -Math.PI / 2 + i * Math.PI / 2 + angle;
             double dx = Math.cos(bearing), dy = Math.sin(bearing);
             double divisor = circle ? 1 : Math.max(Math.abs(dx), Math.abs(dy));
             if (letters) {
                 // Same centre the native letter label uses (fraction of the frame -> frame units).
-                double[] centre = cardinalLetterCentre(i, angle, circle, cardinalDashes);
+                double[] centre = cardinalLetterCentre(i, angle, circle, cardinalDashes, letterScale);
                 double x = centre[0] * size, y = centre[1] * size;
                 Shape badge = new RoundRectangle2D.Double(x - badgeSize / 2, y - badgeSize / 2,
-                        badgeSize, badgeSize, 6, 6);
+                        badgeSize, badgeSize, 6 * letterScale, 6 * letterScale);
                 g.setColor(new Color(5, 10, 23));
                 if (cardinalDashes) {
                     // Inside the ring: the badge joins the bezel and cuts an inward recess.
                     double join = (center - 10) / divisor;
-                    g.setStroke(new BasicStroke(20, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+                    g.setStroke(new BasicStroke((float) (badgeSize + 2), BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
                     g.draw(new java.awt.geom.Line2D.Double(x, y, center + dx * join, center + dy * join));
                 }
                 g.fill(badge);

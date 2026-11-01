@@ -44,6 +44,16 @@ public final class DynamicMinimapSetting {
     public static final String[] PANEL_POSITION_NAMES = {"below", "above", "left", "right"};
     public static final String[] PANEL_ALIGNMENT_NAMES = {"left", "centre", "right"};
 
+    /**
+     * Font Size (percent of the standard size) and the stops its settings-page slider offers:
+     * 100% sits in the middle, 5% steps below it and 10% steps above. Commands take any 5% step.
+     */
+    public static final int FONT_SCALE_MIN = 75, FONT_SCALE_MAX = 150, FONT_SCALE_STEP = 5;
+    public static final int[] FONT_SCALE_STOPS = {75, 80, 85, 90, 95, 100, 110, 120, 130, 140, 150};
+    /** Marker Size (percent): 100% in the middle, 10% steps below and 20% steps above. Commands take any 10% step. */
+    public static final int MARKER_SCALE_MIN = 50, MARKER_SCALE_MAX = 200, MARKER_SCALE_STEP = 10;
+    public static final int[] MARKER_SCALE_STOPS = {50, 60, 70, 80, 90, 100, 120, 140, 160, 180, 200};
+
     /** True for one of {@link #CREATURE_LIMITS}. */
     public static boolean isCreatureLimit(int value) {
         return value == 16 || value == 32 || value == 64;
@@ -53,7 +63,7 @@ public final class DynamicMinimapSetting {
     public int rotationMode = 0;
     public int zoomBlocks = 96;
     /** Logical Hytale UI size of the minimap viewport. */
-    public int sizePixels = 220;
+    public int sizePixels = 240; // Mod default (was 220 before 3.2.1); sparse settings files follow it unless changed.
     /** Raster resolution used to render minimap textures. Kept separate from UI size. */
     public int textureResolution = 256; // Mod default (was 384 before 3.2.0); sparse settings files follow it unless changed.
     /**
@@ -117,6 +127,18 @@ public final class DynamicMinimapSetting {
     public boolean betterMapEnabled = true;
     public boolean betterMapMarkersEnabled = true;
     public boolean betterMapCaveModeEnabled = true;
+    // Font Size (percent of the standard size): Info Panel title, headings and values, and the
+    // compass letters (their ring badges grow with them).
+    public int fontTitle = 100;
+    public int fontHeadings = 100;
+    public int fontValues = 100;
+    public int fontCompass = 100;
+    // Marker Size (percent of the standard size) per marker group.
+    public int markerCreatures = 100;
+    public int markerPlayers = 100;
+    /** Map markers: Hytale world-map markers (incl. death and spawn) and BetterMap waypoints alike. */
+    public int markerMap = 100;
+    public int markerArrow = 100;
     public DynamicMinimapSetting() {
     }
 
@@ -162,7 +184,15 @@ public final class DynamicMinimapSetting {
         SHOW_CARDINAL_DASHES("showCardinalDashes", true, s -> s.showCardinalDashes ? 1 : 0, (s, v) -> s.showCardinalDashes = v != 0),
         BETTERMAP_ENABLED("betterMapEnabled", true, s -> s.betterMapEnabled ? 1 : 0, (s, v) -> s.betterMapEnabled = v != 0),
         BETTERMAP_MARKERS("betterMapMarkersEnabled", true, s -> s.betterMapMarkersEnabled ? 1 : 0, (s, v) -> s.betterMapMarkersEnabled = v != 0),
-        BETTERMAP_CAVES("betterMapCaveModeEnabled", true, s -> s.betterMapCaveModeEnabled ? 1 : 0, (s, v) -> s.betterMapCaveModeEnabled = v != 0);
+        BETTERMAP_CAVES("betterMapCaveModeEnabled", true, s -> s.betterMapCaveModeEnabled ? 1 : 0, (s, v) -> s.betterMapCaveModeEnabled = v != 0),
+        FONT_TITLE("fontTitle", false, s -> s.fontTitle, (s, v) -> s.fontTitle = v),
+        FONT_HEADINGS("fontHeadings", false, s -> s.fontHeadings, (s, v) -> s.fontHeadings = v),
+        FONT_VALUES("fontValues", false, s -> s.fontValues, (s, v) -> s.fontValues = v),
+        FONT_COMPASS("fontCompass", false, s -> s.fontCompass, (s, v) -> s.fontCompass = v),
+        MARKER_CREATURES("markerCreatures", false, s -> s.markerCreatures, (s, v) -> s.markerCreatures = v),
+        MARKER_PLAYERS("markerPlayers", false, s -> s.markerPlayers, (s, v) -> s.markerPlayers = v),
+        MARKER_MAP("markerMap", false, s -> s.markerMap, (s, v) -> s.markerMap = v),
+        MARKER_ARROW("markerArrow", false, s -> s.markerArrow, (s, v) -> s.markerArrow = v);
 
         /** Key in the settings files (unchanged since the setting was added). */
         public final String key;
@@ -214,13 +244,41 @@ public final class DynamicMinimapSetting {
         return this.infoPanelEnabled && (this.showCoordinates || this.showCompass || this.showClock || this.showBiome);
     }
 
-    /** Compass ring parts as bits (1 letters, 2 small dashes, 4 cardinal dashes): keys frame caches and paths. */
+    /**
+     * Compass ring parts as bits (1 letters, 2 small dashes, 4 cardinal dashes), plus the compass
+     * letter size from bit 3 when the letters show at other than 100% (their badges are part of
+     * the ring artwork). Keys frame caches and paths; the default value is unchanged from 3.2.0.
+     */
     public int compassMarkings() {
-        return (this.showCompassLetters ? 1 : 0) | (this.showCompassDashes ? 2 : 0) | (this.showCardinalDashes ? 4 : 0);
+        int bits = (this.showCompassLetters ? 1 : 0) | (this.showCompassDashes ? 2 : 0) | (this.showCardinalDashes ? 4 : 0);
+        return this.showCompassLetters && this.fontCompass != 100 ? bits | this.fontCompass << 3 : bits;
+    }
+
+    /** Compass letter (and badge) size as a fraction of the standard size. */
+    public double compassLetterScale() {
+        return this.fontCompass / 100.0D;
     }
 
     /**
-     * A marker size given for the default 220 px map, grown in proportion for larger maps (never
+     * The three Info Panel text sizes in one number (each 75..150 fits in 8 bits): keys the panel
+     * image and its asset path, since the panel grows or shrinks with its text.
+     */
+    public int panelTextKey() {
+        return this.fontTitle << 16 | this.fontHeadings << 8 | this.fontValues;
+    }
+
+    /** A marker size scaled by a Marker Size percentage (never below 4 HUD units). */
+    public static int scaledBy(int size, int percent) {
+        return percent == 100 ? size : Math.max(4, Math.round(size * percent / 100.0F));
+    }
+
+    /** Size of the player's own locator arrow for a map of {@code mapSize} units, with Marker Size: Your Arrow. */
+    public int selfArrowSize(int mapSize) {
+        return scaledBy(Math.max(18, mapSize / 10), this.markerArrow);
+    }
+
+    /**
+     * A marker size given for a 220 px map (the size markers are drawn for; the default map is 240), grown in proportion for larger maps (never
      * shrunk below it), so every marker keeps the same size relative to the map at any Map Size.
      */
     public int scaledMarkerSize(int baseSize) {
@@ -283,6 +341,22 @@ public final class DynamicMinimapSetting {
         this.infoPanelTextAlignment = clamp(this.infoPanelTextAlignment, INFO_ALIGN_LEFT, INFO_ALIGN_RIGHT);
 
         this.updateSpeed = clamp(this.updateSpeed, SPEED_FASTEST, SPEED_SLOWEST);
+
+        // Font and marker sizes: within range, on their step (hand-edited files included).
+        this.fontTitle = snapScale(this.fontTitle, FONT_SCALE_MIN, FONT_SCALE_MAX, FONT_SCALE_STEP);
+        this.fontHeadings = snapScale(this.fontHeadings, FONT_SCALE_MIN, FONT_SCALE_MAX, FONT_SCALE_STEP);
+        this.fontValues = snapScale(this.fontValues, FONT_SCALE_MIN, FONT_SCALE_MAX, FONT_SCALE_STEP);
+        this.fontCompass = snapScale(this.fontCompass, FONT_SCALE_MIN, FONT_SCALE_MAX, FONT_SCALE_STEP);
+        this.markerCreatures = snapScale(this.markerCreatures, MARKER_SCALE_MIN, MARKER_SCALE_MAX, MARKER_SCALE_STEP);
+        this.markerPlayers = snapScale(this.markerPlayers, MARKER_SCALE_MIN, MARKER_SCALE_MAX, MARKER_SCALE_STEP);
+        this.markerMap = snapScale(this.markerMap, MARKER_SCALE_MIN, MARKER_SCALE_MAX, MARKER_SCALE_STEP);
+        this.markerArrow = snapScale(this.markerArrow, MARKER_SCALE_MIN, MARKER_SCALE_MAX, MARKER_SCALE_STEP);
+    }
+
+    /** {@code value} clamped to [min, max] and rounded to the nearest {@code step}. */
+    public static int snapScale(int value, int min, int max, int step) {
+        int clamped = clamp(value, min, max);
+        return clamp(Math.round(clamped / (float) step) * step, min, max);
     }
 
     /**

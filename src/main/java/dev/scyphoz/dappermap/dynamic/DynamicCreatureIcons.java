@@ -55,7 +55,7 @@ import static dev.scyphoz.dappermap.util.DapperMapUtil.jsonString;
  * wanted, the helmet they wear. Player icons use their own path prefix ({@code player-}).
  */
 public final class DynamicCreatureIcons {
-    /** Logical HUD size of a creature icon on the default 220 px map (scaled with map size). */
+    /** Logical HUD size of a creature icon on a 220 px map (scaled with map size). */
     public static final int MARKER_SIZE = 20;
     /**
      * Published PNG size. Icons can be shown at up to ~32 UI units x the client's UI scale
@@ -78,7 +78,7 @@ public final class DynamicCreatureIcons {
     private static final Color DISC = new Color(70, 78, 96, 235);
     private static final Color INITIALS = new Color(242, 242, 248, 255);
 
-    /** Icon size for the current map: 20 units at the default 220 px map, up to 33 at 360 px. */
+    /** Icon size for the current map: 20 units up to a 220 px map (22 at the default 240), up to 33 at 360 px. */
     public static int markerSize(DynamicMinimapSetting settings) {
         return settings.scaledMarkerSize(MARKER_SIZE); // Same growth as every other marker.
     }

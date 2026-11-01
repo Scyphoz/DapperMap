@@ -62,6 +62,8 @@ public final class DapperMapSettingsPage
     private final boolean adminMode;
     private Tab activeTab = Tab.DISPLAY;
     private Key selectedColour = Key.EDGE;
+    /** Font Size and Marker Size: the area each section's slider edits (page state, not a setting). */
+    private String selectedFontArea = "font_title", selectedMarkerArea = "size_creatures";
     private int previewRevision = 0;
     private volatile int previewRequest = 0;
     private volatile boolean closed = false;
@@ -680,6 +682,12 @@ public final class DapperMapSettingsPage
             } else if (row.kind == Kind.HEADER) {
                 builder.append("#DapperMapSettingsList", "Pages/DapperMapSectionRow.ui");
                 builder.set("#DapperMapSettingsList[" + index + "] #SectionLabel.Text", row.label);
+            } else if (row.kind == Kind.AREA || row.kind == Kind.SLIDER) {
+                // Font/Marker Size: usable when at least one of its areas may be changed.
+                SizeGroup group = sizeGroup(row.id);
+                if (this.sizeRowDisabled(row.id, settings)) this.disabledRow(builder, index, row);
+                else if (row.kind == Kind.AREA) this.areaRow(builder, events, index, row, settings, group);
+                else this.sliderRow(builder, events, index, row, settings, group);
             } else if (!this.hasSettingPermission(permissionForSetting(row.id)) || isControlDisabled(row.id, settings)) {
                 this.disabledRow(builder, index, row); // Not permitted, or a setting it needs is off.
             } else if (row.kind == Kind.DROPDOWN) {
@@ -954,7 +962,19 @@ public final class DapperMapSettingsPage
         if (!settings.enabled
                 && !"toggle_enabled".equals(action)
                 && (action.startsWith("position_") || action.startsWith("colour_")
-                || action.startsWith("toggle_") || action.startsWith("dropdown_"))) {
+                || action.startsWith("toggle_") || action.startsWith("dropdown_")
+                || action.startsWith("area_") || action.startsWith("scale_"))) {
+            return;
+        }
+
+        if (action.startsWith("area_") || action.startsWith("scale_")) {
+            // Font/Marker Size: the area's own permission is checked in handleSizeEvent.
+            UICommandBuilder sizeUi = new UICommandBuilder();
+            if (this.handleSizeEvent(sizeUi, action, event, settings)) {
+                this.draftResetsPlayerOverride = false;
+                this.updatePreview(sizeUi, settings);
+            }
+            if (sizeUi.getCommands().length > 0) this.sendUpdate(sizeUi, new UIEventBuilder(), false);
             return;
         }
 
@@ -1067,7 +1087,8 @@ public final class DapperMapSettingsPage
         for (int i = 0; i < ROWS.length; i++) {
             Row row = ROWS[i];
             if (row.kind == Kind.HEADER || row.tab != this.activeTab || row.tab == Tab.SERVER) continue;
-            out[i] = !this.hasSettingPermission(permissionForSetting(row.id)) || isControlDisabled(row.id, settings);
+            out[i] = row.kind == Kind.AREA || row.kind == Kind.SLIDER ? this.sizeRowDisabled(row.id, settings)
+                    : !this.hasSettingPermission(permissionForSetting(row.id)) || isControlDisabled(row.id, settings);
         }
         return out;
     }
@@ -1346,6 +1367,141 @@ public final class DapperMapSettingsPage
         return id == null ? null : ROW_BY_ID.get(id);
     }
 
+    // ---- Font Size and Marker Size -----------------------------------------------------
+
+    /** One sizeable area: its own setting row id (= permission row), page label and field. */
+    private record SizeArea(String id, String label, DynamicMinimapSetting.Field field) { }
+
+    /**
+     * A Font/Marker Size section: an area dropdown row ({@code areaRow}) and a slider row
+     * ({@code sliderRow}) whose 11 stops map to {@code stops} (stop 5, the middle, is 100%).
+     */
+    private record SizeGroup(String areaRow, String sliderRow, List<SizeArea> areas, int[] stops, String description) {
+        /** The area with this id, or null. */
+        SizeArea area(String id) {
+            for (SizeArea area : this.areas) if (area.id().equals(id)) return area;
+            return null;
+        }
+
+        /** Slider stop nearest to a percentage (commands can set values between stops). */
+        int stopFor(int percent) {
+            int best = 0;
+            for (int i = 1; i < this.stops.length; i++)
+                if (Math.abs(this.stops[i] - percent) < Math.abs(this.stops[best] - percent)) best = i;
+            return best;
+        }
+    }
+
+    private static final SizeGroup FONT_SIZES = new SizeGroup("font_area", "font_size", List.of(
+            new SizeArea("font_title", "Panel Title", DynamicMinimapSetting.Field.FONT_TITLE),
+            new SizeArea("font_headings", "Panel Headings", DynamicMinimapSetting.Field.FONT_HEADINGS),
+            new SizeArea("font_values", "Panel Values", DynamicMinimapSetting.Field.FONT_VALUES),
+            new SizeArea("font_compass", "Compass Letters", DynamicMinimapSetting.Field.FONT_COMPASS)),
+            DynamicMinimapSetting.FONT_SCALE_STOPS,
+            "Left for smaller text, right for larger. The middle is the standard size.");
+    private static final SizeGroup MARKER_SIZES = new SizeGroup("marker_area", "marker_size", List.of(
+            new SizeArea("size_creatures", "Creatures", DynamicMinimapSetting.Field.MARKER_CREATURES),
+            new SizeArea("size_players", "Players", DynamicMinimapSetting.Field.MARKER_PLAYERS),
+            new SizeArea("size_map", "Map Markers", DynamicMinimapSetting.Field.MARKER_MAP),
+            new SizeArea("size_arrow", "Your Arrow", DynamicMinimapSetting.Field.MARKER_ARROW)),
+            DynamicMinimapSetting.MARKER_SCALE_STOPS,
+            "Left for smaller markers, right for larger. The middle is the standard size.");
+
+    /** The size section a row belongs to (its area or slider row), or null. */
+    private static SizeGroup sizeGroup(String rowId) {
+        if (FONT_SIZES.areaRow().equals(rowId) || FONT_SIZES.sliderRow().equals(rowId)) return FONT_SIZES;
+        if (MARKER_SIZES.areaRow().equals(rowId) || MARKER_SIZES.sliderRow().equals(rowId)) return MARKER_SIZES;
+        return null;
+    }
+
+    /** Areas of a section this page may change (each has its own node). */
+    private List<SizeArea> permittedAreas(SizeGroup group) {
+        List<SizeArea> out = new ArrayList<>(group.areas().size());
+        for (SizeArea area : group.areas())
+            if (this.hasSettingPermission(permissionForSetting(area.id()))) out.add(area);
+        return out;
+    }
+
+    /** The area the section's slider edits: the chosen one when still permitted, else the first permitted (or null). */
+    private SizeArea selectedArea(SizeGroup group) {
+        List<SizeArea> permitted = this.permittedAreas(group);
+        String chosen = group == FONT_SIZES ? this.selectedFontArea : this.selectedMarkerArea;
+        for (SizeArea area : permitted) if (area.id().equals(chosen)) return area;
+        return permitted.isEmpty() ? null : permitted.get(0);
+    }
+
+    /** Area dropdown entries: each permitted area (its size shows beside the slider below). */
+    private List<DropdownEntryInfo> areaEntries(SizeGroup group) {
+        List<DropdownEntryInfo> entries = new ArrayList<>();
+        for (SizeArea area : this.permittedAreas(group)) entries.add(entry(area.label(), area.id()));
+        return entries;
+    }
+
+    /** True when a Font/Marker Size row is greyed out: minimap off, or none of its areas permitted. */
+    private boolean sizeRowDisabled(String rowId, DynamicMinimapSetting settings) {
+        SizeGroup group = sizeGroup(rowId);
+        return group == null || isDropdownDisabled(rowId, settings) || this.permittedAreas(group).isEmpty();
+    }
+
+    /** The area dropdown row of a Font/Marker Size section. */
+    private void areaRow(UICommandBuilder builder, UIEventBuilder events, int index, Row row,
+                         DynamicMinimapSetting settings, SizeGroup group) {
+        String selector = "#DapperMapSettingsList[" + index + "]";
+        builder.append("#DapperMapSettingsList", "Pages/DapperMapDropdownRow.ui");
+        builder.set(selector + " #RowLabel.Text", row.label);
+        builder.set(selector + " #RowDescription.Text", row.description);
+        String dropdownSelector = selector + " #ValueDropdown";
+        builder.set(dropdownSelector + ".Entries", this.areaEntries(group));
+        builder.set(dropdownSelector + ".Value", this.selectedArea(group).id());
+        events.addEventBinding(CustomUIEventBindingType.ValueChanged, dropdownSelector,
+                EventData.of("Action", "area_" + row.id).append("@Value", dropdownSelector + ".Value"), false);
+    }
+
+    /** The size slider row of a Font/Marker Size section, showing the selected area's size. */
+    private void sliderRow(UICommandBuilder builder, UIEventBuilder events, int index, Row row,
+                           DynamicMinimapSetting settings, SizeGroup group) {
+        String selector = "#DapperMapSettingsList[" + index + "]";
+        builder.append("#DapperMapSettingsList", "Pages/DapperMapScaleSliderRow.ui");
+        builder.set(selector + " #RowLabel.Text", row.label);
+        builder.set(selector + " #RowDescription.Text", group.description());
+        int value = this.selectedArea(group).field().get(settings);
+        builder.set(selector + " #ValueSlider.Value", group.stopFor(value));
+        builder.set(selector + " #ValueLabel.Text", value + "%");
+        events.addEventBinding(CustomUIEventBindingType.ValueChanged, selector + " #ValueSlider",
+                EventData.of("Action", "scale_" + row.id).append("@SliderValue", selector + " #ValueSlider.Value"), false);
+    }
+
+    /**
+     * Area dropdown or slider event. Area: the slider now edits that area (its value and label
+     * are re-sent). Slider: the stop's percentage is stored in the selected area's setting and
+     * only the value label is re-sent. Returns false when nothing changed.
+     */
+    private boolean handleSizeEvent(UICommandBuilder builder, String action, Ev event, DynamicMinimapSetting settings) {
+        boolean area = action.startsWith("area_");
+        SizeGroup group = sizeGroup(action.substring(area ? "area_".length() : "scale_".length()));
+        if (group == null || isDropdownDisabled(group.areaRow(), settings)) return false;
+        int sliderIndex = this.renderedIndex(group.sliderRow());
+        if (area) {
+            SizeArea chosen = group.area(event.value);
+            if (chosen == null || !this.permittedAreas(group).contains(chosen)) return false;
+            if (group == FONT_SIZES) this.selectedFontArea = chosen.id(); else this.selectedMarkerArea = chosen.id();
+            if (sliderIndex < 0) return false;
+            int value = chosen.field().get(settings);
+            String selector = "#DapperMapSettingsList[" + sliderIndex + "]";
+            builder.set(selector + " #ValueSlider.Value", group.stopFor(value));
+            builder.set(selector + " #ValueLabel.Text", value + "%");
+            return false; // Page state only: the draft (and preview) are unchanged.
+        }
+        SizeArea selected = this.selectedArea(group);
+        if (selected == null) return false;
+        int stop = dev.scyphoz.dappermap.util.DapperMapUtil.clamp(event.sliderValue, 0, group.stops().length - 1);
+        int value = group.stops()[stop];
+        if (selected.field().get(settings) == value) return false;
+        selected.field().set(settings, value);
+        if (sliderIndex >= 0) builder.set("#DapperMapSettingsList[" + sliderIndex + "] #ValueLabel.Text", value + "%");
+        return true;
+    }
+
     // ---- Row table ---------------------------------------------------------------------
 
     /** One dropdown entry: its label, the value the client sends back, and the field value it stands for. */
@@ -1445,6 +1601,10 @@ public final class DapperMapSettingsPage
                 "Show the small dashes around the map edge.");
         row("cardinal_dashes", "Cardinal Dashes", Kind.SWITCH, DynamicMinimapSetting.Field.SHOW_CARDINAL_DASHES, ON_OFF,
                 "Show the large N, E, S and W dashes. When hidden, the letters take their place.");
+        // Font Size: pick a text area, then size it with the slider (each area is its own setting).
+        header("section_font", "FONT SIZE");
+        row(FONT_SIZES.areaRow(), "Text", Kind.AREA, null, null, "Choose which text the size slider changes.");
+        row(FONT_SIZES.sliderRow(), "Size", Kind.SLIDER, null, null, FONT_SIZES.description());
         header("section_performance", "PERFORMANCE");
         row("speed", "Update Speed", Kind.DROPDOWN, DynamicMinimapSetting.Field.UPDATE_SPEED,
                 indexed(DapperMapConfig.SPEED_LABELS, 0, 1, 2, 3), "How often the minimap refreshes. Faster uses more server work.");
@@ -1502,6 +1662,10 @@ public final class DapperMapSettingsPage
         header("section_other", "OTHER");
         row("death", "Death Markers", Kind.SWITCH, DynamicMinimapSetting.Field.SHOW_DEATH_MARKER, ON_OFF,
                 "Show death markers on your minimap.");
+        // Marker Size: pick a marker type, then size it with the slider (each type is its own setting).
+        header("section_marker_size", "MARKER SIZE");
+        row(MARKER_SIZES.areaRow(), "Marker Type", Kind.AREA, null, null, "Choose which markers the size slider changes.");
+        row(MARKER_SIZES.sliderRow(), "Size", Kind.SLIDER, null, null, MARKER_SIZES.description());
         // Info Panel tab (continued).
         addingTab = Tab.INTERFACE;
         header("section_3", "INFORMATION");
@@ -1590,6 +1754,10 @@ public final class DapperMapSettingsPage
     private enum Kind {
         /** Section heading. */
         HEADER,
+        /** Font/Marker Size: dropdown choosing which area the size slider below it edits (page state only). */
+        AREA,
+        /** Font/Marker Size: the slider for the area chosen above it. */
+        SLIDER,
         /** On/off switch that takes toggle events only (Minimap, Info Panel). */
         TOGGLE,
         /** A two-value setting shown as a switch; it also takes dropdown events. */

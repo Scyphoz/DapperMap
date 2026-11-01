@@ -72,6 +72,11 @@ public final class SettingPermissions {
         node("display.compass-letters", "compass_letters", Field.SHOW_COMPASS_LETTERS);
         node("display.compass-dashes", "compass_dashes", Field.SHOW_COMPASS_DASHES);
         node("display.cardinal-dashes", "cardinal_dashes", Field.SHOW_CARDINAL_DASHES);
+        // Font Size: one node per text area (the page's area dropdown lists the permitted ones).
+        node("display.font-title", "font_title", Field.FONT_TITLE);
+        node("display.font-headings", "font_headings", Field.FONT_HEADINGS);
+        node("display.font-values", "font_values", Field.FONT_VALUES);
+        node("display.font-compass", "font_compass", Field.FONT_COMPASS);
         node("display.speed", "speed", Field.UPDATE_SPEED);
         node("display.resolution", "texture_resolution", Field.TEXTURE_RESOLUTION);
         // Markers tab.
@@ -85,6 +90,11 @@ public final class SettingPermissions {
         node("markers.height-filter", "height", Field.LIMIT_MOB_HEIGHT);
         node("markers.height-range", "vrange", Field.MOB_VERTICAL_RANGE);
         node("markers.death", "death", Field.SHOW_DEATH_MARKER);
+        // Marker Size: one node per marker group (the page's group dropdown lists the permitted ones).
+        node("markers.size-creatures", "size_creatures", Field.MARKER_CREATURES);
+        node("markers.size-players", "size_players", Field.MARKER_PLAYERS);
+        node("markers.size-map", "size_map", Field.MARKER_MAP);
+        node("markers.size-arrow", "size_arrow", Field.MARKER_ARROW);
         // Info Panel tab.
         node("info.panel", "info_panel", Field.INFO_PANEL_ENABLED);
         node("info.position", "panel_position", Field.INFO_PANEL_POSITION);

@@ -101,8 +101,8 @@ public class DapperMapCommand extends AbstractPlayerCommand {
     /** Setting groups in help order, with the settings tab they match. */
     private static final Map<String, String> GROUPS = new LinkedHashMap<>();
     static {
-        GROUPS.put("display", "Display: map appearance, compass ring and performance");
-        GROUPS.put("markers", "Markers: players, creatures and death markers");
+        GROUPS.put("display", "Display: map appearance, compass ring, font size and performance");
+        GROUPS.put("markers", "Markers: players, creatures, death markers and marker size");
         GROUPS.put("info", "Info Panel: the panel and what it shows");
         GROUPS.put("integration", "Integrations: Hytale world map and BetterMap");
     }
@@ -131,6 +131,11 @@ public class DapperMapCommand extends AbstractPlayerCommand {
             return done("update speed: " + s.updateSpeedName() + ".");
         });
         number("display", "resolution", RESOLUTION_MIN, RESOLUTION_MAX, "Texture Resolution", (s, n) -> s.textureResolution = n, " px");
+        // Font Size (percent; 100 is the standard size)
+        percent("display", "font-title", FONT_SCALE_MIN, FONT_SCALE_MAX, FONT_SCALE_STEP, "Font Size: Panel Title", (s, n) -> s.fontTitle = n);
+        percent("display", "font-headings", FONT_SCALE_MIN, FONT_SCALE_MAX, FONT_SCALE_STEP, "Font Size: Panel Headings", (s, n) -> s.fontHeadings = n);
+        percent("display", "font-values", FONT_SCALE_MIN, FONT_SCALE_MAX, FONT_SCALE_STEP, "Font Size: Panel Values", (s, n) -> s.fontValues = n);
+        percent("display", "font-compass", FONT_SCALE_MIN, FONT_SCALE_MAX, FONT_SCALE_STEP, "Font Size: Compass Letters", (s, n) -> s.fontCompass = n);
         // Markers
         toggle("markers", "players", "Player Markers", (s, on) -> s.showOtherPlayers = on);
         choice("markers", "player-style", "icons", "dots", "Player Marker Style", (s, first) -> s.playerIcons = first);
@@ -149,6 +154,11 @@ public class DapperMapCommand extends AbstractPlayerCommand {
         number("markers", "height-range", HEIGHT_RANGE_MIN, HEIGHT_RANGE_MAX, "Height Filter Range (blocks above and below you)",
                 (s, n) -> s.mobVerticalRange = n, " blocks");
         toggle("markers", "death", "Death Markers", (s, on) -> s.showDeathMarker = on);
+        // Marker Size (percent; 100 is the standard size)
+        percent("markers", "size-creatures", MARKER_SCALE_MIN, MARKER_SCALE_MAX, MARKER_SCALE_STEP, "Marker Size: Creatures", (s, n) -> s.markerCreatures = n);
+        percent("markers", "size-players", MARKER_SCALE_MIN, MARKER_SCALE_MAX, MARKER_SCALE_STEP, "Marker Size: Players", (s, n) -> s.markerPlayers = n);
+        percent("markers", "size-map", MARKER_SCALE_MIN, MARKER_SCALE_MAX, MARKER_SCALE_STEP, "Marker Size: Map Markers (Hytale and BetterMap)", (s, n) -> s.markerMap = n);
+        percent("markers", "size-arrow", MARKER_SCALE_MIN, MARKER_SCALE_MAX, MARKER_SCALE_STEP, "Marker Size: Your Arrow", (s, n) -> s.markerArrow = n);
         // Info Panel
         toggle("info", "panel", "Info Panel", (s, on) -> s.infoPanelEnabled = on);
         named("info", "position", "below|above|left|right", PANEL_POSITION_NAMES, "Info Panel Position",
@@ -254,6 +264,21 @@ public class DapperMapCommand extends AbstractPlayerCommand {
             if (n < 0) return null;
             set.accept(s, n);
             return done(label(description) + ": " + n + unit + ".");
+        });
+    }
+
+    /**
+     * A size percentage within [min, max]; values between steps are rounded to the nearest
+     * step (e.g. 112 -> 110 for fonts). Confirms with "Font Size: Panel Title: 110%.".
+     */
+    private static void percent(String group, String name, int min, int max, int step, String description,
+                                java.util.function.ObjIntConsumer<DynamicMinimapSetting> set) {
+        add(group, name, Arg.NUMBER, "<" + min + ".." + max + ">", description, (s, v, e, p) -> {
+            int n = parseRanged(v, min, max);
+            if (n < 0) return null;
+            int snapped = DynamicMinimapSetting.snapScale(n, min, max, step);
+            set.accept(s, snapped);
+            return done(description + ": " + snapped + "%.");
         });
     }
 
@@ -557,13 +582,18 @@ public class DapperMapCommand extends AbstractPlayerCommand {
                         + ", rotation " + DapperMapUtil.nameAt(ROTATION_NAMES, s.rotationMode)
                         + ", compass-letters " + onOff(s.showCompassLetters) + ", compass-dashes " + onOff(s.showCompassDashes)
                         + ", cardinal-dashes " + onOff(s.showCardinalDashes)
-                        + ", speed " + s.updateSpeedName() + ", resolution " + s.textureResolution,
+                        + ", speed " + s.updateSpeedName() + ", resolution " + s.textureResolution
+                        + ", font-title " + s.fontTitle + ", font-headings " + s.fontHeadings
+                        + ", font-values " + s.fontValues + ", font-compass " + s.fontCompass,
                 "markers: players " + onOff(s.showOtherPlayers) + ", player-style " + (s.playerIcons ? "icons" : "dots")
                         + ", player-helmets " + onOff(s.playerIconHelmets) + ", creatures " + onOff(s.showEntities)
                         + ", creature-style " + (s.creatureIcons ? "icons" : "dots")
                         + ", creature-filter " + (s.hostileCreaturesOnly ? "hostile" : "all")
                         + ", creature-limit " + s.creatureMarkerLimit + ", height-filter " + onOff(s.limitMobHeight)
-                        + ", height-range " + s.mobVerticalRange + ", death " + onOff(s.showDeathMarker),
+                        + ", height-range " + s.mobVerticalRange + ", death " + onOff(s.showDeathMarker)
+                        + ", size-creatures " + s.markerCreatures + ", size-players " + s.markerPlayers
+                        + ", size-map " + s.markerMap
+                        + ", size-arrow " + s.markerArrow,
                 "info: panel " + onOff(s.infoPanelEnabled) + ", position " + DapperMapUtil.nameAt(PANEL_POSITION_NAMES, s.infoPanelPosition)
                         + ", alignment " + DapperMapUtil.nameAt(PANEL_ALIGNMENT_NAMES, s.infoPanelTextAlignment)
                         + ", coordinates " + onOff(s.showCoordinates) + ", bearing " + onOff(s.showCompass)

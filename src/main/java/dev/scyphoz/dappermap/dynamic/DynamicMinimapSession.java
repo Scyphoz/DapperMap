@@ -910,6 +910,8 @@ public final class DynamicMinimapSession {
             this.hud.setLayoutPosition(s.hudPositionX, s.hudPositionY, s.infoPanelPosition);
             this.hud.setInfoTextAlignment(s.infoPanelTextAlignment);
             this.hud.setInfoVisibility(s.showCoordinates, s.showCompass, s.showClock, s.showBiome);
+            this.hud.setPanelFontSizes(s.fontTitle, s.fontHeadings, s.fontValues);
+            this.hud.setArrowSize(s.markerArrow);
 
             long now = System.currentTimeMillis();
             // BetterMap cave state is read reflectively; poll it at most every
@@ -936,7 +938,7 @@ public final class DynamicMinimapSession {
                 this.edgeTracker.clear();
                 this.lastMarkerMs = 0L;
                 this.hud.setCompassMarkings(this.settings.showCompassLetters,
-                        this.settings.showCompassDashes, this.settings.showCardinalDashes);
+                        this.settings.showCompassDashes, this.settings.showCardinalDashes, this.settings.fontCompass);
             }
             if (!this.settings.colours.equals(this.renderedColours)) {
                 this.renderedColours = this.settings.colours;
@@ -1747,8 +1749,10 @@ public final class DynamicMinimapSession {
 
             // Creature and player icons arrive already sized for the map (markerSize); dots and
             // world-map, BetterMap and death markers are sized for 220 px and grow with the map here.
-            int size = Math.max(8, marker.style == Style.CREATURE || marker.style == Style.PLAYER
-                    ? marker.size : this.settings.scaledMarkerSize(marker.size));
+            // Marker Size then scales each group (creature and player icons and dots, world-map and
+            // BetterMap markers); icon images are unchanged, only their drawn size.
+            int size = DynamicMinimapSetting.scaledBy(Math.max(8, marker.style == Style.CREATURE || marker.style == Style.PLAYER
+                    ? marker.size : this.settings.scaledMarkerSize(marker.size)), this.markerSizePercent(marker));
             // Compass alert: during the "on" half of the pulse the marker shows its alert look and
             // grows a little about the same centre (edge clamping keeps using its normal size).
             boolean alertOn = this.pulseOn && this.alerting(marker, projectionTime);
@@ -1812,6 +1816,13 @@ public final class DynamicMinimapSession {
      * are already inside remain untouched and therefore behave exactly like
      * ordinary position markers once the player gets close enough.
      */
+    /** Marker Size percentage for a marker's group: creatures, players, or map markers (Hytale and BetterMap). */
+    private int markerSizePercent(DynamicMinimapMarker marker) {
+        if (marker.player) return this.settings.markerPlayers;
+        if (marker.creature) return this.settings.markerCreatures;
+        return this.settings.markerMap; // Hytale world-map (incl. death, spawn, imageless dots) and BetterMap markers.
+    }
+
     private double[] clampMarkerToVisibleMap(double x, double z, int markerSize) {
         return EdgeTracker.clamp(this.settings, x, z, markerSize,
                 DynamicMinimapRenderer.bucketAngle(Math.max(0, this.lastMapRotationBucket)));
@@ -2035,8 +2046,9 @@ public final class DynamicMinimapSession {
             // Move radially inward so the marker still indicates its true direction.
             // Badge size and inset match DynamicMinimapRenderer.cardinalLetterCentre.
             boolean dashes = settings.showCardinalDashes;
-            double badgeInset = (dashes ? 25 : DynamicMinimapRenderer.CARDINAL_BADGE_SIZE / 2.0D + 0.5D) * uiScale;
-            double clearance = DynamicMinimapRenderer.CARDINAL_BADGE_SIZE / 2.0D * uiScale + markerSize / 2.0D + 1;
+            double letterScale = settings.compassLetterScale(); // Badges grow with Font Size: Compass Letters.
+            double badgeInset = DynamicMinimapRenderer.cardinalBadgeInset(dashes, letterScale) * uiScale;
+            double clearance = DynamicMinimapRenderer.CARDINAL_BADGE_SIZE * letterScale / 2.0D * uiScale + markerSize / 2.0D + 1;
             // Cardinal k sits at bearing -90° + k·90° + angle; its unit vector follows from one
             // cos/sin pair: (sin, -cos), (cos, sin), (-sin, cos), (-cos, -sin).
             double cos = Math.cos(angle), sin = Math.sin(angle);

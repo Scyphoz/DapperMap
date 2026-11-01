@@ -100,7 +100,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
 
     private record InitialOverlayKey(int size, int shape, int resolution, boolean panel, int position,
                                      int alignment, boolean coords, boolean compass, boolean clock,
-                                     boolean biome, DynamicMinimapColours colours, int markings) {}
+                                     boolean biome, DynamicMinimapColours colours, int markings, int panelText) {}
     /** First overlay per HUD set-up; least recently used dropped beyond 32 (was cleared wholesale at 16). */
     private static final java.util.Map<InitialOverlayKey, DynamicMinimapRenderer.NativeHudParts> INITIAL_OVERLAYS =
             DapperMapUtil.lruMap(32, true);
@@ -110,7 +110,8 @@ public final class DynamicMinimapHud extends CustomUIHud {
                 // Alignment 0: the panel image is text-free, so alignment never changes it.
                 settings.textureResolution, settings.infoPanelShown(), settings.infoPanelPosition,
                 0, settings.showCoordinates, settings.showCompass,
-                settings.showClock, settings.showBiome, settings.colours, settings.compassMarkings());
+                settings.showClock, settings.showBiome, settings.colours, settings.compassMarkings(),
+                settings.panelTextKey()); // Font Size changes the panel's size.
     }
 
     /** The first overlay for these settings, rendered on a miss. Render pool (or a rare fallback). */
@@ -267,7 +268,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
         this.logicalUiSize = this.settings.sizePixels;
         this.bufferPixels = DynamicMinimapRenderer.bufferPixels(this.settings);
         this.terrainPixels = this.bufferPixels;
-        this.selfSize = Math.max(18, this.logicalUiSize / 10);
+        this.selfSize = this.settings.selfArrowSize(this.logicalUiSize);
         this.slug = DapperMapUtil.playerSlug(this.uuid);
         this.blankPath = "UI/DapperMap/blank-" + this.slug + ".png";
         this.selfPath = "UI/DapperMap/self-" + this.slug + "-" + this.settings.colours.arrowKey() + "-0.png";
@@ -734,12 +735,13 @@ public final class DynamicMinimapHud extends CustomUIHud {
      * Shows or hides the compass ring's N/E/S/W letters, small edge dashes and large cardinal
      * dashes. The ring image is redrawn and the layout rebuilt once (the letters are labels).
      */
-    public void setCompassMarkings(boolean letters, boolean edgeDashes, boolean cardinalDashes) {
+    public void setCompassMarkings(boolean letters, boolean edgeDashes, boolean cardinalDashes, int letterSize) {
         if (this.settings.showCompassLetters == letters && this.settings.showCompassDashes == edgeDashes
-                && this.settings.showCardinalDashes == cardinalDashes) return;
+                && this.settings.showCardinalDashes == cardinalDashes && this.settings.fontCompass == letterSize) return;
         this.settings.showCompassLetters = letters;
         this.settings.showCompassDashes = edgeDashes;
         this.settings.showCardinalDashes = cardinalDashes;
+        this.settings.fontCompass = letterSize; // Font Size: Compass Letters (the ring's badges grow too).
         if (this.built) {
             this.overlayRevision++;
             this.overlayPublishPending = true;
@@ -778,6 +780,29 @@ public final class DynamicMinimapHud extends CustomUIHud {
             this.overlayPublishPending = true;
             this.rebuildPositionLayout();
         }
+    }
+
+    /**
+     * Font Size for the Info Panel title, headings and values. The panel grows or shrinks with
+     * its text, so its image is redrawn and the layout rebuilt once (only when a size changed).
+     */
+    public void setPanelFontSizes(int title, int headings, int values) {
+        if (this.settings.fontTitle == title && this.settings.fontHeadings == headings && this.settings.fontValues == values) return;
+        this.settings.fontTitle = title;
+        this.settings.fontHeadings = headings;
+        this.settings.fontValues = values;
+        if (this.built) {
+            this.overlayPublishPending = true;
+            this.rebuildPositionLayout();
+        }
+    }
+
+    /** Marker Size: Your Arrow. The locator is resized by one layout rebuild (its image is unchanged). */
+    public void setArrowSize(int percent) {
+        if (this.settings.markerArrow == percent) return;
+        this.settings.markerArrow = percent;
+        this.selfSize = this.settings.selfArrowSize(this.logicalUiSize);
+        if (this.built) this.rebuildPositionLayout();
     }
 
     public void setInfoTextAlignment(int alignment) {
@@ -889,7 +914,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
         this.logicalUiSize = this.settings.sizePixels;
         this.bufferPixels = DynamicMinimapRenderer.bufferPixels(this.settings);
         this.terrainPixels = this.bufferPixels; // Blank until the next terrain sets its size.
-        this.selfSize = Math.max(18, this.logicalUiSize / 10);
+        this.selfSize = this.settings.selfArrowSize(this.logicalUiSize);
 
         // Frame and mask are reused across logical map sizes. Only terrain and
         // layout geometry depend on size at runtime.
@@ -1058,7 +1083,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
         if (!this.cardinalLabelsInMarkup) return;
         double angle = this.displayedFrameAngle;
         this.cardinalBucketShown = DynamicMinimapRenderer.rotationBucket(angle);
-        int font = this.displaySize((int)Math.round(DynamicMinimapRenderer.CARDINAL_FONT_SIZE
+        int font = this.displaySize((int)Math.round(DynamicMinimapRenderer.CARDINAL_FONT_SIZE * this.settings.compassLetterScale()
                 * this.logicalUiSize / (double)DynamicMinimapRenderer.STATIC_ASSET_LOGICAL_SIZE));
         String colour = this.settings.colours.hex(CARDINAL_TEXT);
         for (int i = 0; i < 4; i++) {
@@ -1071,8 +1096,10 @@ public final class DynamicMinimapHud extends CustomUIHud {
     /** Display-space {left, top, side} of cardinal label {@code index} at a frame heading. */
     private int[] cardinalBox(int index, double angle) {
         boolean dashes = this.settings.showCardinalDashes;
-        double[] centre = DynamicMinimapRenderer.cardinalLetterCentre(index, angle, this.settings.isCircle(), dashes);
-        int side = (int)Math.round(DynamicMinimapRenderer.CARDINAL_BADGE_SIZE * this.logicalUiSize / (double)DynamicMinimapRenderer.STATIC_ASSET_LOGICAL_SIZE);
+        double scale = this.settings.compassLetterScale();
+        double[] centre = DynamicMinimapRenderer.cardinalLetterCentre(index, angle, this.settings.isCircle(), dashes, scale);
+        int side = (int)Math.round(DynamicMinimapRenderer.CARDINAL_BADGE_SIZE * scale * this.logicalUiSize
+                / (double)DynamicMinimapRenderer.STATIC_ASSET_LOGICAL_SIZE);
         int left = (int)Math.round(centre[0] * this.logicalUiSize - side / 2.0D);
         int top = (int)Math.round(centre[1] * this.logicalUiSize - side / 2.0D);
         return new int[]{this.mapOriginX() + this.displayCoordinate(left),
@@ -1210,12 +1237,19 @@ public final class DynamicMinimapHud extends CustomUIHud {
                 + "-p" + this.settings.infoPanelPosition
                 + "-s" + this.logicalUiSize
                 + "-h" + this.readoutHeight()
+                + this.panelWidthTag() // Font Size can change the panel's width alone.
                 + "-" + this.settings.colours.frameKey()
                 + this.settings.colours.hex(PANEL).substring(1)
                 + "-m" + this.settings.compassMarkings()
                 + "-v" + (this.overlayRevision & 15) + ".png";
         this.framePath = this.overlayPath.replace("-v", "-frame-v");
         this.bezelPath = this.overlayPath.replace("-v", "-bezel-v");
+    }
+
+    /** "-w<width>" for a panel resized by Font Size; empty at the standard width (paths as in 3.2.0). */
+    private String panelWidthTag() {
+        int width = this.layout().panelWidth();
+        return width == 0 || width == DynamicMinimapRenderer.HudLayout.PANEL_WIDTH ? "" : "-w" + width;
     }
 
     private void publishOverlayAsset(boolean updateClient) {
