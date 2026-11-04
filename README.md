@@ -13,6 +13,7 @@ DapperMap adds a live minimap to the Hytale HUD. It combines nearby terrain, a d
 - Adjustable zoom, map size, interface scale and texture resolution
 - Freely positionable HUD with a movable information panel
 - Player, creature, death and world-map markers that grow with larger maps
+- Adjustable font sizes for the information panel and compass letters, and adjustable marker sizes per marker type
 - Creature icons drawn from each creature's own model, including creatures added by other mods, with threat-coloured outlines (classic coloured dots are also available)
 - Optional hostile-only creature filter
 - Player head icons drawn from each player's own skin, with or without their helmet, that flash in the attacking colour when a player attacks you in PvP
@@ -52,7 +53,7 @@ DapperMap renders the terrain around the player using Hytale's native world-map 
 Players can configure:
 
 - **Zoom radius:** Controls how many blocks around the player are visible, from 16 to 256 blocks.
-- **Map size:** Changes the on-screen map size from 120 to 360 pixels. Above the default 220 pixels, every marker (creatures, players, dots, world-map, BetterMap and death markers) grows with the map so it keeps the same size relative to it.
+- **Map size:** Changes the on-screen map size from 120 to 360 pixels (default 240). Above 220 pixels, every marker (creatures, players, dots, world-map, BetterMap and death markers) grows with the map so it keeps the same size relative to it.
 - **Texture resolution:** Changes the internal rendered texture resolution from 256 (default) to 1024 pixels. Higher values produce more detail but require more processing and network delivery.
 - **Interface scale:** Scales the complete map and information display from 75% to 160% without changing the world area being shown.
 - **Map shape:** Selects a circular or square minimap.
@@ -71,6 +72,17 @@ The compass ring around the map edge has three parts that can each be turned on 
 - **Compass Letters:** The N, E, S and W letters. They are drawn in Hytale's own font, so they stay sharp at any interface scale. When the letters are off, the large cardinal dashes move inside the map edge like the other dashes, and edge markers sit right at the map edge.
 - **Compass Dashes:** The small dashes around the map edge.
 - **Cardinal Dashes:** The large dashes at N, E, S and W. When these are off and the letters are on, the letters move out to where the large dashes were. Edge markers then sit at the map edge too, stepping in only to clear a letter.
+
+### Font size
+
+The Display tab's **Font Size** section resizes DapperMap's text from 75% to 150% of the standard size. Pick a text area from the dropdown, then drag the slider (its size shows to the left of it): the middle is the standard size, left is smaller and right is larger. The slider moves in 5% steps below 100% and 10% steps above it; the commands accept any 5% step.
+
+- **Panel Title:** The DapperMap title at the top of the information panel.
+- **Panel Headings:** The COORDINATES, BEARING, WORLD TIME and REGION headings.
+- **Panel Values:** The coordinates, bearing, time and region text.
+- **Compass Letters:** The N, E, S and W letters. Their dark badges on the compass ring grow and shrink with them.
+
+The information panel grows or shrinks to fit its text, and the minimap moves to keep the whole widget in its chosen screen position.
 
 ### Update speed
 
@@ -144,6 +156,17 @@ The **Creature Height Filter** can hide creatures that are too far above or belo
 ### Death markers
 
 When enabled, DapperMap shows the death markers that Hytale records for the player in the current world, the same markers shown on the full world map. They are edge-tracked like other map markers. Hytale's world setting for displaying death markers is respected, and when BetterMap is installed its death-marker hide options apply too. The Death Markers colour tints these icons (the default keeps their original look).
+
+### Marker size
+
+The Markers tab's **Marker Size** section resizes markers from 50% to 200% of their standard size. Pick a marker type from the dropdown, then drag the slider (its size shows to the left of it): the middle is the standard size, left is smaller and right is larger. The slider moves in 10% steps below 100% and 20% steps above it; the commands accept any 10% step. Sizes apply on top of the growth that comes with a larger map.
+
+- **Creatures:** Creature icons and dots.
+- **Players:** Other players' head icons and dots.
+- **Map Markers:** Hytale's world-map markers (including death, spawn and respawn markers) and BetterMap waypoints.
+- **Your Arrow:** Your own locator arrow at the centre of the map.
+
+Marker images are not re-sent when their size changes, so larger markers don't add network traffic.
 
 ### Hytale world-map markers
 
@@ -235,6 +258,10 @@ All DapperMap commands require a live player context because they operate on a p
 | `/dappermap display cardinal-dashes on\|off` | Cardinal Dashes (the large N, E, S, W dashes) |
 | `/dappermap display speed very-fast\|fast\|normal\|slow` | Update Speed |
 | `/dappermap display resolution <256..1024>` | Texture Resolution |
+| `/dappermap display font-title <75..150>` | Font Size: Panel Title (percent) |
+| `/dappermap display font-headings <75..150>` | Font Size: Panel Headings (percent) |
+| `/dappermap display font-values <75..150>` | Font Size: Panel Values (percent) |
+| `/dappermap display font-compass <75..150>` | Font Size: Compass Letters (percent) |
 
 ### Markers
 
@@ -250,6 +277,10 @@ All DapperMap commands require a live player context because they operate on a p
 | `/dappermap markers height-filter on\|off` | Creature Height Filter |
 | `/dappermap markers height-range <4..256>` | Height Filter Range, in blocks above and below you |
 | `/dappermap markers death on\|off` | Death Markers |
+| `/dappermap markers size-creatures <50..200>` | Marker Size: Creatures (percent) |
+| `/dappermap markers size-players <50..200>` | Marker Size: Players (percent) |
+| `/dappermap markers size-map <50..200>` | Marker Size: Map Markers, Hytale and BetterMap (percent) |
+| `/dappermap markers size-arrow <50..200>` | Marker Size: Your Arrow (percent) |
 
 ### Info Panel
 
@@ -439,6 +470,10 @@ All player nodes start with `dappermap.command.`.
 | `display.cardinal-dashes` | Cardinal Dashes |
 | `display.speed` | Update Speed |
 | `display.resolution` | Texture Resolution |
+| `display.font-title` | Font Size: Panel Title |
+| `display.font-headings` | Font Size: Panel Headings |
+| `display.font-values` | Font Size: Panel Values |
+| `display.font-compass` | Font Size: Compass Letters |
 
 **Markers**
 
@@ -454,6 +489,10 @@ All player nodes start with `dappermap.command.`.
 | `markers.height-filter` | Creature Height Filter |
 | `markers.height-range` | Height Filter Range |
 | `markers.death` | Death Markers |
+| `markers.size-creatures` | Marker Size: Creatures |
+| `markers.size-players` | Marker Size: Players |
+| `markers.size-map` | Marker Size: Map Markers |
+| `markers.size-arrow` | Marker Size: Your Arrow |
 
 **Info Panel**
 
