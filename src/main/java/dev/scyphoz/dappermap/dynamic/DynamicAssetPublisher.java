@@ -9,6 +9,7 @@ import com.hypixel.hytale.server.core.io.PacketHandler;
 import com.hypixel.hytale.server.core.universe.PlayerRef;
 import dev.scyphoz.dappermap.service.DapperMapServerLoad;
 import dev.scyphoz.dappermap.util.DapperMapUtil;
+import java.lang.foreign.MemorySegment;
 import java.util.Map;
 import java.util.LinkedHashMap;
 import java.util.UUID;
@@ -63,6 +64,16 @@ public final class DynamicAssetPublisher {
         @Override
         protected CompletableFuture<byte[]> getBlob0() {
             return CompletableFuture.completedFuture(this.data);
+        }
+
+        /**
+         * First {@code length} bytes of the image (abstract in CommonAsset since Hytale 0.8.0;
+         * used to sniff file headers). Zero-copy view of the in-memory bytes, no disk or copy.
+         */
+        @Override
+        protected MemorySegment readBlobPrefix(int length) {
+            MemorySegment all = MemorySegment.ofArray(this.data);
+            return length >= this.data.length ? all : all.asSlice(0, Math.max(0, length));
         }
     }
 

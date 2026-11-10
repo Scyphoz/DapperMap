@@ -1,7 +1,7 @@
 {
     "Group": "Scyphoz",
     "Name": "DapperMap",
-    "Version": "3.2.1",
+    "Version": "3.2.2",
     "Description": "A lightweight, sophisticated and fully configurable Hytale minimap",
     "Authors": [
         {
@@ -10,7 +10,7 @@
         }
     ],
     "Website": "https://www.curseforge.com/hytale/mods/dappermap",
-    "ServerVersion": ">=0.7.0 <0.8.0",
+    "ServerVersion": ">=0.8.0-pre.4.1 <0.9.0",
     "Dependencies": {
         "Hytale:AssetModule": "*"
     },
