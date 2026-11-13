@@ -63,7 +63,7 @@ public class DapperMap extends JavaPlugin {
         DynamicEntityScanner.PlayerAttacks.register(this.getEntityStoreRegistry());
         // Once-a-second load sampler for /dappermap admin stats and optional load shedding.
         DapperMapServerLoad.start(this.sessions);
-        this.getCommandRegistry().registerCommand(new DapperMapCommand("dappermap", "Configure DapperMap", this.sessions));
+        this.getCommandRegistry().registerCommand(new DapperMapCommand("dappermap", "dappermap.command.desc", this.sessions) /* Key: translated by each player's game. */);
         this.getEventRegistry().registerGlobal(RemoveWorldEvent.class, event -> {
             BetterMapIntegration.clearWorld(event.getWorld());
             NativeWorldMapIntegration.clearWorld(event.getWorld());

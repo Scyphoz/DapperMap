@@ -108,6 +108,16 @@ public class DapperMapConfig {
             return this == SPEED ? SPEED_NAMES[this.clamp(value)] : value + this.unit;
         }
 
+        /** {@link #text} in a player's language: speed by its page name, sizes with a translated unit. */
+        public String text(int value, dev.scyphoz.dappermap.util.DapperMapUtil.Lang lang) {
+            return switch (this) {
+                case SPEED -> lang.get("choice.speed." + this.clamp(value), SPEED_LABELS[this.clamp(value)]);
+                case RESOLUTION -> lang.format("unit.px", value + this.unit, "value", value);
+                case ZOOM -> lang.format("unit.blocks", value + this.unit, "value", value);
+                default -> Integer.toString(value);
+            };
+        }
+
         /** Parses a command value ("fast", "512"); -1 when it isn't one this limit accepts. */
         public int parse(String value) {
             if (this == SPEED) return DapperMapUtil.indexOf(SPEED_NAMES, value);
@@ -245,6 +255,31 @@ public class DapperMapConfig {
             if (limit.exceeds(limit.get(settings), value)) append(out, limit.appliedLabel + " " + limit.text(value));
         }
         return out.toString();
+    }
+
+    /** {@link #describeLimitsApplied(DynamicMinimapSetting)} in a player's language. */
+    public String describeLimitsApplied(DynamicMinimapSetting settings, dev.scyphoz.dappermap.util.DapperMapUtil.Lang lang) {
+        StringBuilder out = new StringBuilder();
+        for (Limit limit : Limit.ALL) {
+            int value = this.limit(limit);
+            if (limit.exceeds(limit.get(settings), value))
+                append(out, lang.get("limit.applied." + limit.command, limit.appliedLabel) + " " + limit.text(value, lang));
+        }
+        return out.toString();
+    }
+
+    /** {@link #describeLimits()} in a player's language ("none" when no limit is set). */
+    public String describeLimits(dev.scyphoz.dappermap.util.DapperMapUtil.Lang lang) {
+        if (!this.hasLimits()) return lang.get("reply.none", "none");
+        StringBuilder out = new StringBuilder();
+        for (Limit limit : Limit.ALL)
+            append(out, lang.get("limit.status." + limit.command, limit.statusLabel) + " " + limit.text(this.limit(limit), lang));
+        return out.toString();
+    }
+
+    /** {@link #terrainColoursText(int)} in a player's language. */
+    public static String terrainColoursText(int colours, dev.scyphoz.dappermap.util.DapperMapUtil.Lang lang) {
+        return colours <= 0 ? lang.get("reply.off", "off") : lang.format("terrain.colours", colours + " colours", "value", colours);
     }
 
     /** All four limits for status and help output. */

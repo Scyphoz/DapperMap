@@ -235,6 +235,8 @@ public final class DynamicMinimapSession {
     // Layout values (scale, info panel, position, alignment, info rows) need no copy here: the
     // HUD setters return at once when nothing changed, so the tick calls them directly.
     private int builtTextureResolution = -1;
+    /** The game language the HUD's text was built for (PlayerRef.getLanguage; world thread only). */
+    private String hudLanguage;
     private int builtRotationMode = -1;
     /** Compass ring markings (DynamicMinimapSetting.compassMarkings bits) the HUD was last given. */
     private int builtCompassMarkings = -1;
@@ -872,6 +874,11 @@ public final class DynamicMinimapSession {
             if (this.hud == null || !this.hud.isShown()) {
                 return;
             }
+            // Hytale sends no event when a player changes the game language; it only updates
+            // PlayerRef's language. One string comparison per tick (usually the same object) spots
+            // it, and the HUD's headings, letters and readouts are switched in place.
+            String language = this.playerRef.getLanguage();
+            if (!java.util.Objects.equals(language, this.hudLanguage)) this.applyLanguage(language);
 
             if (this.settings.textureResolution != this.builtTextureResolution) {
                 this.builtTextureResolution = this.settings.textureResolution;
@@ -1079,7 +1086,7 @@ public final class DynamicMinimapSession {
             String coords = panel && this.settings.showCoordinates ? this.readouts.coords(x, y, z) : "";
             String compass = panel && this.settings.showCompass ? this.readouts.compass(yaw) : "";
             String clock = panel && this.settings.showClock ? clockText(world, this.settings.clock24Hour, this.readouts) : "";
-            String biome = panel && this.settings.showBiome ? this.readouts.biome(rawBiome(player)) : "";
+            String biome = panel && this.settings.showBiome ? this.readouts.region(player) : "";
             this.hud.setStatus(coords, compass, clock, biome);
             this.hud.flushPendingVisuals(this.settings.updateSpeed);
             // Player-up: keep the fast cadence while a rotation or a sharpen is still due.
@@ -1201,9 +1208,25 @@ public final class DynamicMinimapSession {
             this.bufferCenterZ = Double.NaN;
             this.lastTerrainMs = 0L;
             this.lastSelfBucket = -1;
+            // Readouts in the player's current language, read again whenever the HUD is rebuilt.
+            this.hudLanguage = this.playerRef.getLanguage();
+            this.readouts.setLang(dev.scyphoz.dappermap.util.DapperMapUtil.Lang.of(this.hudLanguage));
             this.readouts.clear();
         }
 
+    }
+
+    /**
+     * The player changed the game language: the HUD's headings and compass letters are rebuilt
+     * (one layout update, as for a font change), and the readouts are recomputed so the next
+     * setStatus sends them in the new language. World thread.
+     */
+    private void applyLanguage(String language) {
+        this.hudLanguage = language;
+        var lang = dev.scyphoz.dappermap.util.DapperMapUtil.Lang.of(language);
+        this.readouts.setLang(lang);
+        this.readouts.clear();
+        this.hud.setText(DynamicMinimapRenderer.HudText.of(lang));
     }
 
     private void updateRotatingFrame(int rotationBucket) {
@@ -1867,6 +1890,9 @@ public final class DynamicMinimapSession {
     }
 
     private static final String[] COMPASS_DIRECTIONS = {"N", "NE", "E", "SE", "S", "SW", "W", "NW"};
+    /** Direction keys in dappermap.lang, in the same order (each language's own abbreviations). */
+    private static final String[] COMPASS_DIRECTION_KEYS = {"hud.direction.n", "hud.direction.ne", "hud.direction.e",
+            "hud.direction.se", "hud.direction.s", "hud.direction.sw", "hud.direction.w", "hud.direction.nw"};
 
     /**
      * Compass bearing, clockwise from north (90 = east). Hytale's yaw increases
@@ -1877,12 +1903,11 @@ public final class DynamicMinimapSession {
         return Math.floorMod((int)Math.round(Math.toDegrees(DynamicMinimapRenderer.screenAngleForYaw(yaw))), 360);
     }
 
-    private static String compassText(double yaw) {
+    private static String compassText(double yaw, String[] directions) {
         if (Double.isNaN(yaw)) {
             return "—°  ?";
         } else {
             int degrees = bearingDegrees(yaw);
-            String[] directions = COMPASS_DIRECTIONS;
             int index = (int)Math.floor(((double)degrees + (double)22.5F) / (double)45.0F) & 7;
             return degrees + "°  " + directions[index];
         }
@@ -1925,7 +1950,9 @@ public final class DynamicMinimapSession {
         return secondsOfDay >= sunrise && secondsOfDay < sunset;
     }
 
-    private static String formatClock(int hour, int minute, boolean isDay, boolean twentyFourHour) {
+    /** "DAY  3:45 PM" / "NIGHT  21:10" in the readout language (keys hud.clock.*). */
+    private static String formatClock(int hour, int minute, boolean isDay, boolean twentyFourHour,
+                                      dev.scyphoz.dappermap.util.DapperMapUtil.Lang lang) {
         String body;
         if (twentyFourHour) {
             body = twoDigits(hour) + ":" + twoDigits(minute);
@@ -1934,28 +1961,34 @@ public final class DynamicMinimapSession {
             if (displayHour == 0) {
                 displayHour = 12;
             }
-
-            body = displayHour + ":" + twoDigits(minute) + " " + (hour < 12 ? "AM" : "PM");
+            String time = displayHour + ":" + twoDigits(minute);
+            String period = hour < 12 ? lang.get("hud.clock.am", "AM") : lang.get("hud.clock.pm", "PM");
+            // Order varies by language (Chinese writes 下午3:45).
+            body = lang.format("hud.clock.12h", "{time} {period}", "time", time, "period", period);
         }
-
-        return (isDay ? "DAY  " : "NIGHT  ") + body;
+        return lang.format("hud.clock.line", "{day}  {time}", "day",
+                isDay ? lang.get("hud.clock.day", "DAY") : lang.get("hud.clock.night", "NIGHT"), "time", body);
     }
 
     private static String twoDigits(int value) { return value < 10 ? "0" + value : Integer.toString(value); }
-
-    private static String rawBiome(Player player) {
-        try {
-            if (player != null && player.getWorldMapTracker() != null)
-                return player.getWorldMapTracker().getCurrentBiomeName();
-        } catch (RuntimeException ignored) { }
-        return null;
-    }
 
     /** Readouts change only at displayed precision, with no periodic refresh penalty. */
     static final class ReadoutCache {
         private int x, y, z, degrees, hour, minute;
         private boolean day, format;
         private String coords, compass, clock, rawBiome, biome;
+        /** Region readout inputs last seen (zone, region, biome ids; compared by identity first). */
+        private String lastZone, lastRegion;
+        /** Readout language and its bearing abbreviations (set when the HUD is built). */
+        private dev.scyphoz.dappermap.util.DapperMapUtil.Lang lang = dev.scyphoz.dappermap.util.DapperMapUtil.Lang.of((String) null);
+        private String[] directions = COMPASS_DIRECTIONS;
+
+        void setLang(dev.scyphoz.dappermap.util.DapperMapUtil.Lang lang) {
+            this.lang = lang;
+            String[] out = new String[COMPASS_DIRECTIONS.length];
+            for (int i = 0; i < out.length; i++) out[i] = lang.get(COMPASS_DIRECTION_KEYS[i], COMPASS_DIRECTIONS[i]);
+            this.directions = out;
+        }
         String coords(double px, double py, double pz) {
             int nx = (int)Math.floor(px), ny = (int)Math.floor(py), nz = (int)Math.floor(pz);
             if (coords == null || nx != x || ny != y || nz != z) {
@@ -1965,23 +1998,41 @@ public final class DynamicMinimapSession {
         }
         String compass(double yaw) {
             int next = Double.isNaN(yaw) ? -1 : bearingDegrees(yaw);
-            if (compass == null || degrees != next) { degrees = next; compass = compassText(yaw); }
+            if (compass == null || degrees != next) { degrees = next; compass = compassText(yaw, this.directions); }
             return compass;
         }
         String clock(int nh, int nm, boolean nd, boolean nf) {
             if (clock == null || nh != hour || nm != minute || nd != day || nf != format) {
-                hour = nh; minute = nm; day = nd; format = nf; clock = formatClock(nh, nm, nd, nf);
+                hour = nh; minute = nm; day = nd; format = nf; clock = formatClock(nh, nm, nd, nf, this.lang);
             }
             return clock;
         }
-        String biome(String raw) {
-            if (biome == null || !java.util.Objects.equals(raw, rawBiome)) {
-                rawBiome = raw; String label = prettyName(raw);
-                biome = label.length() <= 22 ? label : label.substring(0, 19) + "...";
-            }
+        /**
+         * Region readout: Hytale's translated region name (as its world map and zone banners show
+         * it), else the zone name, else the biome name as before (worlds without zones). Recomputed
+         * only when the player's zone, region or biome changes.
+         */
+        String region(Player player) {
+            String zone = null, region = null, raw = null;
+            try {
+                var tracker = player == null ? null : player.getWorldMapTracker();
+                if (tracker != null) {
+                    var current = tracker.getCurrentZone();
+                    if (current != null) { zone = current.zoneName(); region = current.regionName(); }
+                    raw = tracker.getCurrentBiomeName();
+                }
+            } catch (RuntimeException ignored) { }
+            if (biome != null && java.util.Objects.equals(zone, lastZone) && java.util.Objects.equals(region, lastRegion)
+                    && java.util.Objects.equals(raw, rawBiome)) return biome;
+            lastZone = zone; lastRegion = region; rawBiome = raw;
+            String label = region == null || region.isEmpty() ? null : this.lang.raw("server.map.region." + region);
+            if (label == null && zone != null && !zone.isEmpty()) label = this.lang.raw("server.map.zone." + zone);
+            if (label == null) label = raw == null || raw.isBlank() ? this.lang.get("hud.region.unknown", "Unknown") : prettyName(raw);
+            biome = label.codePointCount(0, label.length()) <= 22 ? label
+                    : label.substring(0, label.offsetByCodePoints(0, 19)) + "...";
             return biome;
         }
-        void clear() { coords = compass = clock = biome = rawBiome = null; }
+        void clear() { coords = compass = clock = biome = rawBiome = lastZone = lastRegion = null; }
     }
 
     private static String prettyName(String raw) {

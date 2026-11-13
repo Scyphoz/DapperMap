@@ -878,7 +878,7 @@ public final class DynamicMinimapRenderer {
     public record LiveSnapshot(byte[] terrain, int mapSize, int bufferSize, int panX, int panY,
                                double selfAngle, double frameAngle, String coords,
                                String compass, String clock, String biome,
-                               java.util.List<PreviewMarker> markers) { }
+                               java.util.List<PreviewMarker> markers, HudText text) { }
 
     /** Settings preview stage size (the page shows it at 272x216). */
     public static final int PREVIEW_STAGE_WIDTH = 360, PREVIEW_STAGE_HEIGHT = 286;
@@ -1286,6 +1286,34 @@ public final class DynamicMinimapRenderer {
 
     /** Info-panel headings, indexed like the readout rows (coordinates, bearing, world time, region). */
     public static final String[] READOUT_HEADINGS = {"COORDINATES", "BEARING", "WORLD TIME", "REGION"};
+    /** Heading keys in dappermap.lang, in the same order. */
+    private static final String[] READOUT_HEADING_KEYS = {"hud.heading.coordinates", "hud.heading.bearing",
+            "hud.heading.world_time", "hud.heading.region"};
+    private static final String[] CARDINAL_KEYS = {"hud.compass.n", "hud.compass.e", "hud.compass.s", "hud.compass.w"};
+
+    /**
+     * The HUD's fixed text in one player's language: info panel headings and the compass letters
+     * (each language's own letters, e.g. 北/东/南/西 or С/В/Ю/З). Built once per HUD; the settings
+     * preview uses the HUD's copy, so both always match.
+     */
+    public record HudText(String[] headings, String[] cardinals) {
+        public static final HudText ENGLISH = new HudText(READOUT_HEADINGS, CARDINAL_LETTERS);
+
+        public static HudText of(dev.scyphoz.dappermap.util.DapperMapUtil.Lang lang) {
+            String[] headings = new String[READOUT_HEADINGS.length], cardinals = new String[CARDINAL_LETTERS.length];
+            for (int i = 0; i < headings.length; i++) headings[i] = lang.get(READOUT_HEADING_KEYS[i], READOUT_HEADINGS[i]);
+            for (int i = 0; i < cardinals.length; i++) cardinals[i] = lang.get(CARDINAL_KEYS[i], CARDINAL_LETTERS[i]);
+            return new HudText(headings, cardinals);
+        }
+
+        /**
+         * Font scale for a compass letter: the badge fits one letter, so two-letter forms
+         * (Ukrainian Пн, Сх, Пд, Зх) are drawn smaller to stay inside it.
+         */
+        public static double cardinalFontScale(String letter) {
+            return letter == null || letter.codePointCount(0, letter.length()) <= 1 ? 1.0D : 0.72D;
+        }
+    }
     /** Value text colour per readout row. */
     public static final DynamicMinimapColours.Key[] READOUT_COLOURS = {COORDS_TEXT, COMPASS_TEXT, CLOCK_TEXT, BIOME_TEXT};
 
@@ -1353,11 +1381,14 @@ public final class DynamicMinimapRenderer {
             double box = CARDINAL_BADGE_SIZE * letterScale * mapSize / STATIC_ASSET_LOGICAL_SIZE;
             double font = CARDINAL_FONT_SIZE * letterScale * mapSize / STATIC_ASSET_LOGICAL_SIZE;
             String colour = settings.colours.hex(CARDINAL_TEXT);
+            HudText text = snapshot.text() == null ? HudText.ENGLISH : snapshot.text();
             for (int i = 0; i < 4; i++) {
                 double[] centre = cardinalLetterCentre(i, snapshot.frameAngle(), settings.isCircle(), dashes, letterScale);
                 double x = mapX + centre[0] * mapSize - box / 2, y = mapY + centre[1] * mapSize - box / 2;
-                out.add(new PreviewText("PreviewCardinal" + i, CARDINAL_LETTERS[i], sx.applyAsDouble(x),
-                        sy.applyAsDouble(y), box * scaleX, box * scaleY, font * scaleY, colour, true, 0, 1));
+                String letter = text.cardinals()[i];
+                out.add(new PreviewText("PreviewCardinal" + i, letter, sx.applyAsDouble(x),
+                        sy.applyAsDouble(y), box * scaleX, box * scaleY, font * HudText.cardinalFontScale(letter) * scaleY,
+                        colour, true, 0, 1));
             }
         }
         // Brand, then heading + value per shown row: the same boxes as the live HUD's labels.
@@ -1367,7 +1398,11 @@ public final class DynamicMinimapRenderer {
             String id, text;
             DynamicMinimapColours.Key colour;
             if (label.row() < 0) { id = "PreviewBrand"; text = "DapperMap"; colour = BRAND_TEXT; }
-            else if (!label.value()) { id = "PreviewHeading" + label.row(); text = READOUT_HEADINGS[label.row()]; colour = INFO_HEADERS; }
+            else if (!label.value()) {
+                id = "PreviewHeading" + label.row();
+                text = (snapshot.text() == null ? HudText.ENGLISH : snapshot.text()).headings()[label.row()];
+                colour = INFO_HEADERS;
+            }
             else {
                 id = "PreviewValue" + label.row();
                 text = values[label.row()] == null ? "" : values[label.row()];

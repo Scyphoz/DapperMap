@@ -18,7 +18,7 @@ public final class DynamicMinimapColours {
         COORDS_TEXT("coordinates", "coords-text", "Info Panel", "Coordinates", "The world coordinates text.", 0xF4F2FF),
         COMPASS_TEXT("bearing", "compass-text", "Info Panel", "Bearing", "The bearing (facing direction) text.", 0xF4F2FF),
         CLOCK_TEXT("world-time", "clock-text", "Info Panel", "World Time", "The Hytale world time text.", 0xF4F2FF),
-        BIOME_TEXT("region", "biome-text", "Info Panel", "Region", "The current region (biome) text.", 0xF4F2FF),
+        BIOME_TEXT("region", "biome-text", "Info Panel", "Region", "The current region text.", 0xF4F2FF),
         SELF("locator", "self", "Markers", "Your Locator", "The locator marking your position.", 0xF4C76B),
         PLAYERS("players", "players", "Markers", "Other Players", "Nearby player markers.", 0x74A7FF),
         DEATH("death", "death", "Markers", "Death Markers", "Tint for Hytale's death markers (white keeps the original look).", 0xF2F0FF),

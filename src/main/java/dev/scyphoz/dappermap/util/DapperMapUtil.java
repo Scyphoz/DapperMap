@@ -710,4 +710,63 @@ public final class DapperMapUtil {
         if (letterSpacing > 0.0D) out.append(", LetterSpacing: ").append(letterSpacing);
         out.append(", HorizontalAlignment: ").append(alignment).append(", VerticalAlignment: Center); } ");
     }
+
+    // ------------------------------------------------------------------------------------
+    // Localisation
+    // ------------------------------------------------------------------------------------
+
+    /**
+     * DapperMap text in one player's language, from Server/Languages/<language>/dappermap.lang
+     * (keys are read as "dappermap." + key). Hytale merges each language with en-US and caches
+     * the result, so a lookup is one map read. Text missing from both falls back to the English
+     * passed in by the caller, so a missing key never shows as a raw key.
+     */
+    public static final class Lang {
+        /** Key prefix: the file name dappermap.lang. */
+        public static final String PREFIX = "dappermap.";
+        /** English only (no I18nModule, or Hytale has no messages yet). */
+        private static final Lang ENGLISH = new Lang(Map.of());
+        private final Map<String, String> messages;
+
+        private Lang(Map<String, String> messages) { this.messages = messages; }
+
+        /** Text in this player's current language (en-US when unknown). */
+        public static Lang of(com.hypixel.hytale.server.core.universe.PlayerRef player) {
+            return of(player == null ? null : player.getLanguage());
+        }
+
+        /** Text in {@code language} (a Hytale locale such as "fr-FR"; null means en-US). */
+        public static Lang of(String language) {
+            try {
+                var i18n = com.hypixel.hytale.server.core.modules.i18n.I18nModule.get();
+                if (i18n == null) return ENGLISH;
+                Map<String, String> messages = i18n.getMessages(language == null || language.isBlank() ? "en-US" : language);
+                return messages == null || messages.isEmpty() ? ENGLISH : new Lang(messages);
+            } catch (RuntimeException | LinkageError unavailable) {
+                return ENGLISH; // Never let text lookup break a page or command.
+            }
+        }
+
+        /** Hytale's own text for a full key (e.g. "server.map.region.Zone1_Tier1"), or null. */
+        public String raw(String fullKey) {
+            return this.messages.get(fullKey);
+        }
+
+        /** The text for {@code key}, or {@code english} when no language file has it. */
+        public String get(String key, String english) {
+            String text = this.messages.get(PREFIX + key);
+            return text != null ? text : english;
+        }
+
+        /**
+         * {@code key}'s text with each "{name}" replaced: pairs of name, value. Plain replacement
+         * (no ICU plural/select), so page and command templates stay simple for translators.
+         */
+        public String format(String key, String english, Object... namesAndValues) {
+            String text = this.get(key, english);
+            for (int i = 0; i + 1 < namesAndValues.length; i += 2)
+                text = text.replace("{" + namesAndValues[i] + "}", String.valueOf(namesAndValues[i + 1]));
+            return text;
+        }
+    }
 }

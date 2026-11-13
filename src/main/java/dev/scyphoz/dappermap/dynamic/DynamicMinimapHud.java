@@ -256,9 +256,13 @@ public final class DynamicMinimapHud extends CustomUIHud {
     private String clockText = INITIAL_CLOCK;
     private String biomeText = INITIAL_BIOME;
 
+    /** Headings and compass letters in the player's language (replaced by setText on a language change). */
+    private DynamicMinimapRenderer.HudText text;
+
     public DynamicMinimapHud(PlayerRef playerRef, DynamicMinimapSetting settings,
                              Consumer<Runnable> worldExecute, java.util.function.BooleanSupplier renderingAllowed) {
         super(playerRef, KEY);
+        this.text = DynamicMinimapRenderer.HudText.of(DapperMapUtil.Lang.of(playerRef));
         this.ownerRef = playerRef;
         this.worldExecute = worldExecute;
         this.renderingAllowed = renderingAllowed;
@@ -307,7 +311,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
         return new DynamicMinimapRenderer.LiveSnapshot(terrain, this.logicalUiSize,
                 this.terrainPixels, this.panLeft + inset, this.panTop + inset, selfAngle, this.frameAngle,
                 this.coordsText, this.compassText, this.clockText, this.biomeText,
-                java.util.List.copyOf(markers));
+                java.util.List.copyOf(markers), this.text);
     }
 
     public boolean isShown() {
@@ -842,6 +846,17 @@ public final class DynamicMinimapHud extends CustomUIHud {
         if (builder != null) this.update(false, builder);
     }
 
+    /**
+     * New headings and compass letters (the game language changed). They live in the layout
+     * markup, so one layout rebuild sends them; nothing else is redrawn. World thread.
+     */
+    public void setText(DynamicMinimapRenderer.HudText text) {
+        if (text == null || (java.util.Arrays.equals(text.headings(), this.text.headings())
+                && java.util.Arrays.equals(text.cardinals(), this.text.cardinals()))) return;
+        this.text = text;
+        this.rebuildPositionLayout();
+    }
+
     /** Invalidate detached HUD work without sending updates to a previous world. */
     public void detach() {
         this.pendingCommands.clear();
@@ -1061,7 +1076,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
             String id, text;
             DynamicMinimapColours.Key colour;
             if (row < 0) { id = "WayfinderMmBrand"; text = "DapperMap"; colour = BRAND_TEXT; }
-            else if (!label.value()) { id = "WayfinderMmHeading" + row; text = DynamicMinimapRenderer.READOUT_HEADINGS[row]; colour = INFO_HEADERS; }
+            else if (!label.value()) { id = "WayfinderMmHeading" + row; text = this.text.headings()[row]; colour = INFO_HEADERS; }
             else {
                 id = "WayfinderMmReadout" + row;
                 text = values[row];
@@ -1088,8 +1103,10 @@ public final class DynamicMinimapHud extends CustomUIHud {
         String colour = this.settings.colours.hex(CARDINAL_TEXT);
         for (int i = 0; i < 4; i++) {
             int[] box = this.cardinalBox(i, angle); // Already in display units.
-            DapperMapUtil.appendLabel(out, "WayfinderMmCardinal" + i, box[0], box[1], box[2], box[2],
-                    DynamicMinimapRenderer.CARDINAL_LETTERS[i], font, colour, true, 0.0D, "Center");
+            String letter = this.text.cardinals()[i];
+            DapperMapUtil.appendLabel(out, "WayfinderMmCardinal" + i, box[0], box[1], box[2], box[2], letter,
+                    Math.max(1, (int)Math.round(font * DynamicMinimapRenderer.HudText.cardinalFontScale(letter))),
+                    colour, true, 0.0D, "Center");
         }
     }
 

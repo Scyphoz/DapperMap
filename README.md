@@ -18,7 +18,8 @@ DapperMap adds a live minimap to the Hytale HUD. It combines nearby terrain, a d
 - Optional hostile-only creature filter
 - Player head icons drawn from each player's own skin, with or without their helmet, that flash in the attacking colour when a player attacks you in PvP
 - Optional BetterMap waypoint integration
-- Coordinates, bearing, world time and biome readouts
+- Coordinates, bearing, world time and region readouts
+- Available in all eight of Hytale's languages, following each player's own game language
 - Fully configurable colours for the frame, text and marker categories
 - Per-player settings with persistent storage
 - Server-defined defaults for new and uncustomised players
@@ -108,7 +109,7 @@ Individual information rows can be enabled or disabled:
 - **Coordinates:** Current world coordinates
 - **Bearing:** Compass bearing and facing direction
 - **World Time:** Current Hytale world time, shown in 12-hour or 24-hour format as chosen by **Clock Format**
-- **Region:** Current biome or region name
+- **Region:** The name of the region you are in, as Hytale's world map shows it, in your language (the zone name if there is no region, or the biome name in worlds without zones)
 
 ### Player and creature markers
 
@@ -194,6 +195,17 @@ The editor lists only the colours the player has permission to change, and **Res
 
 Colours may also be changed through commands using hexadecimal `#RRGGBB` values or decimal RGB channels.
 
+### Languages
+
+DapperMap is available in all eight languages Hytale supports: English, Spanish, French, Brazilian Portuguese, Russian, Turkish, Ukrainian and Simplified Chinese. Each player sees DapperMap in their own game language, even when players on the same server use different languages. Regional variants follow Hytale's own fallbacks (for example, English (Australia) uses English and Mexican Spanish uses Spanish), and any other language shows English.
+
+- **Translated:** the settings page, command descriptions and replies, and the HUD (information panel headings, bearing, world time and region readouts, and the compass letters).
+- **Compass letters:** each language uses its own letters where it has them, for example 北/东/南/西 in Chinese, С/В/Ю/З in Russian, K/D/G/B in Turkish, and O for west in Spanish, French and Portuguese.
+- **Changing language:** the HUD switches as soon as the game language changes. An open settings page shows the new language the next time it is opened.
+- **Stays in English:** command names, setting names and values used in commands (for example `/dappermap display shape circle`), so commands, permissions and this README work the same in every language. The administrator `stats` report and server log messages also stay in English.
+
+The translations are in `src/main/resources/Server/Languages/<language>/dappermap.lang`. Corrections from native speakers are welcome.
+
 ### In-game settings interface
 
 The settings interface is divided into Display, Markers, Info Panel, Position, Colours and Integrations tabs (plus Server Limits on the admin page):
@@ -230,6 +242,8 @@ The command is `/dappermap`, which can also be written as `/dm`, `/minimap` or `
 Commands are grouped like the settings page tabs: `/dappermap display`, `/dappermap markers`, `/dappermap info` and `/dappermap integration`, each followed by a setting and its value. Each setting has exactly one command and one set of accepted values; on/off settings always take `on` or `off`. Typing a group on its own (for example `/dappermap display`) lists its settings.
 
 Help and group listings show only the commands the player has permission to use, and a group with nothing permitted is hidden from the command list.
+
+Command descriptions and replies appear in the player's game language. Commands, setting names and values are always typed in English, as shown below.
 
 All DapperMap commands require a live player context because they operate on a player's HUD or open an in-game page. Administrator commands are therefore run in-game by an authorised player rather than from the dedicated server console.
 

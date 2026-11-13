@@ -31,6 +31,7 @@ import dev.scyphoz.dappermap.dynamic.DynamicMinimapColours;
 import dev.scyphoz.dappermap.dynamic.DynamicMinimapColours.Key;
 import dev.scyphoz.dappermap.integration.BetterMapIntegration;
 import dev.scyphoz.dappermap.service.DapperMapSessionManager;
+import dev.scyphoz.dappermap.util.DapperMapUtil.Lang;
 
 import java.awt.Color;
 import java.util.ArrayList;
@@ -60,6 +61,8 @@ public final class DapperMapSettingsPage
     private final DapperMapSessionManager sessions;
     private final DapperMapConfig config;
     private final boolean adminMode;
+    /** Page text in the player's language when the page opened (dappermap.lang; English fallback). */
+    private final Lang lang;
     private Tab activeTab = Tab.DISPLAY;
     private Key selectedColour = Key.EDGE;
     /** Font Size and Marker Size: the area each section's slider edits (page state, not a setting). */
@@ -108,6 +111,7 @@ public final class DapperMapSettingsPage
         this.sessions = sessions;
         this.config = config;
         this.adminMode = adminMode;
+        this.lang = Lang.of(playerRef);
     }
 
     /** Opens the shared settings editor directly on the Colours tab. */
@@ -156,9 +160,7 @@ public final class DapperMapSettingsPage
         builder.set("#DapperMapTabServerFrame.Visible", this.adminMode);
         builder.set("#DapperMapAdminButtonFrame.Visible",
                 !this.adminMode && this.playerRef.hasPermission(ADMIN_PERMISSION));
-        if (this.adminMode) {
-            builder.set("#DapperMapTagline.Text", "Server defaults for new DapperMap players");
-        }
+        this.setStaticText(builder);
 
         this.renderList(builder, events, settings);
         this.bindColourEditor(builder, events, settings);
@@ -168,6 +170,25 @@ public final class DapperMapSettingsPage
         this.updateEditorAvailability(builder, settings);
         this.bindNavigation(builder, events);
         this.bindFooterButtons(builder, events);
+    }
+
+    /**
+     * Fixed page text (titles, buttons and hints written in the .ui files in English), sent in the
+     * player's language once when the page is built. The .ui text stays as the English default.
+     */
+    private void setStaticText(UICommandBuilder builder) {
+        builder.set("#DapperMapTagline.Text", this.adminMode
+                ? this.lang.get("settings.tagline.admin", "Server defaults for new DapperMap players")
+                : this.lang.get("settings.tagline.player", "A lightweight, sophisticated and fully configurable Hytale minimap."));
+        builder.set("#DapperMapAdminButtonLabel.Text", this.lang.get("button.admin", "ADMIN SETTINGS"));
+        builder.set("#DapperMapCloseButtonLabel.Text", this.lang.get("button.cancel", "CANCEL"));
+        builder.set("#ColourEditorTitle.Text", this.lang.get("colours.title", "HUD COLOURS"));
+        builder.set("#ColourEditorHint.Text", this.lang.get("colours.hint", "Select an instrument element, then tune its colour."));
+        builder.set("#ColourResetLabel.Text", this.lang.get("colours.reset", "RESET THIS COLOUR"));
+        builder.set("#ColourResetAllLabel.Text", this.lang.get("colours.reset_all", "RESET ALL COLOURS"));
+        builder.set("#QuickPlacementTitle.Text", this.lang.get("position.quick", "QUICK PLACEMENT"));
+        builder.set("#FineAdjustmentTitle.Text", this.lang.get("position.fine", "FINE ADJUSTMENT"));
+        builder.set("#PreviewTitle.Text", this.lang.get("preview.title", "P R E V I E W"));
     }
 
     private void bindNavigation(UICommandBuilder builder, UIEventBuilder events) {
@@ -188,8 +209,8 @@ public final class DapperMapSettingsPage
                 this.activeTab != Tab.COLOURS && this.activeTab != Tab.POSITION);
         builder.set("#DapperMapColourEditor.Visible", this.activeTab == Tab.COLOURS);
         builder.set("#DapperMapPositionEditor.Visible", this.activeTab == Tab.POSITION);
-        builder.set("#PageSectionTitle.Text", this.activeTab.label.toUpperCase(java.util.Locale.ROOT));
-        String sectionDescription = switch (this.activeTab) {
+        builder.set("#PageSectionTitle.Text", this.tabTitle(this.activeTab));
+        String sectionDescription = this.lang.get("tab." + this.activeTab.id + ".desc", switch (this.activeTab) {
             case DISPLAY -> "Choose how the minimap looks and how hard it works.";
             case MARKERS -> "Choose the navigation markers shown on your minimap.";
             case INTEGRATIONS -> "Connect Hytale and BetterMap map features to your minimap.";
@@ -197,7 +218,7 @@ public final class DapperMapSettingsPage
             case POSITION -> "Place the minimap on-screen and fine-tune its position.";
             case COLOURS -> "Tune the DapperMap palette and preview every change live.";
             case SERVER -> "Cap the most expensive settings for every player and set server-wide image options. Saved player choices are kept.";
-        };
+        });
         builder.set("#PageSectionDescription.Text", sectionDescription);
     }
 
@@ -209,11 +230,13 @@ public final class DapperMapSettingsPage
         builder.set("#DapperMapColourEditor.Visible", colours && settings.enabled && canEditColours);
         builder.set("#ColourDisabledNotice.Visible", colours && (!settings.enabled || !canEditColours));
         builder.set("#ColourDisabledNotice.Text", canEditColours
-                ? "ENABLE THE MINIMAP TO EDIT COLOURS" : "PERMISSION REQUIRED TO EDIT COLOURS");
+                ? this.lang.get("notice.colours.enable", "ENABLE THE MINIMAP TO EDIT COLOURS")
+                : this.lang.get("notice.colours.permission", "PERMISSION REQUIRED TO EDIT COLOURS"));
         builder.set("#DapperMapPositionEditor.Visible", position && settings.enabled && canEditPosition);
         builder.set("#PositionDisabledNotice.Visible", position && (!settings.enabled || !canEditPosition));
         builder.set("#PositionDisabledNotice.Text", canEditPosition
-                ? "ENABLE THE MINIMAP TO EDIT POSITION" : "PERMISSION REQUIRED TO EDIT POSITION");
+                ? this.lang.get("notice.position.enable", "ENABLE THE MINIMAP TO EDIT POSITION")
+                : this.lang.get("notice.position.permission", "PERMISSION REQUIRED TO EDIT POSITION"));
     }
 
     private void bindColourEditor(UICommandBuilder builder, UIEventBuilder events, DynamicMinimapSetting settings) {
@@ -221,11 +244,11 @@ public final class DapperMapSettingsPage
         List<Key> keys = this.colourKeys();
         if (!keys.isEmpty() && !keys.contains(this.selectedColour)) this.selectedColour = keys.get(0);
         builder.set("#ColourTarget.Entries", keys.stream()
-                .map(key -> new DropdownEntryInfo(LocalizableString.fromString(key.group + " / " + key.label), key.id))
+                .map(key -> new DropdownEntryInfo(LocalizableString.fromString(this.colourEntry(key)), key.id))
                 .toList());
         builder.set("#ColourTarget.Value", this.selectedColour.id);
         builder.set("#ColourPicker.Color", settings.colours.hex(this.selectedColour));
-        builder.set("#ColourDescription.Text", this.selectedColour.description);
+        builder.set("#ColourDescription.Text", this.colourDescription(this.selectedColour));
         builder.set("#ColourHex.Text", settings.colours.hex(this.selectedColour));
         boolean allowed = !keys.isEmpty();
         if (allowed) {
@@ -244,9 +267,21 @@ public final class DapperMapSettingsPage
                 "#ColourResetAllButtonSlot[0]", EventData.of("Action", "colour_reset_all"), false);
     }
 
+    /** "Frame / Map Edge": a colour's group and name, as the colour target dropdown lists them. */
+    private String colourEntry(Key key) {
+        String group = key.group.toLowerCase(java.util.Locale.ROOT).replace(' ', '_');
+        return this.lang.format("colours.entry", "{group} / {name}",
+                "group", this.lang.get("colours.group." + group, key.group),
+                "name", this.lang.get("colour." + key.id, key.label));
+    }
+
+    private String colourDescription(Key key) {
+        return this.lang.get("colour." + key.id + ".desc", key.description);
+    }
+
     private void refreshColourEditor(UICommandBuilder builder, DynamicMinimapSetting settings, boolean syncPicker) {
         builder.set("#ColourTarget.Value", this.selectedColour.id);
-        builder.set("#ColourDescription.Text", this.selectedColour.description);
+        builder.set("#ColourDescription.Text", this.colourDescription(this.selectedColour));
         builder.set("#ColourHex.Text", settings.colours.hex(this.selectedColour));
         if (syncPicker) builder.set("#ColourPicker.Color", settings.colours.hex(this.selectedColour));
     }
@@ -254,15 +289,16 @@ public final class DapperMapSettingsPage
     private void bindPositionEditor(UICommandBuilder builder, UIEventBuilder events,
                                     DynamicMinimapSetting settings) {
         boolean allowed = this.hasSettingPermission(SettingPermissions.POSITION);
-        String[] labels = {"Horizontal Position", "Vertical Position"};
+        String[] labels = {this.lang.get("position.horizontal", "Horizontal Position"),
+                this.lang.get("position.vertical", "Vertical Position")};
         String[] actions = {"position_slider_x", "position_slider_y"};
         for (int index = 0; index < labels.length; index++) {
             String row = "#PositionFineTuneList[" + index + "]";
             builder.append("#PositionFineTuneList", "Pages/DapperMapPositionSliderRow.ui");
             builder.set(row + " #RowLabel.Text", labels[index]);
             builder.set(row + " #RowDescription.Text", index == 0
-                    ? "Move the minimap left or right."
-                    : "Move the minimap up or down.");
+                    ? this.lang.get("position.horizontal.desc", "Move the minimap left or right.")
+                    : this.lang.get("position.vertical.desc", "Move the minimap up or down."));
             if (allowed) {
                 events.addEventBinding(CustomUIEventBindingType.ValueChanged, row + " #ValueSlider",
                         EventData.of("Action", actions[index])
@@ -288,10 +324,10 @@ public final class DapperMapSettingsPage
         int[] values = {settings.hudPositionX, settings.hudPositionY};
         for (int index = 0; index < values.length; index++) {
             String row = "#PositionFineTuneList[" + index + "]";
-            builder.set(row + " #ValueLabel.Text", values[index] + "%");
+            builder.set(row + " #ValueLabel.Text", this.percent(values[index]));
             if (syncSliders) builder.set(row + " #ValueSlider.Value", values[index]);
         }
-        builder.set("#PositionSummary.Text", positionSummary(settings));
+        builder.set("#PositionSummary.Text", this.positionSummary(settings));
         this.updatePositionGrid(builder, settings);
     }
 
@@ -306,7 +342,7 @@ public final class DapperMapSettingsPage
                 boolean selected = x == selectedX && y == selectedY;
                 builder.set("#PositionSlot" + row + column + "Active.Visible", selected);
                 builder.set("#PositionSlot" + row + column + "Label.TextSpans",
-                        Message.raw(positionButtonName(x, y))
+                        Message.raw(this.positionButtonName(x, y))
                                 .color(selected ? VIOLET : MUTED));
             }
         }
@@ -319,21 +355,28 @@ public final class DapperMapSettingsPage
     private void updatePositionSlider(UICommandBuilder builder, DynamicMinimapSetting settings, int index,
                                       int previousX, int previousY) {
         int value = index == 0 ? settings.hudPositionX : settings.hudPositionY;
-        builder.set("#PositionFineTuneList[" + index + "] #ValueLabel.Text", value + "%");
-        builder.set("#PositionSummary.Text", positionSummary(settings));
+        builder.set("#PositionFineTuneList[" + index + "] #ValueLabel.Text", this.percent(value));
+        builder.set("#PositionSummary.Text", this.positionSummary(settings));
         if (nearestPositionStop(previousX) != nearestPositionStop(settings.hudPositionX)
                 || nearestPositionStop(previousY) != nearestPositionStop(settings.hudPositionY))
             this.updatePositionGrid(builder, settings);
     }
 
     /** "TOP RIGHT   •   100% / 0%": the Position tab's summary line. */
-    private static String positionSummary(DynamicMinimapSetting settings) {
-        return positionName(settings.hudPositionX, settings.hudPositionY)
-                + "   •   " + settings.hudPositionX + "% / " + settings.hudPositionY + "%";
+    private String positionSummary(DynamicMinimapSetting settings) {
+        return this.lang.format("position.summary", "{position}   •   {x} / {y}",
+                "position", this.positionName(settings.hudPositionX, settings.hudPositionY),
+                "x", this.percent(settings.hudPositionX), "y", this.percent(settings.hudPositionY));
+    }
+
+    /** "50%" in the player's language (some languages write "50 %" or "%50"). */
+    private String percent(int value) {
+        return this.lang.format("unit.percent", "{value}%", "value", value);
     }
 
     /** Hides the preview image and its labels and shows {@code text} in their place. */
-    private static void showPreviewNotice(UICommandBuilder ui, String text) {
+    private void showPreviewNotice(UICommandBuilder ui, String key, String english) {
+        String text = this.lang.get(key, english);
         ui.set("#PreviewHudImage.Visible", false);
         ui.set("#PreviewText.Visible", false);
         ui.set("#PreviewDisabled.Text", text);
@@ -343,15 +386,15 @@ public final class DapperMapSettingsPage
     private void updatePreview(UICommandBuilder ui, DynamicMinimapSetting settings) {
         int request = ++this.previewRequest;
         if (!settings.enabled) {
-            showPreviewNotice(ui, "MINIMAP DISABLED");
+            this.showPreviewNotice(ui, "preview.disabled", "MINIMAP DISABLED");
             return;
         }
         if (this.previewSnapshot == null) this.previewSnapshot = this.sessions.capturePreview(this.playerRef.getUuid());
         if (this.previewSnapshot == null) {
-            showPreviewNotice(ui, "LIVE HUD PREVIEW UNAVAILABLE");
+            this.showPreviewNotice(ui, "preview.unavailable", "LIVE HUD PREVIEW UNAVAILABLE");
             return;
         }
-        if (this.previewRevision == 0) showPreviewNotice(ui, "PREPARING HUD PREVIEW");
+        if (this.previewRevision == 0) this.showPreviewNotice(ui, "preview.preparing", "PREPARING HUD PREVIEW");
         World world = this.previewWorld;
         if (world == null || this.closed) return;
         // Pace renders while sliders or the colour picker are dragged; the newest draft is
@@ -528,9 +571,14 @@ public final class DapperMapSettingsPage
             boolean selected = tab == this.activeTab;
             builder.set("#DapperMapTab" + tab.uiLabel + "Active.Visible", selected);
             builder.set("#DapperMapTab" + tab.uiLabel + "Label.TextSpans",
-                    Message.raw(tab.label.toUpperCase(java.util.Locale.ROOT)).color(selected ? VIOLET
+                    Message.raw(this.tabTitle(tab)).color(selected ? VIOLET
                             : this.canOpenTab(tab) ? MUTED : new Color(0x555B6D)));
         }
+    }
+
+    /** A tab's upper-case title ("INFO PANEL"); translations give their own capitals (Turkish dotted I). */
+    private String tabTitle(Tab tab) {
+        return this.lang.get("tab." + tab.id, tab.label.toUpperCase(java.util.Locale.ROOT));
     }
 
     private void bindFooterButtons(
@@ -545,7 +593,8 @@ public final class DapperMapSettingsPage
         boolean canReset = this.hasSettingPermission(SettingPermissions.RESET);
         builder.set(
                 "#DapperMapResetButtonLabel.TextSpans",
-                Message.raw(this.adminMode ? "RESET TO MOD DEFAULTS" : "RESET TO DEFAULTS")
+                Message.raw(this.adminMode ? this.lang.get("button.reset_admin", "RESET TO MOD DEFAULTS")
+                                : this.lang.get("button.reset", "RESET TO DEFAULTS"))
                         .color(canReset ? GOLD : new Color(0x666A78))
         );
         builder.set("#DapperMapResetButtonSlot[0].TextSpans", Message.raw(""));
@@ -566,7 +615,7 @@ public final class DapperMapSettingsPage
 
         builder.append("#DapperMapApplyButtonSlot", "Pages/BasicTextButton.ui");
         builder.set("#DapperMapApplyButtonLabel.TextSpans",
-                Message.raw("APPLY").color(this.adminMode ? GREEN : new Color(0xF0EDFF)));
+                Message.raw(this.lang.get("button.apply", "APPLY")).color(this.adminMode ? GREEN : new Color(0xF0EDFF)));
         builder.set("#DapperMapApplyButtonSlot[0].TextSpans", Message.raw(""));
         // Apply also carries the sliders' and colour picker's current values: a ValueChanged event
         // dropped while a page update awaited acknowledgement is then still saved correctly.
@@ -681,7 +730,7 @@ public final class DapperMapSettingsPage
                 else this.limitRow(builder, events, index, row);
             } else if (row.kind == Kind.HEADER) {
                 builder.append("#DapperMapSettingsList", "Pages/DapperMapSectionRow.ui");
-                builder.set("#DapperMapSettingsList[" + index + "] #SectionLabel.Text", row.label);
+                builder.set("#DapperMapSettingsList[" + index + "] #SectionLabel.Text", this.rowLabel(row));
             } else if (row.kind == Kind.AREA || row.kind == Kind.SLIDER) {
                 // Font/Marker Size: usable when at least one of its areas may be changed.
                 SizeGroup group = sizeGroup(row.id);
@@ -702,9 +751,9 @@ public final class DapperMapSettingsPage
     private void disabledRow(UICommandBuilder builder, int index, Row row) {
         String selector = "#DapperMapSettingsList[" + index + "]";
         builder.append("#DapperMapSettingsList", "Pages/DapperMapDisabledDropdownRow.ui");
-        builder.set(selector + " #RowLabel.Text", row.label);
-        builder.set(selector + " #RowDescription.Text", description(row.id));
-        builder.set(selector + " #ValueLabel.Text", "Disabled");
+        builder.set(selector + " #RowLabel.Text", this.rowLabel(row));
+        builder.set(selector + " #RowDescription.Text", this.description(row.id));
+        builder.set(selector + " #ValueLabel.Text", this.lang.get("row.disabled", "Disabled"));
     }
 
     private void toggleRow(
@@ -721,15 +770,9 @@ public final class DapperMapSettingsPage
                 "Pages/DapperMapToggleRow.ui"
         );
 
-        builder.set(
-                selector + " #RowLabel.Text",
-                row.label
-        );
+        builder.set(selector + " #RowLabel.Text", this.rowLabel(row));
 
-        builder.set(
-                selector + " #RowDescription.Text",
-                description(row.id)
-        );
+        builder.set(selector + " #RowDescription.Text", this.description(row.id));
 
         boolean on = toggleValue(row.id, settings);
         builder.set(selector + " #ToggleOn.Visible", on);
@@ -740,7 +783,7 @@ public final class DapperMapSettingsPage
         boolean showState = !isIntegrationToggle(row.id);
         builder.set(selector + " #StateLabel.Visible", showState);
         if (showState) {
-            builder.set(selector + " #StateLabel.Text", toggleStateLabel(row.id, settings));
+            builder.set(selector + " #StateLabel.Text", this.toggleStateLabel(row.id, settings));
         }
 
         builder.append(
@@ -776,10 +819,7 @@ public final class DapperMapSettingsPage
                 "Pages/DapperMapDropdownRow.ui"
         );
 
-        builder.set(
-                selector + " #RowLabel.Text",
-                row.label
-        );
+        builder.set(selector + " #RowLabel.Text", this.rowLabel(row));
 
         builder.set(selector + " #RowDescription.Text", this.rowDescription(row.id));
 
@@ -1120,7 +1160,7 @@ public final class DapperMapSettingsPage
         boolean on = toggleValue(id, settings);
         builder.set(selector + " #ToggleOn.Visible", on);
         builder.set(selector + " #ToggleOff.Visible", !on);
-        if (!isIntegrationToggle(id)) builder.set(selector + " #StateLabel.Text", toggleStateLabel(id, settings));
+        if (!isIntegrationToggle(id)) builder.set(selector + " #StateLabel.Text", this.toggleStateLabel(id, settings));
     }
 
     /** Flips an on/off row (also Map Shape, Map Rotation and Clock Format, which are shown as switches). */
@@ -1137,12 +1177,25 @@ public final class DapperMapSettingsPage
     }
 
     /** "ENABLED"/"DISABLED", or the switch's own state name ("CIRCLE", "PLAYER FACING", "24 HOUR"). */
-    private static String toggleStateLabel(String id, DynamicMinimapSetting settings) {
+    private String toggleStateLabel(String id, DynamicMinimapSetting settings) {
         boolean on = toggleValue(id, settings);
         Row row = row(id);
         if (row != null && row.kind == Kind.SWITCH)
-            for (Choice choice : row.options.choices(0)) if (choice.fieldValue() == (on ? 1 : 0)) return choice.state();
-        return on ? "ENABLED" : "DISABLED";
+            for (Choice choice : row.options.choices(0))
+                if (choice.fieldValue() == (on ? 1 : 0)) return this.lang.get(choice.key() + ".state", choice.state());
+        return on ? this.lang.get("state.enabled", "ENABLED") : this.lang.get("state.disabled", "DISABLED");
+    }
+
+    /** A row's label, or a section header's upper-case title (key "row.<id>"). */
+    private String rowLabel(Row row) {
+        return this.lang.get("row." + row.id, row.label);
+    }
+
+    /** A dropdown entry's text: a fixed choice, a number with its unit, or a bare number. */
+    private String choiceLabel(Choice choice) {
+        if (choice.key() == null) return choice.label();
+        if (choice.key().startsWith("unit.")) return this.lang.format(choice.key(), choice.label(), "value", choice.value());
+        return this.lang.get(choice.key(), choice.label());
     }
 
     /** True for a dropdown setting shown as a switch (it also accepts dropdown events). */
@@ -1157,11 +1210,12 @@ public final class DapperMapSettingsPage
         return row != null && (row.kind == Kind.TOGGLE || row.kind == Kind.SWITCH) && row.field.get(settings) == 1;
     }
 
-    private static String description(String id) {
+    /** A row's description (key "row.<id>.desc"). */
+    private String description(String id) {
         if ("bettermap".equals(id) && !BetterMapIntegration.isAvailable())
-            return "BetterMap is not installed or could not be detected.";
+            return this.lang.get("row.bettermap.missing", "BetterMap is not installed or could not be detected.");
         Row row = row(id);
-        return row == null ? "" : row.description;
+        return row == null ? "" : this.lang.get("row." + id + ".desc", row.description);
     }
 
     /**
@@ -1201,7 +1255,7 @@ public final class DapperMapSettingsPage
         List<DropdownEntryInfo> entries = new ArrayList<>();
         Row row = row(id);
         if (row == null || row.options == null) return entries;
-        for (Choice choice : row.options.choices(row.field.get(settings))) entries.add(entry(choice.label(), choice.value()));
+        for (Choice choice : row.options.choices(row.field.get(settings))) entries.add(entry(this.choiceLabel(choice), choice.value()));
         this.markOverLimit(entries, id);
         return entries;
     }
@@ -1222,16 +1276,21 @@ public final class DapperMapSettingsPage
     }
 
     /** "Fast", "512 px", "128 blocks" or "32": a limit value as the page shows it. */
-    private static String limitLabel(DapperMapConfig.Limit limit, int value) {
-        return limit == DapperMapConfig.Limit.SPEED ? displaySpeed(value) : value + limit.unit;
+    private String limitLabel(DapperMapConfig.Limit limit, int value) {
+        return switch (limit) {
+            case SPEED -> this.displaySpeed(value);
+            case RESOLUTION -> this.lang.format("unit.px", value + limit.unit, "value", value);
+            case ZOOM -> this.lang.format("unit.blocks", value + limit.unit, "value", value);
+            default -> Integer.toString(value); // Creature counts have no unit.
+        };
     }
 
     /** Admin dropdown for one server limit; the "no limit" value is labelled as such. */
     private void limitRow(UICommandBuilder builder, UIEventBuilder events, int index, Row row) {
         String selector = "#DapperMapSettingsList[" + index + "]";
         builder.append("#DapperMapSettingsList", "Pages/DapperMapDropdownRow.ui");
-        builder.set(selector + " #RowLabel.Text", row.label);
-        builder.set(selector + " #RowDescription.Text", description(row.id));
+        builder.set(selector + " #RowLabel.Text", this.rowLabel(row));
+        builder.set(selector + " #RowDescription.Text", this.description(row.id));
         String dropdownSelector = selector + " #ValueDropdown";
         builder.set(dropdownSelector + ".Entries", this.limitEntries(row.id));
         builder.set(dropdownSelector + ".Value", Integer.toString(this.draftLimits[DapperMapConfig.Limit.byAdminRow(row.id).ordinal()]));
@@ -1253,7 +1312,9 @@ public final class DapperMapSettingsPage
             case CREATURES -> { for (int value : DynamicMinimapSetting.CREATURE_LIMITS) values.add(value); }
         }
         for (int value : values)
-            entries.add(entry(limitLabel(limit, value) + (value == limit.noLimit ? " (no limit)" : ""), Integer.toString(value)));
+            entries.add(entry(value == limit.noLimit
+                    ? this.lang.format("limit.no_limit", "{value} (no limit)", "value", this.limitLabel(limit, value))
+                    : this.limitLabel(limit, value), Integer.toString(value)));
         return entries;
     }
 
@@ -1261,12 +1322,13 @@ public final class DapperMapSettingsPage
     private void terrainColoursRow(UICommandBuilder builder, UIEventBuilder events, int index, Row row) {
         String selector = "#DapperMapSettingsList[" + index + "]";
         builder.append("#DapperMapSettingsList", "Pages/DapperMapDropdownRow.ui");
-        builder.set(selector + " #RowLabel.Text", row.label);
-        builder.set(selector + " #RowDescription.Text", description(row.id));
+        builder.set(selector + " #RowLabel.Text", this.rowLabel(row));
+        builder.set(selector + " #RowDescription.Text", this.description(row.id));
         String dropdownSelector = selector + " #ValueDropdown";
         List<DropdownEntryInfo> entries = new ArrayList<>();
         for (int value : this.terrainColourChoices())
-            entries.add(entry(value == 0 ? "Off (exact colours)" : value + " colours", Integer.toString(value)));
+            entries.add(entry(value == 0 ? this.lang.get("terrain.off", "Off (exact colours)")
+                    : this.lang.format("terrain.colours", "{value} colours", "value", value), Integer.toString(value)));
         builder.set(dropdownSelector + ".Entries", entries);
         builder.set(dropdownSelector + ".Value", Integer.toString(this.draftTerrainColours));
         events.addEventBinding(CustomUIEventBindingType.ValueChanged, dropdownSelector,
@@ -1301,9 +1363,11 @@ public final class DapperMapSettingsPage
             DropdownEntryInfo entry = entries.get(i);
             int value = Integer.parseInt(entry.value());
             if (!limit.exceeds(value, max)) continue;
-            entries.set(i, new DropdownEntryInfo(LocalizableString.fromString(limitLabel(limit, value) + " (server limit)"), entry.value(),
-                    LocalizableString.fromString("This server limits this setting to " + limitLabel(limit, max)
-                            + ". Your choice is kept and used if the limit is lifted.")));
+            entries.set(i, new DropdownEntryInfo(LocalizableString.fromString(this.lang.format("limit.over",
+                    "{value} (server limit)", "value", this.limitLabel(limit, value))), entry.value(),
+                    LocalizableString.fromString(this.lang.format("limit.over.tooltip",
+                            "This server limits this setting to {limit}. Your choice is kept and used if the limit is lifted.",
+                            "limit", this.limitLabel(limit, max)))));
         }
     }
 
@@ -1311,7 +1375,9 @@ public final class DapperMapSettingsPage
     private String rowDescription(String id) {
         DapperMapConfig.Limit limit = this.adminMode ? null : DapperMapConfig.Limit.byPageRow(id);
         boolean limited = limit != null && this.config.isLimited(limit);
-        return limited ? description(id) + " Server limit: " + limitLabel(limit, this.config.limit(limit)) + "." : description(id);
+        return limited ? this.lang.format("limit.note", "{description} Server limit: {limit}.",
+                "description", this.description(id), "limit", this.limitLabel(limit, this.config.limit(limit)))
+                : this.description(id);
     }
 
     private static DropdownEntryInfo entry(String label, String value) {
@@ -1344,22 +1410,29 @@ public final class DapperMapSettingsPage
         return 50;
     }
 
-    private static String positionName(int x, int y) {
+    /** Summary name of a position ("TOP RIGHT", "MIDDLE LEFT", "CENTRE"); key "position.name.<v>_<h>". */
+    private String positionName(int x, int y) {
         String vertical = y < 25 ? "TOP" : (y > 75 ? "BOTTOM" : "MIDDLE");
         String horizontal = x < 25 ? "LEFT" : (x > 75 ? "RIGHT" : "CENTRE");
-        if ("MIDDLE".equals(vertical) && "CENTRE".equals(horizontal)) return "CENTRE";
-        return vertical + " " + horizontal;
+        String english = "MIDDLE".equals(vertical) && "CENTRE".equals(horizontal) ? "CENTRE" : vertical + " " + horizontal;
+        return this.lang.get("position.name." + (vertical + "_" + horizontal).toLowerCase(java.util.Locale.ROOT), english);
     }
 
-    private static String positionButtonName(int x, int y) {
-        if (y < 25) return x < 25 ? "TOP LEFT" : (x > 75 ? "TOP RIGHT" : "TOP");
-        if (y > 75) return x < 25 ? "BOTTOM LEFT" : (x > 75 ? "BOTTOM RIGHT" : "BOTTOM");
-        return x < 25 ? "LEFT" : (x > 75 ? "RIGHT" : "CENTRE");
+    /** Quick placement button name ("TOP LEFT", "TOP", "CENTRE"); key "position.button.<v>_<h>". */
+    private String positionButtonName(int x, int y) {
+        String vertical = y < 25 ? "top" : (y > 75 ? "bottom" : "middle");
+        String horizontal = x < 25 ? "left" : (x > 75 ? "right" : "centre");
+        String english;
+        if (y < 25) english = x < 25 ? "TOP LEFT" : (x > 75 ? "TOP RIGHT" : "TOP");
+        else if (y > 75) english = x < 25 ? "BOTTOM LEFT" : (x > 75 ? "BOTTOM RIGHT" : "BOTTOM");
+        else english = x < 25 ? "LEFT" : (x > 75 ? "RIGHT" : "CENTRE");
+        return this.lang.get("position.button." + vertical + "_" + horizontal, english);
     }
 
     /** "Very fast" .. "Slow"; anything out of range reads as Normal. */
-    private static String displaySpeed(int speed) {
-        return DapperMapConfig.SPEED_LABELS[speed >= 0 && speed < DapperMapConfig.SPEED_LABELS.length ? speed : 2];
+    private String displaySpeed(int speed) {
+        int index = speed >= 0 && speed < DapperMapConfig.SPEED_LABELS.length ? speed : 2;
+        return this.lang.get("choice.speed." + index, DapperMapConfig.SPEED_LABELS[index]);
     }
 
     /** The row with this id, or null (headers included; ids are unique). */
@@ -1433,7 +1506,7 @@ public final class DapperMapSettingsPage
     /** Area dropdown entries: each permitted area (its size shows beside the slider below). */
     private List<DropdownEntryInfo> areaEntries(SizeGroup group) {
         List<DropdownEntryInfo> entries = new ArrayList<>();
-        for (SizeArea area : this.permittedAreas(group)) entries.add(entry(area.label(), area.id()));
+        for (SizeArea area : this.permittedAreas(group)) entries.add(entry(this.lang.get("area." + area.id(), area.label()), area.id()));
         return entries;
     }
 
@@ -1448,8 +1521,8 @@ public final class DapperMapSettingsPage
                          DynamicMinimapSetting settings, SizeGroup group) {
         String selector = "#DapperMapSettingsList[" + index + "]";
         builder.append("#DapperMapSettingsList", "Pages/DapperMapDropdownRow.ui");
-        builder.set(selector + " #RowLabel.Text", row.label);
-        builder.set(selector + " #RowDescription.Text", row.description);
+        builder.set(selector + " #RowLabel.Text", this.rowLabel(row));
+        builder.set(selector + " #RowDescription.Text", this.description(row.id));
         String dropdownSelector = selector + " #ValueDropdown";
         builder.set(dropdownSelector + ".Entries", this.areaEntries(group));
         builder.set(dropdownSelector + ".Value", this.selectedArea(group).id());
@@ -1462,11 +1535,11 @@ public final class DapperMapSettingsPage
                            DynamicMinimapSetting settings, SizeGroup group) {
         String selector = "#DapperMapSettingsList[" + index + "]";
         builder.append("#DapperMapSettingsList", "Pages/DapperMapScaleSliderRow.ui");
-        builder.set(selector + " #RowLabel.Text", row.label);
-        builder.set(selector + " #RowDescription.Text", group.description());
+        builder.set(selector + " #RowLabel.Text", this.rowLabel(row));
+        builder.set(selector + " #RowDescription.Text", this.description(row.id)); // = group.description() in English.
         int value = this.selectedArea(group).field().get(settings);
         builder.set(selector + " #ValueSlider.Value", group.stopFor(value));
-        builder.set(selector + " #ValueLabel.Text", value + "%");
+        builder.set(selector + " #ValueLabel.Text", this.percent(value));
         events.addEventBinding(CustomUIEventBindingType.ValueChanged, selector + " #ValueSlider",
                 EventData.of("Action", "scale_" + row.id).append("@SliderValue", selector + " #ValueSlider.Value"), false);
     }
@@ -1489,7 +1562,7 @@ public final class DapperMapSettingsPage
             int value = chosen.field().get(settings);
             String selector = "#DapperMapSettingsList[" + sliderIndex + "]";
             builder.set(selector + " #ValueSlider.Value", group.stopFor(value));
-            builder.set(selector + " #ValueLabel.Text", value + "%");
+            builder.set(selector + " #ValueLabel.Text", this.percent(value));
             return false; // Page state only: the draft (and preview) are unchanged.
         }
         SizeArea selected = this.selectedArea(group);
@@ -1498,14 +1571,18 @@ public final class DapperMapSettingsPage
         int value = group.stops()[stop];
         if (selected.field().get(settings) == value) return false;
         selected.field().set(settings, value);
-        if (sliderIndex >= 0) builder.set("#DapperMapSettingsList[" + sliderIndex + "] #ValueLabel.Text", value + "%");
+        if (sliderIndex >= 0) builder.set("#DapperMapSettingsList[" + sliderIndex + "] #ValueLabel.Text", this.percent(value));
         return true;
     }
 
     // ---- Row table ---------------------------------------------------------------------
 
-    /** One dropdown entry: its label, the value the client sends back, and the field value it stands for. */
-    private record Choice(String label, String value, int fieldValue, String state) { }
+    /**
+     * One dropdown entry: its English label, the value the client sends back, the field value it
+     * stands for, its English switch state, and its text key (null for a bare number). A "unit."
+     * key is a template with {value} (numbers); others are "choice.<set>.<value>" (+ ".state").
+     */
+    private record Choice(String label, String value, int fieldValue, String state, String key) { }
 
     /** A row's dropdown entries, given the setting's current value (number lists include it). */
     private interface Options {
@@ -1517,27 +1594,43 @@ public final class DapperMapSettingsPage
         public List<Choice> choices(int current) { return this.list; }
     }
 
+    /** English unit templates by unit key ("unit.<name>" in dappermap.lang). */
+    private static final java.util.Map<String, String> UNITS = java.util.Map.of(
+            "blocks", "{value} blocks", "px", "{value} px", "percent", "{value}%");
+
     /** Numbers in ascending order, plus the current value when it is not one of them (e.g. "128 blocks"). */
     private record Numbers(int[] base, String unit) implements Options {
         public List<Choice> choices(int current) {
             TreeSet<Integer> values = new TreeSet<>();
             for (int value : this.base) values.add(value);
             values.add(current);
+            String english = UNITS.get(this.unit);
             List<Choice> out = new ArrayList<>(values.size());
-            for (int value : values) out.add(new Choice(value + this.unit, Integer.toString(value), value, null));
+            for (int value : values) {
+                String text = Integer.toString(value);
+                out.add(new Choice(english.replace("{value}", text), text, value, null, "unit." + this.unit));
+            }
             return out;
         }
     }
 
-    private static Options choices(Choice... choices) { return new Fixed(List.of(choices)); }
+    /** A fixed list of entries; each gets the key "choice.<set>.<value>" (no keys when set is null). */
+    private static Options choices(String set, Choice... choices) {
+        Choice[] keyed = new Choice[choices.length];
+        for (int i = 0; i < choices.length; i++) {
+            Choice c = choices[i];
+            keyed[i] = new Choice(c.label(), c.value(), c.fieldValue(), c.state(), set == null ? null : "choice." + set + "." + c.value());
+        }
+        return new Fixed(List.of(keyed));
+    }
 
     /** Two entries for a 0/1 setting: the one shown first, then the other. */
-    private static Choice on(String label, String value, String state) { return new Choice(label, value, 1, state); }
-    private static Choice off(String label, String value, String state) { return new Choice(label, value, 0, state); }
+    private static Choice on(String label, String value, String state) { return new Choice(label, value, 1, state, null); }
+    private static Choice off(String label, String value, String state) { return new Choice(label, value, 0, state, null); }
 
     /** Enabled/Disabled for an on/off setting. */
-    private static final Options ON_OFF = choices(on("Enabled", "true", "ENABLED"), off("Disabled", "false", "DISABLED"));
-    private static final Options ICONS_DOTS = choices(on("Icons", "icons", null), off("Dots", "dots", null));
+    private static final Options ON_OFF = choices("on_off", on("Enabled", "true", "ENABLED"), off("Disabled", "false", "DISABLED"));
+    private static final Options ICONS_DOTS = choices("style", on("Icons", "icons", null), off("Dots", "dots", null));
 
     /** Every value from {@code min} to {@code max} in {@code step}s. */
     private static int[] steps(int min, int max, int step) {
@@ -1547,10 +1640,10 @@ public final class DapperMapSettingsPage
     }
 
     /** Integer entries labelled by {@code labels}, valued 0, 1, 2... in the order given by {@code values}. */
-    private static Options indexed(String[] labels, int... values) {
+    private static Options indexed(String set, String[] labels, int... values) {
         Choice[] out = new Choice[values.length];
-        for (int i = 0; i < values.length; i++) out[i] = new Choice(labels[i], Integer.toString(values[i]), values[i], null);
-        return choices(out);
+        for (int i = 0; i < values.length; i++) out[i] = new Choice(labels[i], Integer.toString(values[i]), values[i], null, null);
+        return choices(set, out);
     }
 
     private static final List<Row> ROW_LIST = new ArrayList<>();
@@ -1581,17 +1674,17 @@ public final class DapperMapSettingsPage
         row("enabled", "Minimap", Kind.TOGGLE, DynamicMinimapSetting.Field.ENABLED, null, "Show or hide your minimap.");
         header("section_0", "MAP APPEARANCE");
         row("zoom", "Zoom Radius", Kind.DROPDOWN, DynamicMinimapSetting.Field.ZOOM_BLOCKS,
-                new Numbers(steps(DynamicMinimapSetting.ZOOM_MIN, DynamicMinimapSetting.ZOOM_MAX, 16), " blocks"),
+                new Numbers(steps(DynamicMinimapSetting.ZOOM_MIN, DynamicMinimapSetting.ZOOM_MAX, 16), "blocks"),
                 "Choose how far around you the map shows.");
         row("size", "Map Size", Kind.DROPDOWN, DynamicMinimapSetting.Field.SIZE_PIXELS,
-                new Numbers(steps(DynamicMinimapSetting.SIZE_MIN, DynamicMinimapSetting.SIZE_MAX, 20), " px"),
+                new Numbers(steps(DynamicMinimapSetting.SIZE_MIN, DynamicMinimapSetting.SIZE_MAX, 20), "px"),
                 "Change the size of the map on your screen. Markers grow with larger maps.");
         row("interface_scale", "Interface Scale", Kind.DROPDOWN, DynamicMinimapSetting.Field.INTERFACE_SCALE,
-                new Numbers(new int[]{75, 85, 100, 110, 125, 140, 160}, "%"), "Resize the map and its information together.");
+                new Numbers(new int[]{75, 85, 100, 110, 125, 140, 160}, "percent"), "Resize the map and its information together.");
         row("shape", "Map Shape", Kind.SWITCH, DynamicMinimapSetting.Field.SHAPE,
-                choices(on("Circle", "1", "CIRCLE"), off("Square", "0", "SQUARE")), "Choose a round or square map.");
+                choices("shape", on("Circle", "1", "CIRCLE"), off("Square", "0", "SQUARE")), "Choose a round or square map.");
         row("rotation", "Map Rotation", Kind.SWITCH, DynamicMinimapSetting.Field.ROTATION_MODE,
-                choices(off("North Up", "0", "NORTH UP"), on("Player Facing", "1", "PLAYER FACING")),
+                choices("rotation", off("North Up", "0", "NORTH UP"), on("Player Facing", "1", "PLAYER FACING")),
                 "Keep north at the top, or turn the map with the direction you face.");
         // Compass ring around the map (part of the map, not the Info Panel).
         header("section_compass", "COMPASS RING");
@@ -1607,9 +1700,9 @@ public final class DapperMapSettingsPage
         row(FONT_SIZES.sliderRow(), "Size", Kind.SLIDER, null, null, FONT_SIZES.description());
         header("section_performance", "PERFORMANCE");
         row("speed", "Update Speed", Kind.DROPDOWN, DynamicMinimapSetting.Field.UPDATE_SPEED,
-                indexed(DapperMapConfig.SPEED_LABELS, 0, 1, 2, 3), "How often the minimap refreshes. Faster uses more server work.");
+                indexed("speed", DapperMapConfig.SPEED_LABELS, 0, 1, 2, 3), "How often the minimap refreshes. Faster uses more server work.");
         row("texture_resolution", "Texture Resolution", Kind.DROPDOWN, DynamicMinimapSetting.Field.TEXTURE_RESOLUTION,
-                new Numbers(DynamicMinimapSetting.TEXTURE_RESOLUTIONS, " px"),
+                new Numbers(DynamicMinimapSetting.TEXTURE_RESOLUTIONS, "px"),
                 "Sharper map detail. Higher values use more server work and data.");
         // Admin page only (Server Limits tab): server-wide limits that clamp every live minimap.
         addingTab = Tab.SERVER;
@@ -1625,11 +1718,11 @@ public final class DapperMapSettingsPage
         addingTab = Tab.INTERFACE;
         row("info_panel", "Info Panel", Kind.TOGGLE, F_PANEL, null, "Show or hide the Info Panel while keeping the minimap visible.");
         row("panel_position", "Info Panel Position", Kind.DROPDOWN, DynamicMinimapSetting.Field.INFO_PANEL_POSITION,
-                indexed(new String[]{"Right", "Left", "Above", "Below"}, DynamicMinimapSetting.INFO_RIGHT,
+                indexed("panel_position", new String[]{"Right", "Left", "Above", "Below"}, DynamicMinimapSetting.INFO_RIGHT,
                         DynamicMinimapSetting.INFO_LEFT, DynamicMinimapSetting.INFO_ABOVE, DynamicMinimapSetting.INFO_BELOW),
                 "Choose which side of the map the Info Panel sits on.", F_PANEL);
         row("panel_alignment", "Info Panel Alignment", Kind.DROPDOWN, DynamicMinimapSetting.Field.INFO_PANEL_TEXT_ALIGNMENT,
-                indexed(new String[]{"Left", "Centre", "Right"}, DynamicMinimapSetting.INFO_ALIGN_LEFT,
+                indexed("panel_alignment", new String[]{"Left", "Centre", "Right"}, DynamicMinimapSetting.INFO_ALIGN_LEFT,
                         DynamicMinimapSetting.INFO_ALIGN_CENTER, DynamicMinimapSetting.INFO_ALIGN_RIGHT),
                 "Align the Info Panel text left, centre or right.", F_PANEL);
         // Markers tab: player and creature details need their markers on.
@@ -1645,10 +1738,10 @@ public final class DapperMapSettingsPage
         row("creature_style", "Creature Marker Style", Kind.DROPDOWN, DynamicMinimapSetting.Field.CREATURE_ICONS, ICONS_DOTS,
                 "Show creatures as face icons or as threat-coloured dots.", F_ENTITIES);
         row("creature_filter", "Creature Filter", Kind.DROPDOWN, DynamicMinimapSetting.Field.HOSTILE_CREATURES_ONLY,
-                choices(off("All", "all", null), on("Hostile Only", "hostile", null)),
+                choices("creature_filter", off("All", "all", null), on("Hostile Only", "hostile", null)),
                 "Show all creatures, or only hostile and attacking ones.", F_ENTITIES);
         row("creature_limit", "Creature Marker Limit", Kind.DROPDOWN, DynamicMinimapSetting.Field.CREATURE_MARKER_LIMIT,
-                indexed(new String[]{"16", "32", "64"}, DynamicMinimapSetting.CREATURE_LIMITS),
+                indexed(null, new String[]{"16", "32", "64"}, DynamicMinimapSetting.CREATURE_LIMITS),
                 "Show up to 16, 32 or 64 nearby creatures, prioritising the nearest.", F_ENTITIES);
         row("height", "Creature Height Filter", Kind.SWITCH, DynamicMinimapSetting.Field.LIMIT_MOB_HEIGHT, ON_OFF,
                 "Hide creatures far above or below you.", F_ENTITIES);
@@ -1657,7 +1750,7 @@ public final class DapperMapSettingsPage
         vrange[0] = DynamicMinimapSetting.HEIGHT_RANGE_MIN;
         System.arraycopy(heights, 0, vrange, 1, heights.length);
         row("vrange", "Height Filter Range", Kind.DROPDOWN, DynamicMinimapSetting.Field.MOB_VERTICAL_RANGE,
-                new Numbers(vrange, " blocks"), "How far above and below you creatures are shown.",
+                new Numbers(vrange, "blocks"), "How far above and below you creatures are shown.",
                 F_ENTITIES, DynamicMinimapSetting.Field.LIMIT_MOB_HEIGHT);
         header("section_other", "OTHER");
         row("death", "Death Markers", Kind.SWITCH, DynamicMinimapSetting.Field.SHOW_DEATH_MARKER, ON_OFF,
@@ -1676,10 +1769,10 @@ public final class DapperMapSettingsPage
         row("clock", "World Time", Kind.SWITCH, DynamicMinimapSetting.Field.SHOW_CLOCK, ON_OFF,
                 "Show the current time in your Hytale world.", F_PANEL);
         row("clock_format", "Clock Format", Kind.SWITCH, DynamicMinimapSetting.Field.CLOCK_24_HOUR,
-                choices(on("24-hour", "true", "24 HOUR"), off("12-hour", "false", "12 HOUR")),
+                choices("clock_format", on("24-hour", "true", "24 HOUR"), off("12-hour", "false", "12 HOUR")),
                 "Choose a 12-hour or 24-hour clock.", F_PANEL, DynamicMinimapSetting.Field.SHOW_CLOCK);
         row("biome", "Region", Kind.SWITCH, DynamicMinimapSetting.Field.SHOW_BIOME, ON_OFF,
-                "Show the name of the region (biome) you are in.", F_PANEL);
+                "Show the name of the region you are in.", F_PANEL);
         // Integrations tab: BetterMap rows also need BetterMap installed (isDropdownDisabled).
         addingTab = Tab.INTEGRATIONS;
         header("section_4", "HYTALE");
