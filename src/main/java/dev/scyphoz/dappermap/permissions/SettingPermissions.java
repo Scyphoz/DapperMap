@@ -89,6 +89,7 @@ public final class SettingPermissions {
         node("markers.creature-limit", "creature_limit", Field.CREATURE_MARKER_LIMIT);
         node("markers.height-filter", "height", Field.LIMIT_MOB_HEIGHT);
         node("markers.height-range", "vrange", Field.MOB_VERTICAL_RANGE);
+        node("markers.critters", "critters", Field.CRITTER_FILTER);
         node("markers.memories", "memories", Field.MEMORY_HINTS);
         node("markers.death", "death", Field.SHOW_DEATH_MARKER);
         // Marker Size: one node per marker group (the page's group dropdown lists the permitted ones).

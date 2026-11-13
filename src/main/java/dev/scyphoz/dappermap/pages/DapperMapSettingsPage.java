@@ -1752,6 +1752,11 @@ public final class DapperMapSettingsPage
         row("vrange", "Height Filter Range", Kind.DROPDOWN, DynamicMinimapSetting.Field.MOB_VERTICAL_RANGE,
                 new Numbers(vrange, "blocks"), "How far above and below you creatures are shown.",
                 F_ENTITIES, DynamicMinimapSetting.Field.LIMIT_MOB_HEIGHT);
+        row("critters", "Critter Markers", Kind.DROPDOWN, DynamicMinimapSetting.Field.CRITTER_FILTER,
+                indexed("critters", new String[]{"Show All", "Hide Ground", "Hide Flying", "Hide Both"},
+                        DynamicMinimapSetting.CRITTERS_SHOW, DynamicMinimapSetting.CRITTERS_HIDE_GROUND,
+                        DynamicMinimapSetting.CRITTERS_HIDE_FLYING, DynamicMinimapSetting.CRITTERS_HIDE_BOTH),
+                "Hide harmless ground critters (mice, frogs), flying critters (birds, bats), or both.", F_ENTITIES);
         row("memories", "Uncollected Memories", Kind.SWITCH, DynamicMinimapSetting.Field.MEMORY_HINTS, ON_OFF,
                 "Slowly flash creatures that still have a memory for you to collect.", F_ENTITIES);
         header("section_other", "OTHER");

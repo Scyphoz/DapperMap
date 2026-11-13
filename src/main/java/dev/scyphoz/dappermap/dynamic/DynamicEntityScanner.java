@@ -78,6 +78,8 @@ public final class DynamicEntityScanner {
         NearestNpcs creatures = settings.showEntities
                 ? new NearestNpcs(settings.creatureMarkerLimit, hostileOnly, playerX, playerZ) : null;
         double verticalRange = settings.limitMobHeight ? (double)settings.mobVerticalRange : (double)0.0F;
+        // Critter Markers: passive (flee-only) ground and/or flying critters to leave out (bits, 0 = none).
+        int hiddenCritters = settings.critterFilter;
         if (settings.showEntities) {
             // Exact radius and height checks on current positions; only the nearest few are kept.
             for (Ref<EntityStore> npcRef : nearbyOrScan(store, playerPosition, radius, verticalRange, true)) {
@@ -91,6 +93,10 @@ public final class DynamicEntityScanner {
                             || !creatures.wouldAccept(position.x(), position.z())) continue;
                     NPCEntity npc = store.getComponent(npcRef, NPCEntity.getComponentType());
                     if (npc == null) continue;
+                    // Hidden critters are dropped before the nearest-first limit (they never use a
+                    // marker slot) and need no threat check: flee-only creatures can't attack.
+                    // One cached per-role lookup; a role still loading shows until it is known.
+                    if (hiddenCritters != 0 && (profileOf(npc).critter() & hiddenCritters) != 0) continue;
                     creatures.add(npcRef, npc, position.x(), position.z());
                 } catch (RuntimeException ignored) { }
             }
@@ -1146,9 +1152,19 @@ public final class DynamicEntityScanner {
     /** Conservative native-template adapters plus structural state/action inspection.
      * Reads current asset definitions, never species names or predator group membership.
      * This is deliberately not a general Hytale expression interpreter. */
-    static record NpcThreatProfile(Kind kind, boolean combatStates, Set<String> offensiveRoots) {
+    /**
+     * {@code critter}: Critter Markers bits for a creature that can only flee (never attack):
+     * {@link #GROUND_CRITTER} for Hytale's "Critter" memory category (mice, frogs, squirrels,
+     * snails...), {@link #FLYING_CRITTER} for one that moves by flying (birds, bats). 0 otherwise.
+     */
+    static record NpcThreatProfile(Kind kind, boolean combatStates, Set<String> offensiveRoots, int critter) {
+        static final int GROUND_CRITTER = DynamicMinimapSetting.CRITTERS_HIDE_GROUND;
+        static final int FLYING_CRITTER = DynamicMinimapSetting.CRITTERS_HIDE_FLYING;
         NpcThreatProfile(Kind kind, boolean combatStates) {
             this(kind, combatStates, combatStates ? Set.of("Combat", "Flee.Attack") : Set.of());
+        }
+        NpcThreatProfile(Kind kind, boolean combatStates, Set<String> offensiveRoots) {
+            this(kind, combatStates, offensiveRoots, 0);
         }
         enum Kind { UNKNOWN, FLEE_ONLY, EVASIVE, AGGRESSIVE, DEFENSIVE, STANDARD }
         static final NpcThreatProfile UNKNOWN = new NpcThreatProfile(Kind.UNKNOWN, false);
@@ -1189,7 +1205,7 @@ public final class DynamicEntityScanner {
             return switch (name) {
                 case "Template_Beasts_Passive_Critter", "Template_Birds_Passive",
                      "Template_Swimming_Passive", "Template_Edible_Critter" ->
-                        new NpcThreatProfile(Kind.FLEE_ONLY, false);
+                        new NpcThreatProfile(Kind.FLEE_ONLY, false, Set.of(), critterBits(values, parameters));
                 case "Template_Predator" -> {
                     // Most predator variants (zombies, ghoul, werewolf, raptor, ...) don't set the
                     // flag themselves: fall back to the template's parameter default (false in 0.7.1).
@@ -1201,6 +1217,28 @@ public final class DynamicEntityScanner {
                         new NpcThreatProfile(Kind.STANDARD, true);
                 default -> inferStructure(values, parameters, assets);
             };
+        }
+
+        /**
+         * Critter Markers bits for a creature with no attacks (flee-only or evasive): ground when
+         * its memory category is "Critter", flying when it has a Fly motion controller. Read from
+         * the same resolved role values as the threat profile, so it costs no extra asset reads.
+         */
+        private static int critterBits(Map<String, JsonElement> values, Map<String, JsonElement> parameters) {
+            int bits = 0;
+            try {
+                JsonElement controllers = values.get("MotionControllerList");
+                if (controllers != null && controllers.isJsonArray()) {
+                    for (JsonElement controller : controllers.getAsJsonArray()) {
+                        JsonObject object = jsonObject(controller);
+                        if (object != null && "Fly".equals(jsonString(object.get("Type")))) bits |= FLYING_CRITTER;
+                    }
+                }
+                // Flyers count as flying only, so Hide Ground never hides a bird.
+                if (bits == 0 && "Critter".equals(jsonString(evaluate(values.get("MemoriesCategory"), parameters, new HashSet<>()))))
+                    bits |= GROUND_CRITTER;
+            } catch (RuntimeException ignored) { }
+            return bits;
         }
 
         /** States that never count as offensive, even when an attack is nested inside them. */
@@ -1226,7 +1264,7 @@ public final class DynamicEntityScanner {
             Set<String> offensive = new HashSet<>();
             collectOffensiveStates(instructions, "", offensive, 0);
             if (offensive.isEmpty()) return NpcAssetEvasion.avoidsPlayer(instructions, parameters, values, assets)
-                    ? new NpcThreatProfile(Kind.EVASIVE, false) : UNKNOWN;
+                    ? new NpcThreatProfile(Kind.EVASIVE, false, Set.of(), critterBits(values, parameters)) : UNKNOWN;
             Kind kind = Kind.STANDARD;
             // This explicit decision governs whether a detected player is fled from or
             // passed to combat. It excludes owner-follow/taming trees with different rules.

@@ -15,7 +15,8 @@ DapperMap adds a live minimap to the Hytale HUD. It combines nearby terrain, a d
 - Player, creature, death and world-map markers that grow with larger maps
 - Adjustable font sizes for the information panel and compass letters, and adjustable marker sizes per marker type
 - Creature icons drawn from each creature's own model, including creatures added by other mods, with threat-coloured outlines (classic coloured dots are also available)
-- Optional hostile-only creature filter
+- Optional hostile-only creature filter, and an option to hide harmless ground and/or flying critters
+- Creatures that still hold a memory for you to collect flash slowly in a light blue
 - Player head icons drawn from each player's own skin, with or without their helmet, that flash in the attacking colour when a player attacks you in PvP
 - Optional BetterMap waypoint integration
 - Coordinates, bearing, world time and region readouts
@@ -154,6 +155,21 @@ The number of visible creature markers is selectable as **16 (default), 32 or 64
 
 The **Creature Height Filter** can hide creatures that are too far above or below the player. Its **Height Filter Range** is configurable from 4 to 256 blocks.
 
+#### Critter markers
+
+**Critter Markers** can hide harmless critters that clutter the map: **Show All (default)**, **Hide Ground**, **Hide Flying** or **Hide Both**.
+
+- **Ground critters** are creatures in Hytale's Critter memory category that can only flee, never attack: mice, squirrels, geckos, meerkats, frogs and snails.
+- **Flying critters** are creatures that move by flying and can only flee: ducks, pigeons, sparrows, bluebirds, finches, crows, ravens, parrots, woodpeckers, owls, bats, hawks, vultures, archaeopteryx and pterodactyls.
+
+Both are read from each creature's own definition, so modded creatures built the same way are sorted the same way. Creatures that can attack are never hidden: rats, snakes, scorpions and spiders always show, as do livestock (including rabbits and bunnies), walking birds such as flamingos and penguins, and fish. Hidden critters don't count towards the creature marker limit, so a flock of birds can't push more distant creatures off the map. A hidden critter doesn't flash for Uncollected Memories either.
+
+#### Uncollected memories
+
+With **Uncollected Memories** on (default), creatures that still hold a memory for you to collect slowly flash in the Uncollected Memories colour (light blue by default, like the memory that floats to you in game). Both icons and dots flash, more slowly than attacking creatures. A creature attacking you keeps the attacking flash instead.
+
+A creature stops flashing once you have collected its memory, or once anyone on the server has restored that memory at the Heart of Orbis in the Forgotten Temple (restored memories are shared by the whole server, so the game no longer gives them out). Nothing flashes outside Adventure mode or before you have unlocked memories, because the game would not give you one then. In Hostile Only mode, passive creatures are hidden, so they do not flash either.
+
 ### Death markers
 
 When enabled, DapperMap shows the death markers that Hytale records for the player in the current world, the same markers shown on the full world map. They are edge-tracked like other map markers. Hytale's world setting for displaying death markers is respected, and when BetterMap is installed its death-marker hide options apply too. The Death Markers colour tints these icons (the default keeps their original look).
@@ -189,7 +205,7 @@ The in-game colour editor provides a live preview and lets players customise:
 
 - **Frame:** Map Edge, Cardinal Dashes (the large N, E, S, W dashes and letter badge outlines), Compass Dashes (the small dashes) and Compass Letters
 - **Info Panel:** Background, Title, Headings, and the Coordinates, Bearing, World Time and Region text
-- **Markers:** Your Locator, Other Players (player dots and player icon outlines), Death Markers, and Attacking, Hostile, Neutral and Friendly creatures (creature dots and icon outlines; Attacking also marks players who attack you in PvP)
+- **Markers:** Your Locator, Other Players (player dots and player icon outlines), Death Markers, Attacking, Hostile, Neutral and Friendly creatures (creature dots and icon outlines; Attacking also marks players who attack you in PvP), and Uncollected Memories (the slow flash on creatures with a memory to collect)
 
 The editor lists only the colours the player has permission to change, and **Reset All** leaves locked colours unchanged.
 
@@ -290,6 +306,8 @@ All DapperMap commands require a live player context because they operate on a p
 | `/dappermap markers creature-limit 16\|32\|64` | Creature Marker Limit |
 | `/dappermap markers height-filter on\|off` | Creature Height Filter |
 | `/dappermap markers height-range <4..256>` | Height Filter Range, in blocks above and below you |
+| `/dappermap markers critters all\|ground\|flying\|both` | Critter Markers: hide harmless ground critters, flying critters, or both |
+| `/dappermap markers memories on\|off` | Uncollected Memories |
 | `/dappermap markers death on\|off` | Death Markers |
 | `/dappermap markers size-creatures <50..200>` | Marker Size: Creatures (percent) |
 | `/dappermap markers size-players <50..200>` | Marker Size: Players (percent) |
@@ -334,7 +352,7 @@ All DapperMap commands require a live player context because they operate on a p
 | `/dappermap colours <target> <R G B>` | Set a colour using decimal RGB channels from 0 to 255 |
 | `/dappermap colours reset <target\|all>` | Reset one colour, or every colour you may change |
 
-Colour targets match the colour editor: `map-edge`, `cardinal-dashes`, `compass-dashes`, `compass-letters`, `panel-background`, `panel-title`, `panel-headings`, `coordinates`, `bearing`, `world-time`, `region`, `locator`, `players`, `death`, `attacking`, `hostile`, `neutral` and `friendly`.
+Colour targets match the colour editor: `map-edge`, `cardinal-dashes`, `compass-dashes`, `compass-letters`, `panel-background`, `panel-title`, `panel-headings`, `coordinates`, `bearing`, `world-time`, `region`, `locator`, `players`, `death`, `attacking`, `hostile`, `neutral`, `friendly` and `memory`.
 
 ### Administrator commands
 
@@ -502,6 +520,8 @@ All player nodes start with `dappermap.command.`.
 | `markers.creature-limit` | Creature Marker Limit |
 | `markers.height-filter` | Creature Height Filter |
 | `markers.height-range` | Height Filter Range |
+| `markers.critters` | Critter Markers |
+| `markers.memories` | Uncollected Memories |
 | `markers.death` | Death Markers |
 | `markers.size-creatures` | Marker Size: Creatures |
 | `markers.size-players` | Marker Size: Players |

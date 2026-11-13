@@ -43,6 +43,9 @@ public final class DynamicMinimapSetting {
     public static final String[] ROTATION_NAMES = {"north", "player"};
     public static final String[] PANEL_POSITION_NAMES = {"below", "above", "left", "right"};
     public static final String[] PANEL_ALIGNMENT_NAMES = {"left", "centre", "right"};
+    /** Critter Markers: bit 1 hides ground critters, bit 2 flying critters (0 shows all, 3 hides both). */
+    public static final int CRITTERS_SHOW = 0, CRITTERS_HIDE_GROUND = 1, CRITTERS_HIDE_FLYING = 2, CRITTERS_HIDE_BOTH = 3;
+    public static final String[] CRITTER_NAMES = {"all", "ground", "flying", "both"};
 
     /**
      * Font Size (percent of the standard size) and the stops its settings-page slider offers:
@@ -90,6 +93,8 @@ public final class DynamicMinimapSetting {
     public int mobVerticalRange = 16; // Blocks above/below the player; 16 hides most underground creatures.
     /** Creatures that still hold a memory for this player to collect flash slowly in the memory colour. */
     public boolean memoryHints = true;
+    /** Critter Markers (CRITTERS_*): which passive critters are left off the minimap. */
+    public int critterFilter = CRITTERS_SHOW;
 
     /**
      * Legacy four-corner setting retained for migration/backward compatibility.
@@ -171,6 +176,7 @@ public final class DynamicMinimapSetting {
         LIMIT_MOB_HEIGHT("limitMobHeight", true, s -> s.limitMobHeight ? 1 : 0, (s, v) -> s.limitMobHeight = v != 0),
         MOB_VERTICAL_RANGE("mobVerticalRange", false, s -> s.mobVerticalRange, (s, v) -> s.mobVerticalRange = v),
         MEMORY_HINTS("memoryHints", true, s -> s.memoryHints ? 1 : 0, (s, v) -> s.memoryHints = v != 0),
+        CRITTER_FILTER("critterFilter", false, s -> s.critterFilter, (s, v) -> s.critterFilter = v),
         HUD_POSITION_X("hudPositionX", false, s -> s.hudPositionX, (s, v) -> s.hudPositionX = v),
         HUD_POSITION_Y("hudPositionY", false, s -> s.hudPositionY, (s, v) -> s.hudPositionY = v),
         INFO_PANEL_ENABLED("infoPanelEnabled", true, s -> s.infoPanelEnabled ? 1 : 0, (s, v) -> s.infoPanelEnabled = v != 0),
@@ -342,6 +348,7 @@ public final class DynamicMinimapSetting {
         this.hudPositionY = clamp(this.hudPositionY, POSITION_MIN, POSITION_MAX);
         this.infoPanelPosition = clamp(this.infoPanelPosition, INFO_BELOW, INFO_RIGHT);
         this.infoPanelTextAlignment = clamp(this.infoPanelTextAlignment, INFO_ALIGN_LEFT, INFO_ALIGN_RIGHT);
+        this.critterFilter = clamp(this.critterFilter, CRITTERS_SHOW, CRITTERS_HIDE_BOTH);
 
         this.updateSpeed = clamp(this.updateSpeed, SPEED_FASTEST, SPEED_SLOWEST);
 

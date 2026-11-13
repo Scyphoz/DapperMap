@@ -245,6 +245,8 @@ public final class DynamicMinimapSession {
     private boolean builtHostileOnly;
     /** Uncollected Memories setting the cached markers were scanned with. */
     private boolean builtMemoryHints;
+    /** Critter Markers filter the cached markers were scanned with. */
+    private int builtCritterFilter;
     /** Player marker style and helmet setting the cached markers were scanned with. */
     private boolean builtPlayerIcons, builtPlayerHelmets;
     private int lastMapRotationBucket = -1;
@@ -985,11 +987,13 @@ public final class DynamicMinimapSession {
             if (this.settings.creatureIcons != this.builtCreatureIcons
                     || this.settings.hostileCreaturesOnly != this.builtHostileOnly
                     || this.settings.memoryHints != this.builtMemoryHints
+                    || this.settings.critterFilter != this.builtCritterFilter
                     || this.settings.playerIcons != this.builtPlayerIcons
                     || this.settings.playerIconHelmets != this.builtPlayerHelmets) {
                 this.builtCreatureIcons = this.settings.creatureIcons;
                 this.builtHostileOnly = this.settings.hostileCreaturesOnly;
                 this.builtMemoryHints = this.settings.memoryHints;
+                this.builtCritterFilter = this.settings.critterFilter;
                 this.builtPlayerIcons = this.settings.playerIcons;
                 this.builtPlayerHelmets = this.settings.playerIconHelmets;
                 this.lastMarkerMs = 0L;
