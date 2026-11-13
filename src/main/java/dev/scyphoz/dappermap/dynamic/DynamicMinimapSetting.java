@@ -392,8 +392,10 @@ public final class DynamicMinimapSetting {
             {300L, 600L, 1200L, 2500L}, // TERRAIN: shortest gap between terrain renders
             {25L, 40L, 60L, 100L},      // ROTATION_POLL: heading polls (40 Hz scheduler ceiling .. 10 Hz)
             {100L, 125L, 200L, 300L},   // ROTATION: player-up frame renders (10, 8, 5, ~3 Hz)
-            {125L, 150L, 250L, 500L}};  // OVERLAY: HUD overlay re-renders
-    private static final int PAN = 0, MARKERS = 1, SIGNATURE = 2, TERRAIN = 3, ROTATION_POLL = 4, ROTATION = 5, OVERLAY = 6;
+            {125L, 150L, 250L, 500L},   // OVERLAY: HUD overlay re-renders
+            {1000L, 1500L, 2500L, 5000L}}; // REFRESH: shortest gap between redraws for terrain changes only
+    private static final int PAN = 0, MARKERS = 1, SIGNATURE = 2, TERRAIN = 3, ROTATION_POLL = 4, ROTATION = 5, OVERLAY = 6,
+            REFRESH = 7;
 
     /** Timing of one kind at the current speed; an out-of-range speed uses normal, as before. */
     private long timing(int kind) {
@@ -412,6 +414,14 @@ public final class DynamicMinimapSetting {
 
     /** Shortest gap between terrain renders (ms). */
     public long terrainIntervalMs() { return this.timing(TERRAIN); }
+
+    /**
+     * Shortest gap (ms) before a redraw that is due only to changed terrain (no pan, recentre
+     * or retry). Since Hytale 0.8.0-pre.5 a chunk's map image is rebuilt every second while its
+     * blocks or fluids change (building, farms, flowing water); each redraw resends the whole
+     * terrain image, so these are spaced further apart than ordinary terrain renders.
+     */
+    public long terrainRefreshIntervalMs() { return this.timing(REFRESH); }
 
     /**
      * How often the heading is polled (ms). Heading-only updates are intentionally faster than

@@ -108,6 +108,8 @@ public final class DynamicMinimapRenderer {
      * {@code chunkLoaded} (see {@link #loadedChunkFilter}; null = no gating) keeps image requests
      * to loaded world chunks: an unloaded chunk only uses an image already in memory, so a render
      * never makes the server load or generate terrain. A skipped chunk counts as missing.
+     * A surface chunk whose image is missing (e.g. Hytale is rebuilding it after a terrain
+     * change) is drawn from its last image if seen in the last few seconds (see LAST_IMAGES).
      */
     public static Terrain renderTerrain(WorldMapManager worldMapManager, double centerX, double centerZ,
                                         DynamicMinimapSetting settings, BiFunction<Integer, Integer, MapImage> caveImages,
@@ -158,6 +160,10 @@ public final class DynamicMinimapRenderer {
             BufferedImage chunkImage = null;
             int[] chunkArgb = null;
             Object interpolation = null; // Current interpolation hint, set only when it changes.
+            // Surface renders only: last-drawn images, covering Hytale's rebuild of changed chunks.
+            ConcurrentHashMap<Long, LastImage> lastImages = caveImages == null && worldMapManager != null
+                    ? lastImagesFor(worldMapManager) : null;
+            long now = System.currentTimeMillis();
             for (int[] coordinate : chunks) {
                 int chunkX = coordinate[0], chunkZ = coordinate[1];
                 ++total;
@@ -173,15 +179,22 @@ public final class DynamicMinimapRenderer {
                     } else if (caveImages != null) {
                         image = caveImages.apply(chunkX, chunkZ);
                     } else {
-                        image = worldMapManager.getImageIfInMemory(chunkX, chunkZ);
+                        long index = ChunkUtil.indexChunk(chunkX, chunkZ);
+                        image = worldMapManager.getImageIfInMemory(index);
                         if (image == null) {
                             // World-map chunk index == ChunkStore column index (both 32 blocks,
                             // ChunkUtil.indexChunk): no conversion. Unloaded: no request slot used.
-                            if (gated && !chunkLoaded.test(ChunkUtil.indexChunk(chunkX, chunkZ))) ++unloaded;
+                            if (gated && !chunkLoaded.test(index)) ++unloaded;
                             else if (requests < surfaceBudget) {
                                 ++requests;
-                                image = worldMapManager.getImageAsync(chunkX, chunkZ).getNow(null);
+                                image = worldMapManager.getImageAsync(index).getNow(null);
                             }
+                            // Still building (e.g. dropped by a terrain refresh): draw the last image
+                            // instead of a hole. Its hash is recorded, so the probe redraws when the
+                            // rebuilt image arrives with different pixels.
+                            if (image == null) image = lastImage(lastImages, index, now);
+                        } else {
+                            rememberImage(lastImages, index, image, now);
                         }
                     }
                     // Hash before drawing, so an image that fails to decode still counts as seen.
@@ -321,6 +334,65 @@ public final class DynamicMinimapRenderer {
             if (hash != 0L && hash != shown[i]) return true;
         }
         return false;
+    }
+
+    // ---------------------------------------------------------------------------------
+    // Last-drawn surface images (Hytale 0.8.0-pre.5 world-map refresh)
+    // ---------------------------------------------------------------------------------
+
+    /**
+     * How long a last-drawn image may stand in for a missing one. Since 0.8.0-pre.5 Hytale
+     * (WorldMapRefreshHandler, once a second) drops the map image of any chunk whose blocks,
+     * fluids or heightmap changed, then rebuilds it a moment later; its own world map keeps the
+     * old image on the client meanwhile. A render landing in that gap would otherwise draw a
+     * background hole until the next retry. Rebuilds take well under a second.
+     */
+    private static final long LAST_IMAGE_TTL_MS = 5_000L;
+    /** Above this many entries in a world, expired ones are pruned (at most once a second). */
+    private static final int LAST_IMAGE_PRUNE_AT = 1_024;
+    /** Hard cap per world; cleared when reached (it refills from the next renders). */
+    private static final int LAST_IMAGE_MAX = 4_096;
+    private static final java.util.concurrent.atomic.AtomicLong LAST_IMAGE_PRUNED_MS = new java.util.concurrent.atomic.AtomicLong();
+
+    /** A chunk image last seen in Hytale's cache, and when (time updated in place: no allocation per render). */
+    private static final class LastImage {
+        final MapImage image;
+        volatile long seenMs;
+        LastImage(MapImage image, long seenMs) { this.image = image; this.seenMs = seenMs; }
+    }
+
+    /**
+     * Last-drawn images per world map, shared by all players. Weakly keyed, so a removed world's
+     * entries go with it. Mostly the same objects Hytale's cache still holds, so the only extra
+     * memory is images Hytale dropped in the last few seconds.
+     */
+    private static final Map<WorldMapManager, ConcurrentHashMap<Long, LastImage>> LAST_IMAGES =
+            java.util.Collections.synchronizedMap(new java.util.WeakHashMap<>());
+
+    private static ConcurrentHashMap<Long, LastImage> lastImagesFor(WorldMapManager manager) {
+        return LAST_IMAGES.computeIfAbsent(manager, ignored -> new ConcurrentHashMap<>());
+    }
+
+    /** Records an image found in Hytale's cache; the same image again only refreshes its time. */
+    private static void rememberImage(ConcurrentHashMap<Long, LastImage> images, long index, MapImage image, long now) {
+        if (images == null) return;
+        LastImage last = images.get(index);
+        if (last != null && last.image == image) { last.seenMs = now; return; }
+        int size = images.size();
+        if (size >= LAST_IMAGE_MAX) images.clear();
+        else if (size >= LAST_IMAGE_PRUNE_AT) {
+            long pruned = LAST_IMAGE_PRUNED_MS.get();
+            if (now - pruned >= 1000L && LAST_IMAGE_PRUNED_MS.compareAndSet(pruned, now))
+                images.values().removeIf(entry -> now - entry.seenMs > LAST_IMAGE_TTL_MS);
+        }
+        images.put(index, new LastImage(image, now));
+    }
+
+    /** The chunk's last image if it was seen within {@link #LAST_IMAGE_TTL_MS}, else null. */
+    private static MapImage lastImage(ConcurrentHashMap<Long, LastImage> images, long index, long now) {
+        if (images == null) return null;
+        LastImage last = images.get(index);
+        return last != null && now - last.seenMs <= LAST_IMAGE_TTL_MS ? last.image : null;
     }
 
     /** Filter that never gates (no world, or the chunk store cannot be asked). */

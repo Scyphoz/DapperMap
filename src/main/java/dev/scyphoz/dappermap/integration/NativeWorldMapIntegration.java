@@ -233,9 +233,11 @@ public final class NativeWorldMapIntegration {
     /** One daemon thread for blocking providers; at most one lookup per player and provider is in flight. */
     private static final java.util.concurrent.ThreadPoolExecutor MARKER_EXECUTOR = markerExecutor("DapperMap-Spawn");
     /**
-     * One daemon thread for marker passes (all players, one pass per player in flight). A single
-     * thread mirrors Hytale's one world-map thread, so providers see no extra concurrency of
-     * their own beyond what Hytale already does.
+     * One daemon thread for marker passes (all players, one pass per player in flight). Providers
+     * must already be safe off the world thread, as Hytale calls them from its world-map thread;
+     * this thread adds at most one more reader. Since 0.8.0-pre.5 the block-marker provider
+     * (map markers placed on blocks) reads BlockMapMarkersResource under its own lock,
+     * so those markers no longer risk a failed read (and a skipped pass) while the world edits them.
      */
     private static final java.util.concurrent.ThreadPoolExecutor PASS_EXECUTOR = markerExecutor("DapperMap-Markers");
 

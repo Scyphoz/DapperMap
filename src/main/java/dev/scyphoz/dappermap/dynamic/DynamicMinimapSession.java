@@ -85,9 +85,11 @@ public final class DynamicMinimapSession {
     private final java.util.concurrent.ConcurrentMap<String, WorldTask> worldPending = new java.util.concurrent.ConcurrentHashMap<>();
 
     /**
-     * DapperMap's own heartbeat thread. Hytale's HytaleServer.SCHEDULED_EXECUTOR is a single
-     * thread shared by the whole server, so per-player minimap timers must not run there.
-     * Work on this thread is limited to cheap checks and handing tasks to world threads.
+     * DapperMap's own heartbeat thread. Work on it is limited to cheap checks and handing tasks
+     * to world threads. Hytale 0.8.0-pre.5 replaced its single shared scheduler with per-plugin
+     * TaskRegistry scheduling (virtual threads, Scheduler.MaxThreads); the heartbeat stays on
+     * this one platform thread so per-player timers never compete with server tasks for those
+     * workers, and the session fields marked "scheduler thread only" keep a single writer.
      */
     private static final java.util.concurrent.ScheduledExecutorService HEARTBEAT =
             java.util.concurrent.Executors.newSingleThreadScheduledExecutor(
@@ -1042,7 +1044,12 @@ public final class DynamicMinimapSession {
                     > panMargin * recenterFraction);
             boolean warmupRetry = !this.bufferComplete && now < this.warmupUntilMs && !noBuffer && now - this.lastTerrainMs >= 1000L;
             boolean needsTerrain = noBuffer || needsRecenter || signatureChanged || warmupRetry || caveChanged;
-            if (needsTerrain && now - this.lastTerrainMs >= this.settings.terrainIntervalMs()) {
+            // A redraw due only to changed terrain waits the longer refresh gap: Hytale 0.8 rebuilds
+            // changed chunk images every second (building, farms, flowing water), and each redraw
+            // resends the whole terrain image. The change stays pending until then.
+            boolean refreshOnly = signatureChanged && !(noBuffer || needsRecenter || warmupRetry || caveChanged);
+            long terrainGap = refreshOnly ? this.settings.terrainRefreshIntervalMs() : this.settings.terrainIntervalMs();
+            if (needsTerrain && now - this.lastTerrainMs >= terrainGap) {
                 if (noBuffer || needsRecenter) {
                     this.warmupUntilMs = now + 15000L;
                     this.bufferComplete = false;
