@@ -88,6 +88,8 @@ public final class DynamicMinimapSetting {
     public boolean showWorldMapMarkers = true;
     public boolean limitMobHeight = true;
     public int mobVerticalRange = 16; // Blocks above/below the player; 16 hides most underground creatures.
+    /** Creatures that still hold a memory for this player to collect flash slowly in the memory colour. */
+    public boolean memoryHints = true;
 
     /**
      * Legacy four-corner setting retained for migration/backward compatibility.
@@ -168,6 +170,7 @@ public final class DynamicMinimapSetting {
         SHOW_WORLD_MAP_MARKERS("showWorldMapMarkers", true, s -> s.showWorldMapMarkers ? 1 : 0, (s, v) -> s.showWorldMapMarkers = v != 0),
         LIMIT_MOB_HEIGHT("limitMobHeight", true, s -> s.limitMobHeight ? 1 : 0, (s, v) -> s.limitMobHeight = v != 0),
         MOB_VERTICAL_RANGE("mobVerticalRange", false, s -> s.mobVerticalRange, (s, v) -> s.mobVerticalRange = v),
+        MEMORY_HINTS("memoryHints", true, s -> s.memoryHints ? 1 : 0, (s, v) -> s.memoryHints = v != 0),
         HUD_POSITION_X("hudPositionX", false, s -> s.hudPositionX, (s, v) -> s.hudPositionX = v),
         HUD_POSITION_Y("hudPositionY", false, s -> s.hudPositionY, (s, v) -> s.hudPositionY = v),
         INFO_PANEL_ENABLED("infoPanelEnabled", true, s -> s.infoPanelEnabled ? 1 : 0, (s, v) -> s.infoPanelEnabled = v != 0),

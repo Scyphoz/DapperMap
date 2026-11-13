@@ -107,6 +107,8 @@ row.height = Filtro de altura
 row.height.desc = Oculta las criaturas muy por encima o por debajo de ti.
 row.vrange = Rango de altura
 row.vrange.desc = Hasta qué altura por encima y por debajo de ti se muestran criaturas.
+row.memories = Recuerdos sin recoger
+row.memories.desc = Hace parpadear despacio a las criaturas que aún tienen un recuerdo por recoger.
 row.section_other = OTROS
 row.death = Marcadores de muerte
 row.death.desc = Muestra los marcadores de muerte en tu minimapa.
@@ -269,6 +271,8 @@ colour.neutral = Criaturas neutrales
 colour.neutral.desc = Criaturas neutrales o en retirada.
 colour.friendly = Criaturas amistosas
 colour.friendly.desc = Criaturas amistosas cercanas.
+colour.memory = Recuerdos sin recoger
+colour.memory.desc = Criaturas con un recuerdo que aún no has recogido (parpadea despacio).
 
 # === HUD info panel and compass (keep these short: the HUD has fixed text widths; {time}, {period}, {day} are filled in) ===
 
@@ -354,6 +358,8 @@ command.markers.height-filter = Filtro de altura
 command.markers.height-filter.desc = Filtro de altura
 command.markers.height-range = Rango de altura
 command.markers.height-range.desc = Rango de altura (bloques por encima y por debajo de ti)
+command.markers.memories = Recuerdos sin recoger
+command.markers.memories.desc = Recuerdos sin recoger
 command.markers.death = Marcadores de muerte
 command.markers.death.desc = Marcadores de muerte
 command.markers.size-creatures = Tamaño de marcadores: Criaturas

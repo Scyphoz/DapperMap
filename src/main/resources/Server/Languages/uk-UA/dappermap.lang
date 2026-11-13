@@ -107,6 +107,8 @@ row.height = Фільтр за висотою
 row.height.desc = Ховати істот далеко вище або нижче вас.
 row.vrange = Діапазон висоти
 row.vrange.desc = Як далеко вище й нижче вас показуються істоти.
+row.memories = Незібрані спогади
+row.memories.desc = Повільно блимають істоти, у яких ще є для вас спогад.
 row.section_other = ІНШЕ
 row.death = Мітки смерті
 row.death.desc = Показувати мітки смерті на мінікарті.
@@ -269,6 +271,8 @@ colour.neutral = Нейтральні істоти
 colour.neutral.desc = Нейтральні або відступаючі істоти.
 colour.friendly = Дружні істоти
 colour.friendly.desc = Найближчі дружні істоти.
+colour.memory = Незібрані спогади
+colour.memory.desc = Істоти зі спогадом, який ви ще не зібрали (повільно блимає).
 
 # === HUD info panel and compass (keep these short: the HUD has fixed text widths; {time}, {period}, {day} are filled in) ===
 
@@ -354,6 +358,8 @@ command.markers.height-filter = Фільтр за висотою
 command.markers.height-filter.desc = Фільтр за висотою
 command.markers.height-range = Діапазон висоти
 command.markers.height-range.desc = Діапазон висоти (блоків вище й нижче вас)
+command.markers.memories = Незібрані спогади
+command.markers.memories.desc = Незібрані спогади
 command.markers.death = Мітки смерті
 command.markers.death.desc = Мітки смерті
 command.markers.size-creatures = Розмір міток: Істоти

@@ -17,6 +17,8 @@ public final class DynamicMinimapMarker {
     public final boolean player;
     /** A creature (icon or dot): sized by Marker Size: Creatures (world-map dots are not creatures). */
     public final boolean creature;
+    /** A creature still holding a memory for this player to collect: flashes slowly in the memory colour. */
+    public final boolean memory;
     /**
      * Compass alert (Hytale 0.7 CompassAlertComponent) on a world-map marker: the marker's id,
      * or null when it has no alert. The alert pulses the marker for {@link #alertMs} after it
@@ -33,7 +35,8 @@ public final class DynamicMinimapMarker {
 
     /** The one constructor for a marker without an alert (the factories below pick the flags). */
     private DynamicMinimapMarker(double x, double z, Color color, int size, Style style, String assetPath,
-                                 boolean clampToEdge, boolean threat, boolean player, boolean creature) {
+                                 boolean clampToEdge, boolean threat, boolean player, boolean creature,
+                                 boolean memory) {
         this.x = x;
         this.z = z;
         this.color = color;
@@ -44,6 +47,7 @@ public final class DynamicMinimapMarker {
         this.threat = threat;
         this.player = player;
         this.creature = creature;
+        this.memory = memory;
         this.alertId = null;
         this.alertMs = 0;
         this.alertLook = null;
@@ -61,6 +65,7 @@ public final class DynamicMinimapMarker {
         this.threat = base.threat;
         this.player = base.player;
         this.creature = base.creature;
+        this.memory = base.memory;
         this.alertId = alertId;
         this.alertMs = alertMs;
         this.alertLook = alertLook;
@@ -74,7 +79,7 @@ public final class DynamicMinimapMarker {
         if (id == null || durationMs <= 0) return this;
         DynamicMinimapMarker look = image == null && tint == null ? null
                 : new DynamicMinimapMarker(x, z, tint != null ? tint : color, size, style,
-                image != null ? image : assetPath, clampToEdge, threat, player, creature);
+                image != null ? image : assetPath, clampToEdge, threat, player, creature, memory);
         return new DynamicMinimapMarker(this, id, durationMs, look);
     }
 
@@ -84,12 +89,16 @@ public final class DynamicMinimapMarker {
     }
 
     public static DynamicMinimapMarker dot(double x, double z, Color color, int size) {
-        return new DynamicMinimapMarker(x, z, color, size, Style.DOT, null, false, false, false, false);
+        return new DynamicMinimapMarker(x, z, color, size, Style.DOT, null, false, false, false, false, false);
     }
 
-    /** Creature dot; {@code threat} marks hostile and attacking creatures (drawn on top). */
-    public static DynamicMinimapMarker creatureDot(double x, double z, Color color, int size, boolean threat) {
-        return new DynamicMinimapMarker(x, z, color, size, Style.DOT, null, false, threat, false, true);
+    /**
+     * Creature dot; {@code threat} marks hostile and attacking creatures (drawn on top), {@code memory}
+     * a creature with an uncollected memory.
+     */
+    public static DynamicMinimapMarker creatureDot(double x, double z, Color color, int size, boolean threat,
+                                                   boolean memory) {
+        return new DynamicMinimapMarker(x, z, color, size, Style.DOT, null, false, threat, false, true, memory);
     }
 
     /**
@@ -97,13 +106,13 @@ public final class DynamicMinimapMarker {
      * {@code color} is its threat colour, used for the icon's outer edge.
      */
     public static DynamicMinimapMarker creature(double x, double z, String iconKey, Color color, int size,
-                                                boolean threat) {
-        return new DynamicMinimapMarker(x, z, color, size, Style.CREATURE, iconKey, false, threat, false, true);
+                                                boolean threat, boolean memory) {
+        return new DynamicMinimapMarker(x, z, color, size, Style.CREATURE, iconKey, false, threat, false, true, memory);
     }
 
     /** Another player's dot, in the player colour (or the attacking colour after a PvP hit). */
     public static DynamicMinimapMarker playerDot(double x, double z, Color color, int size) {
-        return new DynamicMinimapMarker(x, z, color, size, Style.DOT, null, false, false, true, false);
+        return new DynamicMinimapMarker(x, z, color, size, Style.DOT, null, false, false, true, false, false);
     }
 
     /**
@@ -111,7 +120,7 @@ public final class DynamicMinimapMarker {
      * DynamicCreatureIcons.PlayerKeyCache) and {@code color} edges the icon.
      */
     public static DynamicMinimapMarker player(double x, double z, String iconKey, Color color, int size) {
-        return new DynamicMinimapMarker(x, z, color, size, Style.PLAYER, iconKey, false, false, true, false);
+        return new DynamicMinimapMarker(x, z, color, size, Style.PLAYER, iconKey, false, false, true, false, false);
     }
 
     public static DynamicMinimapMarker betterMap(
@@ -121,7 +130,7 @@ public final class DynamicMinimapMarker {
             Color color,
             int size
     ) {
-        return new DynamicMinimapMarker(x, z, color, size, Style.BETTERMAP, assetPath, true, false, false, false);
+        return new DynamicMinimapMarker(x, z, color, size, Style.BETTERMAP, assetPath, true, false, false, false, false);
     }
 
     public static DynamicMinimapMarker nativeWorldMap(
@@ -131,7 +140,7 @@ public final class DynamicMinimapMarker {
             Color color,
             int size
     ) {
-        return new DynamicMinimapMarker(x, z, color, size, Style.NATIVE_WORLDMAP, assetPath, true, false, false, false);
+        return new DynamicMinimapMarker(x, z, color, size, Style.NATIVE_WORLDMAP, assetPath, true, false, false, false, false);
     }
 
     /** Marker scans create fresh objects even when their map data is unchanged. */
@@ -141,6 +150,7 @@ public final class DynamicMinimapMarker {
         return Double.compare(x, marker.x) == 0 && Double.compare(z, marker.z) == 0
                 && size == marker.size && style == marker.style && clampToEdge == marker.clampToEdge
                 && threat == marker.threat && player == marker.player && creature == marker.creature
+                && memory == marker.memory
                 && java.util.Objects.equals(color, marker.color)
                 && java.util.Objects.equals(assetPath, marker.assetPath)
                 && alertMs == marker.alertMs && java.util.Objects.equals(alertId, marker.alertId)
@@ -157,6 +167,7 @@ public final class DynamicMinimapMarker {
         hash = 31 * hash + Boolean.hashCode(threat);
         hash = 31 * hash + Boolean.hashCode(player);
         hash = 31 * hash + Boolean.hashCode(creature);
+        hash = 31 * hash + Boolean.hashCode(memory);
         hash = 31 * hash + java.util.Objects.hashCode(alertId);
         return 31 * hash + Boolean.hashCode(clampToEdge);
     }

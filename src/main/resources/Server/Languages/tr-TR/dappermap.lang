@@ -107,6 +107,8 @@ row.height = Yükseklik filtresi
 row.height.desc = Çok yukarınızdaki veya aşağınızdaki yaratıkları gizleyin.
 row.vrange = Yükseklik aralığı
 row.vrange.desc = Yaratıkların ne kadar yukarınızda ve aşağınızda gösterileceği.
+row.memories = Toplanmamış hatıralar
+row.memories.desc = Hâlâ toplamanız gereken bir hatırası olan yaratıklar yavaşça yanıp söner.
 row.section_other = DİĞER
 row.death = Ölüm işaretleri
 row.death.desc = Ölüm işaretlerini mini haritanızda gösterin.
@@ -269,6 +271,8 @@ colour.neutral = Tarafsız yaratıklar
 colour.neutral.desc = Tarafsız veya kaçan yaratıklar.
 colour.friendly = Dost yaratıklar
 colour.friendly.desc = Yakındaki dost yaratıklar.
+colour.memory = Toplanmamış hatıralar
+colour.memory.desc = Henüz toplamadığınız bir hatırası olan yaratıklar (yavaşça yanıp söner).
 
 # === HUD info panel and compass (keep these short: the HUD has fixed text widths; {time}, {period}, {day} are filled in) ===
 
@@ -354,6 +358,8 @@ command.markers.height-filter = Yükseklik filtresi
 command.markers.height-filter.desc = Yükseklik filtresi
 command.markers.height-range = Yükseklik aralığı
 command.markers.height-range.desc = Yükseklik aralığı (yukarınızdaki ve aşağınızdaki blok sayısı)
+command.markers.memories = Toplanmamış hatıralar
+command.markers.memories.desc = Toplanmamış hatıralar
 command.markers.death = Ölüm işaretleri
 command.markers.death.desc = Ölüm işaretleri
 command.markers.size-creatures = İşaret boyutu: Yaratıklar

@@ -243,6 +243,8 @@ public final class DynamicMinimapSession {
     /** Creature marker style the cached markers were scanned with (dots / icons). */
     private boolean builtCreatureIcons;
     private boolean builtHostileOnly;
+    /** Uncollected Memories setting the cached markers were scanned with. */
+    private boolean builtMemoryHints;
     /** Player marker style and helmet setting the cached markers were scanned with. */
     private boolean builtPlayerIcons, builtPlayerHelmets;
     private int lastMapRotationBucket = -1;
@@ -279,6 +281,8 @@ public final class DynamicMinimapSession {
     private final EdgeTracker edgeTracker = new EdgeTracker();
     /** Creature threat colours for this player's view (see DynamicEntityScanner.ThreatCache). */
     private final DynamicEntityScanner.ThreatCache threatCache = new DynamicEntityScanner.ThreatCache();
+    /** Which creatures still hold a memory for this player (Uncollected Memories). */
+    private final DynamicEntityScanner.PendingMemories pendingMemories = new DynamicEntityScanner.PendingMemories();
     /** Creature icon keys for this player's view (Creature Markers: Icons). */
     private final DynamicCreatureIcons.KeyCache creatureIconKeys = new DynamicCreatureIcons.KeyCache();
     /** Other players' head icon keys for this player's view (Player Markers: Icons). */
@@ -300,6 +304,10 @@ public final class DynamicMinimapSession {
     private static final long PULSE_MS = 300L;
     private boolean pulseOn;
     private long lastPulseToggleMs;
+    /** Creatures with an uncollected memory flash in the memory colour, slower than attackers. */
+    private static final long MEMORY_PULSE_MS = 900L;
+    private boolean memoryPulseOn;
+    private long lastMemoryPulseToggleMs;
 
     private void invalidateMarkerAssets() {
         ++this.markerAssetGeneration;
@@ -317,13 +325,19 @@ public final class DynamicMinimapSession {
     /**
      * Creature (or player head) icon edged in its threat colour. Attacking creatures and players
      * alternate with a pale edge (a pulse: one AssetPath swap per toggle, only for those attacking
-     * this player). While a colour variant is still being prepared, the creature type's (or
-     * player's) last shown icon is reused so it never blinks out. World thread only.
+     * this player). Creatures with an uncollected memory alternate with the memory colour on the
+     * slower memory pulse; an attacking creature keeps the attacking pulse. While a colour variant
+     * is still being prepared, the creature type's (or player's) last shown icon is reused so it
+     * never blinks out. World thread only.
      */
-    private String creatureIcon(DynamicMinimapMarker marker, int attackingRgb) {
+    private String creatureIcon(DynamicMinimapMarker marker, int attackingRgb, int memoryRgb) {
         int rgb = marker.rgb();
         String path = null;
-        if (this.pulseOn && rgb == attackingRgb) path = this.markerIcon(marker, DynamicCreatureIcons.pulseColour(rgb));
+        if (rgb == attackingRgb) {
+            if (this.pulseOn) path = this.markerIcon(marker, DynamicCreatureIcons.pulseColour(rgb));
+        } else if (marker.memory && this.memoryPulseOn) {
+            path = this.markerIcon(marker, memoryRgb);
+        }
         if (path == null) path = this.markerIcon(marker, rgb);
         if (path == null) return this.creatureIconFallback.get(marker.assetPath);
         this.creatureIconFallback.put(marker.assetPath, path);
@@ -431,9 +445,13 @@ public final class DynamicMinimapSession {
         int attacking = palette.rgb(DynamicMinimapColours.Key.HOSTILE_ACTIVE);
         boolean icon = marker.style == Style.CREATURE || marker.style == Style.PLAYER;
         int count = icon ? 3 : 2;
+        // A creature with an uncollected memory also gets its memory colour ready (index 3).
+        int last = marker.memory ? 4 : count;
         // Players are never "hostile", only attacking: skip that colour for them.
-        for (int i = marker.player ? 1 : 0; i < count; i++) {
-            int rgb = i == 0 ? hostile : i == 1 ? attacking : DynamicCreatureIcons.pulseColour(attacking);
+        for (int i = marker.player ? 1 : 0; i < last; i++) {
+            if (i == 2 && !icon) continue; // Dots have no attack pulse colour.
+            int rgb = i == 0 ? hostile : i == 1 ? attacking : i == 2 ? DynamicCreatureIcons.pulseColour(attacking)
+                    : palette.rgb(DynamicMinimapColours.Key.MEMORY);
             if (rgb == shownRgb || generation != this.markerAssetGeneration) continue;
             MarkerAssetKey key = new MarkerAssetKey(marker.style, marker.assetPath, rgb);
             if (this.markerAssets.containsKey(key) || this.preparedMarkerAssets.containsKey(key)) continue;
@@ -837,6 +855,7 @@ public final class DynamicMinimapSession {
                     if (this.hud != null) this.hud.invalidateMarkerSlots();
                     // Creature references from the old world would keep its entity store alive.
                     this.threatCache.clear();
+                    this.pendingMemories.clear();
                     this.creatureIconKeys.clear();
                     this.playerIconKeys.clear();
                     // The BetterMap cave-image cache is shared by every player: leave it (it is
@@ -965,10 +984,12 @@ public final class DynamicMinimapSession {
             // rescans markers straight away.
             if (this.settings.creatureIcons != this.builtCreatureIcons
                     || this.settings.hostileCreaturesOnly != this.builtHostileOnly
+                    || this.settings.memoryHints != this.builtMemoryHints
                     || this.settings.playerIcons != this.builtPlayerIcons
                     || this.settings.playerIconHelmets != this.builtPlayerHelmets) {
                 this.builtCreatureIcons = this.settings.creatureIcons;
                 this.builtHostileOnly = this.settings.hostileCreaturesOnly;
+                this.builtMemoryHints = this.settings.memoryHints;
                 this.builtPlayerIcons = this.settings.playerIcons;
                 this.builtPlayerHelmets = this.settings.playerIconHelmets;
                 this.lastMarkerMs = 0L;
@@ -1602,7 +1623,8 @@ public final class DynamicMinimapSession {
                     this.settings,
                     this.threatCache,
                     this.creatureIconKeys,
-                    this.playerIconKeys
+                    this.playerIconKeys,
+                    this.settings.memoryHints ? this.pendingMemories : null
             );
         } catch (Throwable failure) {
             DapperMapUtil.logFailure("creature scan", failure);
@@ -1756,7 +1778,13 @@ public final class DynamicMinimapSession {
             this.pulseOn = !this.pulseOn;
             this.lastPulseToggleMs = projectionTime;
         }
+        // The slower memory pulse for creatures with an uncollected memory.
+        if (projectionTime - this.lastMemoryPulseToggleMs >= MEMORY_PULSE_MS) {
+            this.memoryPulseOn = !this.memoryPulseOn;
+            this.lastMemoryPulseToggleMs = projectionTime;
+        }
         int attackingRgb = this.settings.colours.rgb(DynamicMinimapColours.Key.HOSTILE_ACTIVE);
+        int memoryRgb = this.settings.colours.rgb(DynamicMinimapColours.Key.MEMORY);
 
         // The native POI provider returns world-wide markers from a map with no
         // useful display order. Select nearby markers before the fixed HUD slots
@@ -1815,7 +1843,13 @@ public final class DynamicMinimapSession {
             }
 
             String path = marker.style == Style.CREATURE || marker.style == Style.PLAYER
-                    ? this.creatureIcon(marker, attackingRgb) : this.alertIcon(marker, alertOn);
+                    ? this.creatureIcon(marker, attackingRgb, memoryRgb) : null;
+            // Creature dot with an uncollected memory: the memory-coloured dot in the "on" half
+            // (falls back to its own colour while that dot is still being prepared).
+            if (path == null && marker.memory && this.memoryPulseOn && marker.style == Style.DOT
+                    && marker.rgb() != attackingRgb) path = this.markerIcon(marker, memoryRgb);
+            if (path == null && marker.style != Style.CREATURE && marker.style != Style.PLAYER)
+                path = this.alertIcon(marker, alertOn);
 
             if (path == null || path.isBlank()) {
                 continue;

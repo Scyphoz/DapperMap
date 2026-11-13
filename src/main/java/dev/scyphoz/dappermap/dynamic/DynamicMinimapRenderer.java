@@ -966,11 +966,16 @@ public final class DynamicMinimapRenderer {
                 // Icons mode shows real creature faces from around the player (dots if none).
                 if (preview.showEntities) {
                     // Hostile Only hides neutral and friendly creatures, so the preview does too.
+                    // Uncollected Memories adds a sample in the memory colour (memory creatures are
+                    // rarely hostile, so Hostile Only leaves it out, as on the live map).
+                    boolean memorySample = preview.memoryHints && !preview.hostileCreaturesOnly;
                     DynamicMinimapColours.Key[] kinds = preview.hostileCreaturesOnly
                             ? new DynamicMinimapColours.Key[]{HOSTILE_ACTIVE, HOSTILE}
+                            : memorySample
+                            ? new DynamicMinimapColours.Key[]{HOSTILE_ACTIVE, HOSTILE, NEUTRAL, FRIENDLY, MEMORY}
                             : new DynamicMinimapColours.Key[]{HOSTILE_ACTIVE, HOSTILE, NEUTRAL, FRIENDLY};
                     double[][] positions = {
-                            {0.28, 0.32}, {0.68, 0.34}, {0.30, 0.68}, {0.70, 0.68}
+                            {0.28, 0.32}, {0.68, 0.34}, {0.30, 0.68}, {0.70, 0.68}, {0.50, 0.80}
                     };
                     java.util.Collections.shuffle(creatureCandidates,
                             new java.util.Random(snapshot.coords().hashCode()));

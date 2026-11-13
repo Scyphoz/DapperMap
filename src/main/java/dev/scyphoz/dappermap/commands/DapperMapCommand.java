@@ -175,6 +175,7 @@ public class DapperMapCommand extends AbstractPlayerCommand {
         toggle("markers", "height-filter", "Creature Height Filter", (s, on) -> s.limitMobHeight = on);
         number("markers", "height-range", HEIGHT_RANGE_MIN, HEIGHT_RANGE_MAX, "Height Filter Range (blocks above and below you)",
                 (s, n) -> s.mobVerticalRange = n, " blocks");
+        toggle("markers", "memories", "Uncollected Memories", (s, on) -> s.memoryHints = on);
         toggle("markers", "death", "Death Markers", (s, on) -> s.showDeathMarker = on);
         // Marker Size (percent; 100 is the standard size)
         percent("markers", "size-creatures", MARKER_SCALE_MIN, MARKER_SCALE_MAX, MARKER_SCALE_STEP, "Marker Size: Creatures", (s, n) -> s.markerCreatures = n);
@@ -656,7 +657,8 @@ public class DapperMapCommand extends AbstractPlayerCommand {
                         + ", creature-style " + (s.creatureIcons ? "icons" : "dots")
                         + ", creature-filter " + (s.hostileCreaturesOnly ? "hostile" : "all")
                         + ", creature-limit " + s.creatureMarkerLimit + ", height-filter " + onOff(s.limitMobHeight)
-                        + ", height-range " + s.mobVerticalRange + ", death " + onOff(s.showDeathMarker)
+                        + ", height-range " + s.mobVerticalRange + ", memories " + onOff(s.memoryHints)
+                        + ", death " + onOff(s.showDeathMarker)
                         + ", size-creatures " + s.markerCreatures + ", size-players " + s.markerPlayers
                         + ", size-map " + s.markerMap
                         + ", size-arrow " + s.markerArrow,

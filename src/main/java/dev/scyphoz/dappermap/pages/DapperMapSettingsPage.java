@@ -1752,6 +1752,8 @@ public final class DapperMapSettingsPage
         row("vrange", "Height Filter Range", Kind.DROPDOWN, DynamicMinimapSetting.Field.MOB_VERTICAL_RANGE,
                 new Numbers(vrange, "blocks"), "How far above and below you creatures are shown.",
                 F_ENTITIES, DynamicMinimapSetting.Field.LIMIT_MOB_HEIGHT);
+        row("memories", "Uncollected Memories", Kind.SWITCH, DynamicMinimapSetting.Field.MEMORY_HINTS, ON_OFF,
+                "Slowly flash creatures that still have a memory for you to collect.", F_ENTITIES);
         header("section_other", "OTHER");
         row("death", "Death Markers", Kind.SWITCH, DynamicMinimapSetting.Field.SHOW_DEATH_MARKER, ON_OFF,
                 "Show death markers on your minimap.");

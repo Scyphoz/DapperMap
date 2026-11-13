@@ -107,6 +107,8 @@ row.height = Filtre de hauteur
 row.height.desc = Masque les créatures loin au-dessus ou en dessous de vous.
 row.vrange = Portée du filtre
 row.vrange.desc = Jusqu'où au-dessus et en dessous de vous les créatures sont affichées.
+row.memories = Souvenirs non collectés
+row.memories.desc = Fait clignoter lentement les créatures qui ont encore un souvenir à collecter.
 row.section_other = AUTRES
 row.death = Marqueurs de mort
 row.death.desc = Affiche les marqueurs de mort sur votre mini-carte.
@@ -269,6 +271,8 @@ colour.neutral = Créatures neutres
 colour.neutral.desc = Créatures neutres ou en fuite.
 colour.friendly = Créatures amicales
 colour.friendly.desc = Créatures amicales proches.
+colour.memory = Souvenirs non collectés
+colour.memory.desc = Créatures avec un souvenir que vous n'avez pas encore collecté (clignote lentement).
 
 # === HUD info panel and compass (keep these short: the HUD has fixed text widths; {time}, {period}, {day} are filled in) ===
 
@@ -354,6 +358,8 @@ command.markers.height-filter = Filtre de hauteur
 command.markers.height-filter.desc = Filtre de hauteur
 command.markers.height-range = Portée du filtre
 command.markers.height-range.desc = Portée du filtre (blocs au-dessus et en dessous de vous)
+command.markers.memories = Souvenirs non collectés
+command.markers.memories.desc = Souvenirs non collectés
 command.markers.death = Marqueurs de mort
 command.markers.death.desc = Marqueurs de mort
 command.markers.size-creatures = Taille des marqueurs : Créatures

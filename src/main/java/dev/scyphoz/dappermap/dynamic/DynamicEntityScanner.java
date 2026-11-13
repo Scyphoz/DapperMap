@@ -60,11 +60,13 @@ public final class DynamicEntityScanner {
      * @param threats per-viewer colour cache (may be null to classify every creature afresh).
      * @param icons   per-viewer creature icon keys, used when Creature Markers is set to Icons.
      * @param playerIcons per-viewer player head icon keys, used when Player Markers is set to Icons.
+     * @param memories per-viewer uncollected-memory check, or null when Uncollected Memories is off.
      */
     public static List<DynamicMinimapMarker> scan(Store<EntityStore> store, Ref<EntityStore> playerRef, Vector3d playerPosition,
                                                   double radius, DynamicMinimapSetting settings, ThreatCache threats,
                                                   DynamicCreatureIcons.KeyCache icons,
-                                                  DynamicCreatureIcons.PlayerKeyCache playerIcons) {
+                                                  DynamicCreatureIcons.PlayerKeyCache playerIcons,
+                                                  PendingMemories memories) {
         ArrayList<DynamicMinimapMarker> markers = new ArrayList<>();
         double radiusSq = radius * radius;
         double playerX = playerPosition.x();
@@ -103,6 +105,8 @@ public final class DynamicEntityScanner {
             int shown = 0;
             // E2: this world's per-tick store of viewer-independent creature reads (null = read directly).
             SharedReads shared = threats == null ? null : SharedReads.forScan(store);
+            // Uncollected memories: one viewer read per scan; skipped entirely when none can be pending.
+            boolean checkMemories = memories != null && memories.begin(store, playerRef, now);
             List<NearestNpcs.Candidate> pool = creatures.sorted();
             int index = 0;
             for (; index < pool.size(); index++) {
@@ -121,12 +125,13 @@ public final class DynamicEntityScanner {
                     Color colour = settings.colours.awt(key, 255);
                     // Hostile and attacking creatures are drawn above other markers.
                     boolean threat = key == HOSTILE || key == HOSTILE_ACTIVE;
+                    boolean memory = checkMemories && memories.pending(npc);
                     // Icons mode: the same threat colour edges the creature's face icon
                     // (the icon key itself is a cached map read per creature).
                     markers.add(useIcons
                             ? DynamicMinimapMarker.creature(candidate.x(), candidate.z(),
-                            icons.key(candidate.ref(), npc, store), colour, iconSize, threat)
-                            : DynamicMinimapMarker.creatureDot(candidate.x(), candidate.z(), colour, 7, threat));
+                            icons.key(candidate.ref(), npc, store), colour, iconSize, threat, memory)
+                            : DynamicMinimapMarker.creatureDot(candidate.x(), candidate.z(), colour, 7, threat, memory));
                     shown++;
                 } catch (RuntimeException ignored) { }
             }
@@ -237,6 +242,125 @@ public final class DynamicEntityScanner {
             if (other == null || other.getUuid() == null || other.getUuid().equals(this.viewer)) return false;
             if (otherSpectating && !this.viewerSpectating) return false;
             return this.hidden == null || !this.hidden.isPlayerHidden(other.getUuid());
+        }
+    }
+
+    /**
+     * Which creatures still hold a memory for one viewer to collect (Hytale's adventure memories).
+     * A creature's role either has a memory or not; its id is the role's memories name override,
+     * else the role name (as NPCMemory does). A memory is no longer pending once the viewer carries
+     * it, or once anyone has handed it in at the Forgotten Temple (handed-in memories are
+     * server-wide). Nothing is pending outside Adventure mode or before the viewer has unlocked
+     * memories (capacity 0), because the game would not award one then.
+     *
+     * <p>Cost per scan: one or two component reads for the viewer, then a cached lookup and two
+     * hash-set checks per displayed creature. The server-wide handed-in list is copied at most
+     * once a second (shared by every viewer). If the memories plugin is missing or fails, the
+     * feature turns itself off. World thread only (per instance).
+     */
+    public static final class PendingMemories {
+        /** The handed-in list is re-read at most this often (unless a viewer's carried list changes). */
+        private static final long RECORDED_REFRESH_MS = 1000L;
+        /** Role name -> memory id ("" when the role has no memory). Role types are finite; capped anyway. */
+        private static final ConcurrentHashMap<String, String> ROLE_MEMORY = new ConcurrentHashMap<>();
+        private static final int ROLE_CACHE_MAX = 4096;
+        /** Server-wide handed-in memory ids, replaced (never modified) on refresh. */
+        private static volatile Set<String> recorded = Set.of();
+        private static volatile long recordedAt;
+        /** False once the memories plugin turned out to be missing or incompatible. */
+        private static volatile boolean available = true;
+
+        /** This viewer's carried memory ids, rebuilt only when their carried list changes. */
+        private Set<String> carried = Set.of();
+        private Object carriedSource;
+        private int carriedSize = -1;
+        /** True for this scan when the viewer can collect memories at all. */
+        private boolean active;
+
+        /**
+         * Reads the viewer's memory state for this scan. Returns false (skip all checks) when
+         * nothing can be pending: not in Adventure mode, memories locked, or no memories plugin.
+         */
+        boolean begin(Store<EntityStore> store, Ref<EntityStore> viewer, long now) {
+            this.active = false;
+            if (!available) return false;
+            try {
+                var plugin = com.hypixel.hytale.builtin.adventure.memories.MemoriesPlugin.get();
+                var type = plugin == null ? null : plugin.getPlayerMemoriesComponentType();
+                if (type == null) return false;
+                Player player = store.getComponent(viewer, Player.getComponentType());
+                if (player == null || player.getGameMode() != com.hypixel.hytale.protocol.GameMode.Adventure) return false;
+                var memories = store.getComponent(viewer, type);
+                if (memories == null || memories.getMemoriesCapacity() <= 0) return false;
+                // Carried list: an unmodifiable view; rebuild the ids only when it changed size.
+                Set<com.hypixel.hytale.builtin.adventure.memories.memories.Memory> held = memories.getRecordedMemories();
+                boolean changed = memories != this.carriedSource || held.size() != this.carriedSize;
+                if (changed) {
+                    this.carried = idsOf(held);
+                    this.carriedSource = memories;
+                    this.carriedSize = held.size();
+                }
+                // A change (pick-up or hand-in) refreshes the handed-in list at once, so a memory
+                // just handed in never shows as pending in between.
+                if (changed || now - recordedAt >= RECORDED_REFRESH_MS) refreshRecorded(plugin, now);
+                this.active = true;
+                return true;
+            } catch (RuntimeException failure) {
+                return false;
+            } catch (LinkageError failure) {
+                available = false; // Memories plugin absent or changed: stop trying.
+                return false;
+            }
+        }
+
+        /** True when this creature still holds a memory for the viewer (after a true {@link #begin}). */
+        boolean pending(NPCEntity npc) {
+            if (!this.active) return false;
+            String id = memoryId(npc);
+            return id != null && !this.carried.contains(id) && !recorded.contains(id);
+        }
+
+        /** Forgets the viewer's carried list (world change); the shared caches stay. */
+        void clear() {
+            this.carried = Set.of();
+            this.carriedSource = null;
+            this.carriedSize = -1;
+            this.active = false;
+        }
+
+        /** The creature's memory id, or null when its role has none (or is not loaded yet). */
+        private static String memoryId(NPCEntity npc) {
+            String roleName = npc.getRoleName();
+            if (roleName == null) return null;
+            String id = ROLE_MEMORY.get(roleName);
+            if (id == null) {
+                Role role = npc.getRole();
+                if (role == null) return null; // Not cached: the role may still be loading.
+                String override = role.isMemory() ? role.getMemoriesNameOverride() : null;
+                id = !role.isMemory() ? "" : override != null && !override.isEmpty() ? override : roleName;
+                if (ROLE_MEMORY.size() >= ROLE_CACHE_MAX) ROLE_MEMORY.clear();
+                ROLE_MEMORY.put(roleName, id);
+            }
+            return id.isEmpty() ? null : id;
+        }
+
+        /** Copies the server-wide handed-in ids (the plugin copies its set under its own read lock). */
+        private static synchronized void refreshRecorded(
+                com.hypixel.hytale.builtin.adventure.memories.MemoriesPlugin plugin, long now) {
+            if (now == recordedAt) return; // Another viewer refreshed it this same moment.
+            recorded = idsOf(plugin.getRecordedMemories());
+            recordedAt = now;
+        }
+
+        /** NPC memory ids in a set of memories (other memory kinds are ignored). */
+        private static Set<String> idsOf(Collection<com.hypixel.hytale.builtin.adventure.memories.memories.Memory> memories) {
+            if (memories.isEmpty()) return Set.of();
+            HashSet<String> ids = new HashSet<>(memories.size() * 2);
+            for (var memory : memories) {
+                if (memory instanceof com.hypixel.hytale.builtin.adventure.memories.memories.npc.NPCMemory npcMemory
+                        && npcMemory.getId() != null) ids.add(npcMemory.getId());
+            }
+            return ids;
         }
     }
 

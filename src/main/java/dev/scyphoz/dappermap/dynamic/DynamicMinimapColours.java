@@ -25,7 +25,9 @@ public final class DynamicMinimapColours {
         HOSTILE_ACTIVE("attacking", "hostile-active", "Markers", "Attacking", "Creatures targeting you, and players attacking you in PvP.", 0xFF9566),
         HOSTILE("hostile", "hostile", "Markers", "Hostile Creatures", "Nearby hostile creatures.", 0xFD3E5A),
         NEUTRAL("neutral", "neutral", "Markers", "Neutral Creatures", "Neutral or retreating creatures.", 0xE9CA68),
-        FRIENDLY("friendly", "friendly", "Markers", "Friendly Creatures", "Nearby friendly creatures.", 0x69D69A);
+        FRIENDLY("friendly", "friendly", "Markers", "Friendly Creatures", "Nearby friendly creatures.", 0x69D69A),
+        // Light blue, like the memory mote that floats to the player when a memory is discovered.
+        MEMORY("memory", "memory", "Markers", "Uncollected Memories", "Creatures with a memory you have not collected yet (flashes slowly).", 0x7FD6FF);
         public final String id, storeId, group, label, description;
         public final int defaultRgb;
         Key(String id, String storeId, String group, String label, String description, int defaultRgb) {

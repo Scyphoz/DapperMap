@@ -107,6 +107,8 @@ row.height = 高度筛选
 row.height.desc = 隐藏远高于或远低于你的生物。
 row.vrange = 高度筛选范围
 row.vrange.desc = 显示你上方和下方多远范围内的生物。
+row.memories = 未收集的记忆
+row.memories.desc = 缓慢闪烁仍有记忆可供你收集的生物。
 row.section_other = 其他
 row.death = 死亡标记
 row.death.desc = 在小地图上显示死亡标记。
@@ -269,6 +271,8 @@ colour.neutral = 中立生物
 colour.neutral.desc = 中立或正在撤退的生物。
 colour.friendly = 友好生物
 colour.friendly.desc = 附近的友好生物。
+colour.memory = 未收集的记忆
+colour.memory.desc = 拥有你尚未收集记忆的生物（缓慢闪烁）。
 
 # === HUD info panel and compass (keep these short: the HUD has fixed text widths; {time}, {period}, {day} are filled in) ===
 
@@ -354,6 +358,8 @@ command.markers.height-filter = 高度筛选
 command.markers.height-filter.desc = 高度筛选
 command.markers.height-range = 高度筛选范围
 command.markers.height-range.desc = 高度筛选范围（你上方和下方的格数）
+command.markers.memories = 未收集的记忆
+command.markers.memories.desc = 未收集的记忆
 command.markers.death = 死亡标记
 command.markers.death.desc = 死亡标记
 command.markers.size-creatures = 标记大小：生物

@@ -107,6 +107,8 @@ row.height = Фильтр по высоте
 row.height.desc = Скрывать существ далеко выше или ниже вас.
 row.vrange = Диапазон высоты
 row.vrange.desc = Как далеко выше и ниже вас показываются существа.
+row.memories = Несобранные воспоминания
+row.memories.desc = Медленно мигают существа, у которых ещё есть для вас воспоминание.
 row.section_other = ПРОЧЕЕ
 row.death = Метки смерти
 row.death.desc = Показывать метки смерти на мини-карте.
@@ -269,6 +271,8 @@ colour.neutral = Нейтральные существа
 colour.neutral.desc = Нейтральные или отступающие существа.
 colour.friendly = Дружелюбные существа
 colour.friendly.desc = Ближайшие дружелюбные существа.
+colour.memory = Несобранные воспоминания
+colour.memory.desc = Существа с воспоминанием, которое вы ещё не собрали (медленно мигает).
 
 # === HUD info panel and compass (keep these short: the HUD has fixed text widths; {time}, {period}, {day} are filled in) ===
 
@@ -354,6 +358,8 @@ command.markers.height-filter = Фильтр по высоте
 command.markers.height-filter.desc = Фильтр по высоте
 command.markers.height-range = Диапазон высоты
 command.markers.height-range.desc = Диапазон высоты (блоков выше и ниже вас)
+command.markers.memories = Несобранные воспоминания
+command.markers.memories.desc = Несобранные воспоминания
 command.markers.death = Метки смерти
 command.markers.death.desc = Метки смерти
 command.markers.size-creatures = Размер меток: Существа
