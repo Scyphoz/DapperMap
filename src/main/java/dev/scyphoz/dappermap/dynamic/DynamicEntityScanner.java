@@ -80,6 +80,8 @@ public final class DynamicEntityScanner {
         double verticalRange = settings.limitMobHeight ? (double)settings.mobVerticalRange : (double)0.0F;
         // Critter Markers: passive (flee-only) ground and/or flying critters to leave out (bits, 0 = none).
         int hiddenCritters = settings.critterFilter;
+        // Creatures Hytale hides from this viewer (HiddenFromAdventurePlayers) stay off the minimap too.
+        boolean viewerHidesMarked = settings.showEntities && hidesMarkedEntities(store, playerRef);
         if (settings.showEntities) {
             // Exact radius and height checks on current positions; only the nearest few are kept.
             for (Ref<EntityStore> npcRef : nearbyOrScan(store, playerPosition, radius, verticalRange, true)) {
@@ -94,6 +96,13 @@ public final class DynamicEntityScanner {
                     // 0.8.0-pre.6: role data lives on NPCComponent (NPCEntity is now an empty shell).
                     NPCComponent npc = store.getComponent(npcRef, NPCComponent.getComponentType());
                     if (npc == null) continue;
+                    // One archetype read: a dying creature keeps NPCComponent (and its last target)
+                    // until its corpse is removed after the death animation, and hidden creatures
+                    // are not sent to this viewer at all; neither gets a marker or a marker slot.
+                    var archetype = store.getArchetype(npcRef);
+                    if (archetype.contains(com.hypixel.hytale.server.core.modules.entity.damage.DeathComponent.getComponentType())
+                            || viewerHidesMarked && archetype.contains(
+                            com.hypixel.hytale.server.core.modules.entity.component.HiddenFromAdventurePlayers.getComponentType())) continue;
                     // Hidden critters are dropped before the nearest-first limit (they never use a
                     // marker slot) and need no threat check: flee-only creatures can't attack.
                     // One cached per-role lookup; a role still loading shows until it is known.
@@ -168,6 +177,23 @@ public final class DynamicEntityScanner {
         }
 
         return markers;
+    }
+
+    /**
+     * Hytale's own rule (HideEntitySystems.AdventurePlayerSystem): entities marked
+     * HiddenFromAdventurePlayers are hidden from a viewer in Adventure mode, or from any viewer
+     * whose "show entity markers" setting is off. False when unknown (nothing extra hidden).
+     */
+    private static boolean hidesMarkedEntities(Store<EntityStore> store, Ref<EntityStore> viewer) {
+        try {
+            Player player = store.getComponent(viewer, Player.getComponentType());
+            if (player != null && player.getGameMode() == com.hypixel.hytale.protocol.GameMode.Adventure) return true;
+            var playerSettings = store.getComponent(viewer,
+                    com.hypixel.hytale.server.core.modules.entity.player.PlayerSettings.getComponentType());
+            return playerSettings != null && !playerSettings.showEntityMarkers();
+        } catch (RuntimeException | LinkageError ignored) {
+            return false;
+        }
     }
 
     /**
@@ -667,8 +693,8 @@ public final class DynamicEntityScanner {
      * scan in that tick. Viewer-specific checks (is the target ME, attitude, overrides) stay per
      * viewer. One instance per world thread (ThreadLocal), stamped with the store and world
      * tick, and also cleared at the start of every entity-store tick: World.tick drains its task
-     * queue both before and after Store.tick under the same tick number, and NPC AI changes in
-     * between. Values are never reused across ticks or worlds. World thread only; bounded.
+     * queue before the entity-store tick, between it and the chunk-store tick, and after (all under
+     * the same tick number), and NPC AI changes only inside the entity-store tick. Values are never reused across ticks or worlds. World thread only; bounded.
      */
     static final class SharedReads {
         /** The reads of one creature. {@code lockedTarget} is raw: validity is re-checked at use. */

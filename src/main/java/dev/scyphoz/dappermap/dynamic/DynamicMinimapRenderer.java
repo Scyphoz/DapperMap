@@ -163,6 +163,9 @@ public final class DynamicMinimapRenderer {
             // Surface renders only: last-drawn images, covering Hytale's rebuild of changed chunks.
             ConcurrentHashMap<Long, LastImage> lastImages = caveImages == null && worldMapManager != null
                     ? lastImagesFor(worldMapManager) : null;
+            // Loaded chunks whose last request produced no image (0.8.0-pre.6: aborted or failed build).
+            ConcurrentHashMap<Long, Long> noImage = gated && caveImages == null && worldMapManager != null
+                    ? noImageFor(worldMapManager) : null;
             long now = System.currentTimeMillis();
             for (int[] coordinate : chunks) {
                 int chunkX = coordinate[0], chunkZ = coordinate[1];
@@ -185,12 +188,13 @@ public final class DynamicMinimapRenderer {
                             // World-map chunk index == ChunkStore column index (both 32 blocks,
                             // ChunkUtil.indexChunk): no conversion. Unloaded: no request slot used.
                             if (gated && !chunkLoaded.test(index)) ++unloaded;
+                                // Built to nothing moments ago: no new request, and (like an unloaded
+                                // chunk) it does not hold the warm-up retries open. The probe still
+                                // redraws if Hytale's own map builds it meanwhile.
+                            else if (noImage != null && noImageRecently(noImage, index, now)) ++unloaded;
                             else if (requests < surfaceBudget) {
                                 ++requests;
-                                // 0.8.0-pre.6: a failed image now completes exceptionally (was null),
-                                // so read it safely and still fall back to the last image below.
-                                try { image = worldMapManager.getImageAsync(index).getNow(null); }
-                                catch (java.util.concurrent.CompletionException failed) { image = null; }
+                                image = requestImage(worldMapManager, noImage, index, now);
                             }
                             // Still building (e.g. dropped by a terrain refresh): draw the last image
                             // instead of a hole. Its hash is recorded, so the probe redraws when the
@@ -198,6 +202,8 @@ public final class DynamicMinimapRenderer {
                             if (image == null) image = lastImage(lastImages, index, now);
                         } else {
                             rememberImage(lastImages, index, image, now);
+                            // Built after all (e.g. by Hytale's own map): forget any no-image mark.
+                            if (noImage != null && !noImage.isEmpty()) noImage.remove(index);
                         }
                     }
                     // Hash before drawing, so an image that fails to decode still counts as seen.
@@ -389,6 +395,68 @@ public final class DynamicMinimapRenderer {
                 images.values().removeIf(entry -> now - entry.seenMs > LAST_IMAGE_TTL_MS);
         }
         images.put(index, new LastImage(image, now));
+    }
+
+    // ---------------------------------------------------------------------------------
+    // Requests that built no image (Hytale 0.8.0-pre.6)
+    // ---------------------------------------------------------------------------------
+
+    /**
+     * How long a loaded chunk whose image request settled with no image is left alone. Since
+     * 0.8.0-pre.6 ImageBuilder gives up (null) when a neighbour column or section is missing and
+     * no player's own map tracker is requesting that chunk, and a failed build completes
+     * exceptionally; either way WorldMapImageCache drops the entry, so every render used to start
+     * the same build again, and the missing chunk kept the 15 s warm-up retries running.
+     */
+    private static final long NO_IMAGE_RETRY_MS = LAST_IMAGE_TTL_MS; // 5 s: never outlasts the last-image cover.
+    /** Marks a request whose result is not in yet (its callback is already attached). */
+    private static final long NO_IMAGE_PENDING = Long.MIN_VALUE;
+    /** Above this many entries in a world, expired ones are pruned (callbacks then refill it). */
+    private static final int NO_IMAGE_PRUNE_AT = 2_048;
+    /** Retry-after times per world map, shared by all players. Weakly keyed like LAST_IMAGES. */
+    private static final Map<WorldMapManager, ConcurrentHashMap<Long, Long>> NO_IMAGE =
+            java.util.Collections.synchronizedMap(new java.util.WeakHashMap<>());
+
+    private static ConcurrentHashMap<Long, Long> noImageFor(WorldMapManager manager) {
+        return NO_IMAGE.computeIfAbsent(manager, ignored -> new ConcurrentHashMap<>());
+    }
+
+    /** True while this chunk's last request settled with no image less than NO_IMAGE_RETRY_MS ago. */
+    private static boolean noImageRecently(ConcurrentHashMap<Long, Long> noImage, long index, long now) {
+        Long retryAt = noImage.get(index);
+        return retryAt != null && retryAt != NO_IMAGE_PENDING && now < retryAt;
+    }
+
+    /**
+     * Requests a chunk image and returns it if already built. A request that settles with no image
+     * (null or failed) is recorded so the next renders skip it for NO_IMAGE_RETRY_MS; one callback
+     * per pending request (Hytale hands out the same future until it settles).
+     */
+    private static MapImage requestImage(WorldMapManager manager, ConcurrentHashMap<Long, Long> noImage,
+                                         long index, long now) {
+        java.util.concurrent.CompletableFuture<MapImage> future = manager.getImageAsync(index);
+        if (future.isDone()) {
+            MapImage image;
+            // 0.8.0-pre.6: a failed image completes exceptionally (was null).
+            try { image = future.getNow(null); } catch (RuntimeException failed) { image = null; }
+            if (noImage != null) {
+                if (image == null) noImage.put(index, now + NO_IMAGE_RETRY_MS);
+                else if (!noImage.isEmpty()) noImage.remove(index);
+            }
+            return image;
+        }
+        if (noImage != null) {
+            if (noImage.size() >= NO_IMAGE_PRUNE_AT) noImage.values().removeIf(at -> at != NO_IMAGE_PENDING && at <= now);
+            // Attach once per pending request: a second render finds PENDING and adds nothing.
+            Long previous = noImage.put(index, NO_IMAGE_PENDING);
+            if (previous == null || previous != NO_IMAGE_PENDING) {
+                future.whenComplete((image, failure) -> {
+                    if (image == null) noImage.put(index, System.currentTimeMillis() + NO_IMAGE_RETRY_MS);
+                    else noImage.remove(index);
+                });
+            }
+        }
+        return null;
     }
 
     /** The chunk's last image if it was seen within {@link #LAST_IMAGE_TTL_MS}, else null. */
@@ -2481,7 +2549,8 @@ public final class DynamicMinimapRenderer {
      *
      * @param png         north-up PNG (null for player-up renders, which use {@code image})
      * @param image       the stitched raster, or null when no chunk was drawn
-     * @param unloaded    missing chunks skipped because their world chunk was not loaded (no request made)
+     * @param unloaded    missing chunks skipped because their world chunk was not loaded, or because their
+     *                    image request settled with no image moments ago (no request made either way)
      * @param chunkHashes hash of each chunk image drawn, in grid order (0 = missing; null without an
      *                    image source). Never mutated after renderTerrain returns, so it can be handed between threads.
      */

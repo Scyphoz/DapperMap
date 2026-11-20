@@ -77,6 +77,15 @@ public class DapperMap extends JavaPlugin {
             var ref = event.getPlayerRef();
             if (ref != null) DynamicEntityScanner.PlayerAttacks.forget(ref.getUuid());
         });
+        // Leaving a world (world change, instance, portal): hide the old world's minimap while the
+        // client shows the transition; the next world's HUD build brings it back.
+        this.getEventRegistry().registerGlobal(
+                com.hypixel.hytale.server.core.event.events.player.RemovedPlayerFromWorldEvent.class, event -> {
+                    try {
+                        var holder = event.getHolder();
+                        this.sessions.onLeaveWorld(holder == null ? null : holder.getComponent(PlayerRef.getComponentType()));
+                    } catch (RuntimeException failure) { DapperMapUtil.logFailure("world leave", failure); }
+                });
         // Settings file read-ahead before the player is ready, so the join tick needs no disk access.
         this.getEventRegistry().registerGlobal(PlayerConnectEvent.class,
                 event -> this.sessions.onConnect(event.getPlayerRef()));
@@ -89,11 +98,32 @@ public class DapperMap extends JavaPlugin {
         if (playerRef != null) this.sessions.showIfEnabledByDefault(playerRef, config.get());
     }
 
+    /**
+     * Runs after setup. On a normal boot no one is online yet, so this does nothing. After
+     * /plugin load or /plugin reload, players already online get no PlayerReadyEvent, so their
+     * minimaps are started here (the client's old HUD tree is replaced by the new one's show()).
+     */
+    @Override
+    protected void start() {
+        DapperMapConfig current = config.get();
+        var universe = com.hypixel.hytale.server.core.universe.Universe.get();
+        if (universe == null) return; // Not up yet (normal boot): PlayerReadyEvent starts each minimap.
+        for (PlayerRef online : universe.getPlayers()) {
+            try { this.sessions.showIfEnabledByDefault(online, current); }
+            catch (RuntimeException failure) { DapperMapUtil.logFailure("minimap start after plugin load", failure); }
+        }
+    }
+
     @Override
     protected void shutdown() {
         if (this.imageCleanup != null) this.imageCleanup.cancel(false);
         DapperMapServerLoad.stop();
-        this.sessions.stopAll();
+        // Plugin unloaded or reloaded while the server keeps running: take the frozen minimap off
+        // players' screens. On server shutdown the clients disconnect anyway, so nothing is sent.
+        boolean serverStopping;
+        try { serverStopping = com.hypixel.hytale.server.core.HytaleServer.get().isShuttingDown(); }
+        catch (RuntimeException failure) { serverStopping = true; }
+        this.sessions.stopAll(!serverStopping);
         BetterMapIntegration.clearImages();
         // Stops the thread that runs blocking world-map providers (spawn) off the world thread.
         NativeWorldMapIntegration.shutdown();

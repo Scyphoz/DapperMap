@@ -414,6 +414,24 @@ public final class DynamicMinimapHud extends CustomUIHud {
         }
     }
 
+    /** Hide-the-map command, built once (immutable after creation, shared by every send). */
+    private static volatile com.hypixel.hytale.protocol.packets.interface_.CustomUICommand[] hideCommands;
+
+    /**
+     * Hides the whole minimap on the client with one small packet (~60 bytes). Used when the
+     * player leaves a world: since Update 8 the client draws server UI during world transitions,
+     * so the old world's map would otherwise stay on screen. Touches no HUD state, so any thread
+     * may call it. The HUD rebuilt on the next world join (show(), clear=true) is visible again.
+     * Only call while the HUD is shown, so the root element exists on the client.
+     */
+    static void hideOnClient(PlayerRef playerRef) {
+        var commands = hideCommands;
+        if (commands == null) hideCommands = commands = new UICommandBuilder().set("#WayfinderMmRoot.Visible", false).getCommands();
+        var handler = playerRef.getPacketHandler();
+        if (handler != null) handler.writeNoCache(new com.hypixel.hytale.protocol.packets.interface_.CustomHud(
+                KEY, 0, false, commands)); // zOrder 0: DapperMap never changes it.
+    }
+
     public void show() {
         UICommandBuilder builder = new UICommandBuilder();
         builder.appendInline((String)null, this.buildMarkup());

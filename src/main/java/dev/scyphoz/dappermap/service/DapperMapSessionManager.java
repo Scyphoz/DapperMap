@@ -291,8 +291,31 @@ public class DapperMapSessionManager {
     }
 
     public void stopAll() {
+        this.stopAll(false);
+    }
+
+    /** A player left a world: hide their minimap during the transition (see DynamicMinimapSession). */
+    public void onLeaveWorld(PlayerRef playerRef) {
+        if (playerRef == null) return;
+        DynamicMinimapSession session = this.sessionsByPlayer.get(playerRef.getUuid());
+        if (session != null && session.playerRef() == playerRef) session.hideForWorldChange();
+    }
+
+    /**
+     * Stops every session. {@code removeHuds}: also removes the minimap HUD from each client with
+     * one packet (the same CustomHud clear Hytale's HudManager.removeCustomHud sends). It is safe
+     * from any thread because it never touches the HUD's world-thread state.
+     */
+    public void stopAll(boolean removeHuds) {
         for(DynamicMinimapSession session : this.sessionsByPlayer.values()) {
             session.stop(false);
+            if (removeHuds) {
+                try {
+                    var handler = session.playerRef().getPacketHandler();
+                    if (handler != null) handler.writeNoCache(new com.hypixel.hytale.protocol.packets.interface_.CustomHud(
+                            dev.scyphoz.dappermap.dynamic.DynamicMinimapHud.KEY, 0, true, null));
+                } catch (RuntimeException ignored) { } // Player already gone.
+            }
         }
 
         this.sessionsByPlayer.clear();

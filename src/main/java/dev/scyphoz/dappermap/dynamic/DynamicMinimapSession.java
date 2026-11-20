@@ -543,6 +543,17 @@ public final class DynamicMinimapSession {
         return this.running;
     }
 
+    /**
+     * Player left a world (RemovedPlayerFromWorldEvent, on the old world's thread, where this
+     * session's ticks also run): hide the minimap until the HUD is rebuilt for the next world.
+     */
+    public void hideForWorldChange() {
+        DynamicMinimapHud current = this.hud;
+        if (!this.running || current == null || !current.isShown()) return; // Nothing on screen.
+        try { DynamicMinimapHud.hideOnClient(this.playerRef); }
+        catch (RuntimeException ignored) { } // Connection closing (disconnect also leaves the world).
+    }
+
     /** A custom page was open on the last tick, so the map's work was paused (world thread). */
     private boolean pausedForPage;
     /** The world the player just joined while its PlayerReady is still to come (world thread). */
