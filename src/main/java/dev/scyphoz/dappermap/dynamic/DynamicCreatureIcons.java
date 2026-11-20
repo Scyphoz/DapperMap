@@ -11,7 +11,7 @@ import com.hypixel.hytale.server.core.asset.type.model.config.ModelAsset;
 import com.hypixel.hytale.server.core.asset.type.model.config.ModelAttachment;
 import com.hypixel.hytale.server.core.modules.entity.component.ModelComponent;
 import com.hypixel.hytale.server.core.universe.world.storage.EntityStore;
-import com.hypixel.hytale.server.npc.entities.NPCEntity;
+import com.hypixel.hytale.server.npc.components.NPCComponent;
 import java.awt.BasicStroke;
 import java.awt.Color;
 import java.awt.Font;
@@ -118,7 +118,7 @@ public final class DynamicCreatureIcons {
         private record Entry(Model model, String key, int generation) { }
         private final DapperMapUtil.ScanCache<Ref<EntityStore>, Entry> entries = new DapperMapUtil.ScanCache<>();
 
-        String key(Ref<EntityStore> ref, NPCEntity npc, ComponentAccessor<EntityStore> accessor) {
+        String key(Ref<EntityStore> ref, NPCComponent npc, ComponentAccessor<EntityStore> accessor) {
             Model model = null;
             try {
                 ModelComponent component = accessor.getComponent(ref, ModelComponent.getComponentType());

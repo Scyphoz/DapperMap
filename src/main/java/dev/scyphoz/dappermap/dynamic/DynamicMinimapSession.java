@@ -1111,7 +1111,7 @@ public final class DynamicMinimapSession {
             String coords = panel && this.settings.showCoordinates ? this.readouts.coords(x, y, z) : "";
             String compass = panel && this.settings.showCompass ? this.readouts.compass(yaw) : "";
             String clock = panel && this.settings.showClock ? clockText(world, this.settings.clock24Hour, this.readouts) : "";
-            String biome = panel && this.settings.showBiome ? this.readouts.region(player) : "";
+            String biome = panel && this.settings.showBiome ? this.readouts.region(this.playerRef) : "";
             this.hud.setStatus(coords, compass, clock, biome);
             this.hud.flushPendingVisuals(this.settings.updateSpeed);
             // Player-up: keep the fast cadence while a rotation or a sharpen is still due.
@@ -2050,16 +2050,17 @@ public final class DynamicMinimapSession {
          * it), else the zone name, else the biome name as before (worlds without zones). Recomputed
          * only when the player's zone, region or biome changes.
          */
-        String region(Player player) {
+        String region(PlayerRef playerRef) {
             String zone = null, region = null, raw = null;
             try {
-                var tracker = player == null ? null : player.getWorldMapTracker();
+                // 0.8.0-pre.6 moved the world-map tracker from Player to PlayerRef.
+                var tracker = playerRef == null ? null : playerRef.getWorldMapTracker();
                 if (tracker != null) {
                     var current = tracker.getCurrentZone();
                     if (current != null) { zone = current.zoneName(); region = current.regionName(); }
                     raw = tracker.getCurrentBiomeName();
                 }
-            } catch (RuntimeException ignored) { }
+            } catch (RuntimeException | LinkageError ignored) { } // Never let the readout stop the HUD flush.
             if (biome != null && java.util.Objects.equals(zone, lastZone) && java.util.Objects.equals(region, lastRegion)
                     && java.util.Objects.equals(raw, rawBiome)) return biome;
             lastZone = zone; lastRegion = region; rawBiome = raw;

@@ -18,7 +18,7 @@ import com.hypixel.hytale.server.npc.corecomponents.combat.BodyMotionCharge;
 import com.hypixel.hytale.server.npc.corecomponents.movement.BodyMotionFind;
 import com.hypixel.hytale.server.npc.corecomponents.movement.BodyMotionMaintainDistance;
 import com.hypixel.hytale.server.npc.corecomponents.movement.BodyMotionMoveAway;
-import com.hypixel.hytale.server.npc.entities.NPCEntity;
+import com.hypixel.hytale.server.npc.components.NPCComponent;
 import com.hypixel.hytale.server.npc.instructions.Action;
 import com.hypixel.hytale.server.npc.instructions.ActionList;
 import com.hypixel.hytale.server.npc.instructions.BodyMotion;
@@ -91,14 +91,15 @@ public final class DynamicEntityScanner {
                     double dx = position.x() - playerX, dz = position.z() - playerZ;
                     if (dx * dx + dz * dz > radiusSq || (verticalRange > 0 && Math.abs(position.y() - playerY) > verticalRange)
                             || !creatures.wouldAccept(position.x(), position.z())) continue;
-                    NPCEntity npc = store.getComponent(npcRef, NPCEntity.getComponentType());
+                    // 0.8.0-pre.6: role data lives on NPCComponent (NPCEntity is now an empty shell).
+                    NPCComponent npc = store.getComponent(npcRef, NPCComponent.getComponentType());
                     if (npc == null) continue;
                     // Hidden critters are dropped before the nearest-first limit (they never use a
                     // marker slot) and need no threat check: flee-only creatures can't attack.
                     // One cached per-role lookup; a role still loading shows until it is known.
                     if (hiddenCritters != 0 && (profileOf(npc).critter() & hiddenCritters) != 0) continue;
                     creatures.add(npcRef, npc, position.x(), position.z());
-                } catch (RuntimeException ignored) { }
+                } catch (RuntimeException | LinkageError ignored) { } // Skip one unreadable creature only.
             }
         }
 
@@ -120,7 +121,7 @@ public final class DynamicEntityScanner {
                 NearestNpcs.Candidate candidate = pool.get(index);
                 try {
                     if (!candidate.ref().isValid()) continue;
-                    NPCEntity npc = candidate.npc(); // Read during selection; no second lookup.
+                    NPCComponent npc = candidate.npc(); // Read during selection; no second lookup.
                     if (npc == null) continue;
                     DynamicMinimapColours.Key key = threats == null
                             ? colourFor(candidate.ref(), npc, playerRef, store)
@@ -320,7 +321,7 @@ public final class DynamicEntityScanner {
         }
 
         /** True when this creature still holds a memory for the viewer (after a true {@link #begin}). */
-        boolean pending(NPCEntity npc) {
+        boolean pending(NPCComponent npc) {
             if (!this.active) return false;
             String id = memoryId(npc);
             return id != null && !this.carried.contains(id) && !recorded.contains(id);
@@ -335,7 +336,7 @@ public final class DynamicEntityScanner {
         }
 
         /** The creature's memory id, or null when its role has none (or is not loaded yet). */
-        private static String memoryId(NPCEntity npc) {
+        private static String memoryId(NPCComponent npc) {
             String roleName = npc.getRoleName();
             if (roleName == null) return null;
             String id = ROLE_MEMORY.get(roleName);
@@ -510,8 +511,9 @@ public final class DynamicEntityScanner {
         if (indexed != null) return indexed;
         List<Ref<EntityStore>> found = new ArrayList<>();
         double x = position.x(), z = position.z(), radiusSq = radius * radius;
+        // NPCComponent is the authoritative NPC component from 0.8.0-pre.6 on.
         com.hypixel.hytale.component.query.Query<EntityStore> type =
-                npc ? NPCEntity.getComponentType() : Player.getComponentType();
+                npc ? NPCComponent.getComponentType() : Player.getComponentType();
         try {
             store.forEachChunk(type, (chunk, commandBuffer) -> {
                 for (int i = 0; i < chunk.size(); ++i) {
@@ -550,7 +552,7 @@ public final class DynamicEntityScanner {
 
     /** Retains positions/references only; expensive AI inspection follows selection. */
     static final class NearestNpcs {
-        record Candidate(Ref<EntityStore> ref, NPCEntity npc, double x, double z, double distanceSquared) { }
+        record Candidate(Ref<EntityStore> ref, NPCComponent npc, double x, double z, double distanceSquared) { }
         /** Hostile-only pool: 4x the marker limit, capped so classification work stays bounded. */
         private static final int HOSTILE_POOL_FACTOR = 4, HOSTILE_POOL_MAX = 128;
         /** Markers to show (16/32/64); {@code limit} is how many nearest candidates are kept. */
@@ -573,7 +575,7 @@ public final class DynamicEntityScanner {
         boolean wouldAccept(double markerX, double markerZ) {
             return candidates.size() < limit || distance(markerX, markerZ) < candidates.peek().distanceSquared();
         }
-        void add(Ref<EntityStore> ref, NPCEntity npc, double markerX, double markerZ) {
+        void add(Ref<EntityStore> ref, NPCComponent npc, double markerX, double markerZ) {
             double distance = distance(markerX, markerZ);
             if (candidates.size() >= limit) {
                 if (distance >= candidates.peek().distanceSquared()) return;
@@ -613,7 +615,7 @@ public final class DynamicEntityScanner {
         private record Entry(DynamicMinimapColours.Key key, int engagement, long expiresAt) { }
         private final DapperMapUtil.ScanCache<Ref<EntityStore>, Entry> entries = new DapperMapUtil.ScanCache<>();
 
-        DynamicMinimapColours.Key classify(Ref<EntityStore> npcRef, NPCEntity npc, Ref<EntityStore> playerRef,
+        DynamicMinimapColours.Key classify(Ref<EntityStore> npcRef, NPCComponent npc, Ref<EntityStore> playerRef,
                                            ComponentAccessor<EntityStore> accessor, long now, long passiveTtl,
                                            SharedReads shared) {
             // Raw creature reads (locked target, attack state, motion target): shared by every
@@ -718,7 +720,7 @@ public final class DynamicEntityScanner {
         }
 
         /** The creature's raw reads: shared for this tick when possible, otherwise read now. */
-        static Npc read(SharedReads shared, Ref<EntityStore> npcRef, NPCEntity npc, ComponentAccessor<EntityStore> accessor) {
+        static Npc read(SharedReads shared, Ref<EntityStore> npcRef, NPCComponent npc, ComponentAccessor<EntityStore> accessor) {
             if (shared == null) return fill(new Npc(), npcRef, npc, accessor);
             if (!shared.sharing) return fill(shared.scratch, npcRef, npc, accessor);
             Npc reads = shared.reads.get(npcRef);
@@ -730,7 +732,7 @@ public final class DynamicEntityScanner {
         }
 
         /** The same reads, in the same order, as the per-viewer code made before sharing. */
-        private static Npc fill(Npc reads, Ref<EntityStore> npcRef, NPCEntity npc, ComponentAccessor<EntityStore> accessor) {
+        private static Npc fill(Npc reads, Ref<EntityStore> npcRef, NPCComponent npc, ComponentAccessor<EntityStore> accessor) {
             reads.lockedTarget = rawLockedTarget(npcRef, accessor);
             reads.executingAttack = isExecutingAttack(npcRef, accessor);
             Ref<EntityStore> target = null;
@@ -757,14 +759,14 @@ public final class DynamicEntityScanner {
     }
 
     /** Full threat classification, reading the creature's locked target and attack state itself. */
-    private static DynamicMinimapColours.Key colourFor(Ref<EntityStore> npcRef, NPCEntity npc,
+    private static DynamicMinimapColours.Key colourFor(Ref<EntityStore> npcRef, NPCComponent npc,
                                                        Ref<EntityStore> playerRef, ComponentAccessor<EntityStore> commandBuffer) {
         return colourFor(npcRef, npc, playerRef, commandBuffer,
                 getLockedTarget(npcRef, commandBuffer), isExecutingAttack(npcRef, commandBuffer), profileOf(npc));
     }
 
     /** The creature's role threat profile (UNKNOWN when it can't be read). */
-    private static NpcThreatProfile profileOf(NPCEntity npc) {
+    private static NpcThreatProfile profileOf(NPCComponent npc) {
         try { return NpcThreatClassifier.profileFor(npc.getRoleIndex()); }
         catch (RuntimeException | LinkageError ignored) { return NpcThreatProfile.UNKNOWN; }
     }
@@ -780,7 +782,7 @@ public final class DynamicEntityScanner {
     }
 
     /** Full threat classification with the locked target, attack state and role profile already read. */
-    private static DynamicMinimapColours.Key colourFor(Ref<EntityStore> npcRef, NPCEntity npc,
+    private static DynamicMinimapColours.Key colourFor(Ref<EntityStore> npcRef, NPCComponent npc,
                                                        Ref<EntityStore> playerRef, ComponentAccessor<EntityStore> commandBuffer,
                                                        Ref<EntityStore> lockedTarget, boolean executingAttack,
                                                        NpcThreatProfile profile) {
@@ -807,7 +809,7 @@ public final class DynamicEntityScanner {
             var signals = NpcBehaviourSignals.capture(npc.getRole(), npc.getRoleIndex(), playerRef, lockedTarget, npcRef, commandBuffer);
             return NpcThreatClassifier.classify(profile, dynamicAttitude, defaultAttitude,
                     override, targetingPlayer, state, executingAttack, signals);
-        } catch (Exception ignored) {
+        } catch (RuntimeException | LinkageError ignored) { // LinkageError: server API changed under us.
             return NEUTRAL;
         }
     }

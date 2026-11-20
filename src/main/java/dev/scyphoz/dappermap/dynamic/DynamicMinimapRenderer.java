@@ -187,7 +187,10 @@ public final class DynamicMinimapRenderer {
                             if (gated && !chunkLoaded.test(index)) ++unloaded;
                             else if (requests < surfaceBudget) {
                                 ++requests;
-                                image = worldMapManager.getImageAsync(index).getNow(null);
+                                // 0.8.0-pre.6: a failed image now completes exceptionally (was null),
+                                // so read it safely and still fall back to the last image below.
+                                try { image = worldMapManager.getImageAsync(index).getNow(null); }
+                                catch (java.util.concurrent.CompletionException failed) { image = null; }
                             }
                             // Still building (e.g. dropped by a terrain refresh): draw the last image
                             // instead of a hole. Its hash is recorded, so the probe redraws when the
