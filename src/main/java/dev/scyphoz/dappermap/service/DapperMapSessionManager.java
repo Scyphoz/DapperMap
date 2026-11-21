@@ -152,9 +152,11 @@ public class DapperMapSessionManager {
         return settings;
     }
 
-    public dev.scyphoz.dappermap.dynamic.DynamicMinimapRenderer.LiveSnapshot capturePreview(UUID uuid) {
+    /** Settings preview snapshot; {@code world} is the player's world (the page's world thread). */
+    public dev.scyphoz.dappermap.dynamic.DynamicMinimapRenderer.LiveSnapshot capturePreview(UUID uuid,
+                                                                                            com.hypixel.hytale.server.core.universe.world.World world) {
         DynamicMinimapSession session = uuid == null ? null : this.sessionsByPlayer.get(uuid);
-        return session == null ? null : session.capturePreview();
+        return session == null ? null : session.capturePreview(world);
     }
 
     public void setSettings(UUID playerUuid, DynamicMinimapSetting settings) {

@@ -769,4 +769,138 @@ public final class DapperMapUtil {
             return text;
         }
     }
+    // ------------------------------------------------------------------------------------
+    // Local Time (real-world clock in the Info Panel)
+    // ------------------------------------------------------------------------------------
+
+    /**
+     * The regions offered by the Local Time setting. A player's choice is saved as its index in
+     * {@link #ZONES}, so entries are APPEND ONLY: never reorder or remove one (add new ones at the
+     * end). Each region is a real timezone, so daylight saving is applied automatically by Java's
+     * built-in timezone data. The server's own clock and timezone don't matter: the time is taken
+     * as a UTC instant and converted per player.
+     */
+    public static final class LocalTimeZones {
+        /** One region: command name, timezone id and the English label shown after its UTC offset. */
+        public record Zone(String slug, String zoneId, String label, java.time.ZoneId zone) { }
+
+        private static final Zone[] ZONES;
+        private static final String[] SLUGS;
+        static {
+            String[][] table = {
+                    // slug, timezone id, label   (index = saved value: append only)
+                    {"utc", "UTC", "UTC"},
+                    {"honolulu", "Pacific/Honolulu", "Honolulu"},
+                    {"anchorage", "America/Anchorage", "Anchorage"},
+                    {"los-angeles", "America/Los_Angeles", "Los Angeles / Vancouver"},
+                    {"denver", "America/Denver", "Denver / Edmonton"},
+                    {"phoenix", "America/Phoenix", "Phoenix"},
+                    {"chicago", "America/Chicago", "Chicago / Winnipeg"},
+                    {"mexico-city", "America/Mexico_City", "Mexico City"},
+                    {"new-york", "America/New_York", "New York / Toronto"},
+                    {"bogota", "America/Bogota", "Bogota / Lima"},
+                    {"halifax", "America/Halifax", "Halifax"},
+                    {"st-johns", "America/St_Johns", "St. John's"},
+                    {"santiago", "America/Santiago", "Santiago"},
+                    {"sao-paulo", "America/Sao_Paulo", "Sao Paulo"},
+                    {"buenos-aires", "America/Argentina/Buenos_Aires", "Buenos Aires"},
+                    {"azores", "Atlantic/Azores", "Azores"},
+                    {"london", "Europe/London", "London / Dublin / Lisbon"},
+                    {"paris", "Europe/Paris", "Paris / Berlin / Madrid / Rome"},
+                    {"lagos", "Africa/Lagos", "Lagos"},
+                    {"athens", "Europe/Athens", "Athens / Helsinki / Kyiv"},
+                    {"cairo", "Africa/Cairo", "Cairo"},
+                    {"johannesburg", "Africa/Johannesburg", "Johannesburg"},
+                    {"istanbul", "Europe/Istanbul", "Istanbul"},
+                    {"moscow", "Europe/Moscow", "Moscow"},
+                    {"riyadh", "Asia/Riyadh", "Riyadh / Baghdad"},
+                    {"nairobi", "Africa/Nairobi", "Nairobi"},
+                    {"tehran", "Asia/Tehran", "Tehran"},
+                    {"dubai", "Asia/Dubai", "Dubai"},
+                    {"kabul", "Asia/Kabul", "Kabul"},
+                    {"karachi", "Asia/Karachi", "Karachi / Tashkent"},
+                    {"india", "Asia/Kolkata", "India"},
+                    {"kathmandu", "Asia/Kathmandu", "Kathmandu"},
+                    {"dhaka", "Asia/Dhaka", "Dhaka"},
+                    {"yangon", "Asia/Yangon", "Yangon"},
+                    {"bangkok", "Asia/Bangkok", "Bangkok / Jakarta / Hanoi"},
+                    {"singapore", "Asia/Singapore", "Singapore / Kuala Lumpur"},
+                    {"china", "Asia/Shanghai", "Beijing / Shanghai"},
+                    {"hong-kong", "Asia/Hong_Kong", "Hong Kong / Taipei"},
+                    {"manila", "Asia/Manila", "Manila"},
+                    {"perth", "Australia/Perth", "Perth"},
+                    {"tokyo", "Asia/Tokyo", "Tokyo"},
+                    {"seoul", "Asia/Seoul", "Seoul"},
+                    {"darwin", "Australia/Darwin", "Darwin"},
+                    {"adelaide", "Australia/Adelaide", "Adelaide"},
+                    {"brisbane", "Australia/Brisbane", "Brisbane"},
+                    {"sydney", "Australia/Sydney", "Sydney / Melbourne / Canberra"},
+                    {"hobart", "Australia/Hobart", "Hobart"},
+                    {"vladivostok", "Asia/Vladivostok", "Vladivostok"},
+                    {"noumea", "Pacific/Noumea", "Noumea / Solomon Islands"},
+                    {"auckland", "Pacific/Auckland", "Auckland / Wellington"},
+                    {"fiji", "Pacific/Fiji", "Fiji"},
+                    {"chatham", "Pacific/Chatham", "Chatham Islands"},
+                    {"tonga", "Pacific/Tongatapu", "Tonga / Samoa"},
+                    {"kiritimati", "Pacific/Kiritimati", "Kiritimati"},
+            };
+            ZONES = new Zone[table.length];
+            SLUGS = new String[table.length];
+            for (int i = 0; i < table.length; i++) {
+                java.time.ZoneId zone;
+                try { zone = java.time.ZoneId.of(table[i][1]); }
+                catch (RuntimeException unknown) { zone = java.time.ZoneOffset.UTC; } // Old timezone data: show UTC rather than fail.
+                ZONES[i] = new Zone(table[i][0], table[i][1], table[i][2], zone);
+                SLUGS[i] = table[i][0];
+            }
+        }
+
+        private LocalTimeZones() {
+        }
+
+        /** Number of regions; valid saved values are 0 .. count() - 1. */
+        public static int count() { return ZONES.length; }
+
+        /** The region at a saved index (UTC for an index out of range, e.g. a hand-edited file). */
+        public static Zone at(int index) { return ZONES[index >= 0 && index < ZONES.length ? index : 0]; }
+
+        /** Every command name, in saved-index order (a copy). */
+        public static String[] slugs() { return SLUGS.clone(); }
+
+        /** Index of a command name or timezone id (case-insensitive), or -1. */
+        public static int find(String value) {
+            if (value == null) return -1;
+            for (int i = 0; i < ZONES.length; i++)
+                if (ZONES[i].slug.equalsIgnoreCase(value) || ZONES[i].zoneId.equalsIgnoreCase(value)) return i;
+            return -1;
+        }
+
+        /** The region's offset from UTC in seconds at {@code epochMs} (changes with daylight saving). */
+        public static int offsetSeconds(int index, long epochMs) {
+            return at(index).zone.getRules().getOffset(java.time.Instant.ofEpochMilli(epochMs)).getTotalSeconds();
+        }
+
+        /** "UTC", "UTC+10:30", "UTC-5" for an offset in seconds. */
+        public static String offsetLabel(int offsetSeconds) {
+            if (offsetSeconds == 0) return "UTC";
+            int minutes = Math.abs(offsetSeconds) / 60;
+            String text = (offsetSeconds < 0 ? "UTC-" : "UTC+") + minutes / 60;
+            return minutes % 60 == 0 ? text : text + ":" + (minutes % 60 < 10 ? "0" : "") + minutes % 60;
+        }
+
+        /**
+         * Region indexes sorted by their current UTC offset, then label: the order the settings
+         * dropdown lists them in (west to east), so a region is easy to find by offset.
+         */
+        public static int[] byOffset(long epochMs) {
+            Integer[] order = new Integer[ZONES.length];
+            int[] offsets = new int[ZONES.length];
+            for (int i = 0; i < ZONES.length; i++) { order[i] = i; offsets[i] = offsetSeconds(i, epochMs); }
+            java.util.Arrays.sort(order, (a, b) -> offsets[a] != offsets[b] ? Integer.compare(offsets[a], offsets[b])
+                    : a == 0 ? -1 : b == 0 ? 1 : ZONES[a].label.compareTo(ZONES[b].label)); // UTC first at +0.
+            int[] out = new int[order.length];
+            for (int i = 0; i < out.length; i++) out[i] = order[i];
+            return out;
+        }
+    }
 }

@@ -30,6 +30,7 @@ import dev.scyphoz.dappermap.dynamic.DynamicAssetPublisher;
 import dev.scyphoz.dappermap.dynamic.DynamicMinimapColours;
 import dev.scyphoz.dappermap.dynamic.DynamicMinimapColours.Key;
 import dev.scyphoz.dappermap.integration.BetterMapIntegration;
+import dev.scyphoz.dappermap.util.DapperMapUtil.LocalTimeZones;
 import dev.scyphoz.dappermap.service.DapperMapSessionManager;
 import dev.scyphoz.dappermap.util.DapperMapUtil.Lang;
 
@@ -147,7 +148,7 @@ public final class DapperMapSettingsPage
         }
         if (this.adminMode && this.draftLimits == null) this.draftLimits = this.config.limits();
         if (this.adminMode && this.draftTerrainColours < 0) this.draftTerrainColours = this.config.getTerrainColours();
-        if (this.previewSnapshot == null) this.previewSnapshot = this.sessions.capturePreview(this.playerRef.getUuid());
+        if (this.previewSnapshot == null) this.previewSnapshot = this.sessions.capturePreview(this.playerRef.getUuid(), this.previewWorld);
         DynamicMinimapSetting settings = this.draftSettings;
         this.betterMapCaveAvailable = BetterMapIntegration.isCaveModeEnabled(
                 store.getComponent(ref, Player.getComponentType()));
@@ -184,6 +185,9 @@ public final class DapperMapSettingsPage
         builder.set("#DapperMapCloseButtonLabel.Text", this.lang.get("button.cancel", "CANCEL"));
         builder.set("#ColourEditorTitle.Text", this.lang.get("colours.title", "HUD COLOURS"));
         builder.set("#ColourEditorHint.Text", this.lang.get("colours.hint", "Select an instrument element, then tune its colour."));
+        // Colour editor row labels (their descriptions follow the selection: element description, colour hex).
+        builder.set("#ColourTargetLabel.Text", this.lang.get("colours.element", "Element"));
+        builder.set("#ColourPickerLabel.Text", this.lang.get("colours.colour", "Colour"));
         builder.set("#ColourResetLabel.Text", this.lang.get("colours.reset", "RESET THIS COLOUR"));
         builder.set("#ColourResetAllLabel.Text", this.lang.get("colours.reset_all", "RESET ALL COLOURS"));
         builder.set("#QuickPlacementTitle.Text", this.lang.get("position.quick", "QUICK PLACEMENT"));
@@ -389,7 +393,7 @@ public final class DapperMapSettingsPage
             this.showPreviewNotice(ui, "preview.disabled", "MINIMAP DISABLED");
             return;
         }
-        if (this.previewSnapshot == null) this.previewSnapshot = this.sessions.capturePreview(this.playerRef.getUuid());
+        if (this.previewSnapshot == null) this.previewSnapshot = this.sessions.capturePreview(this.playerRef.getUuid(), this.previewWorld);
         if (this.previewSnapshot == null) {
             this.showPreviewNotice(ui, "preview.unavailable", "LIVE HUD PREVIEW UNAVAILABLE");
             return;
@@ -1598,6 +1602,32 @@ public final class DapperMapSettingsPage
     private static final java.util.Map<String, String> UNITS = java.util.Map.of(
             "blocks", "{value} blocks", "px", "{value} px", "percent", "{value}%");
 
+    /**
+     * Local Time regions, west to east by their current UTC offset: "(UTC+10:30) Adelaide". The
+     * offsets follow daylight saving, so the list is rebuilt at most once a minute and shared by
+     * every page (each page build asks for it several times). Values are the command names.
+     */
+    private static final class TimeZones implements Options {
+        private volatile List<Choice> cached = List.of();
+        private volatile long cachedMinute = Long.MIN_VALUE;
+
+        public List<Choice> choices(int current) {
+            long now = System.currentTimeMillis(), minute = now / 60_000L;
+            if (minute == this.cachedMinute) return this.cached;
+            int[] order = LocalTimeZones.byOffset(now);
+            List<Choice> out = new ArrayList<>(order.length);
+            for (int index : order) {
+                var zone = LocalTimeZones.at(index);
+                String offset = LocalTimeZones.offsetLabel(LocalTimeZones.offsetSeconds(index, now));
+                // Region names stay in English (no key): they're place names, and match the command names.
+                out.add(new Choice(index == 0 ? "UTC" : "(" + offset + ") " + zone.label(), zone.slug(), index, null, null));
+            }
+            this.cached = List.copyOf(out);
+            this.cachedMinute = minute;
+            return this.cached;
+        }
+    }
+
     /** Numbers in ascending order, plus the current value when it is not one of them (e.g. "128 blocks"). */
     private record Numbers(int[] base, String unit) implements Options {
         public List<Choice> choices(int current) {
@@ -1775,9 +1805,18 @@ public final class DapperMapSettingsPage
                 "Show the direction you are facing.", F_PANEL);
         row("clock", "World Time", Kind.SWITCH, DynamicMinimapSetting.Field.SHOW_CLOCK, ON_OFF,
                 "Show the current time in your Hytale world.", F_PANEL);
-        row("clock_format", "Clock Format", Kind.SWITCH, DynamicMinimapSetting.Field.CLOCK_24_HOUR,
+        row("world_time_format", "World Time Format", Kind.SWITCH, DynamicMinimapSetting.Field.CLOCK_24_HOUR,
                 choices("clock_format", on("24-hour", "true", "24 HOUR"), off("12-hour", "false", "12 HOUR")),
-                "Choose a 12-hour or 24-hour clock.", F_PANEL, DynamicMinimapSetting.Field.SHOW_CLOCK);
+                "Choose a 12-hour or 24-hour clock for World Time.", F_PANEL, DynamicMinimapSetting.Field.SHOW_CLOCK);
+        row("local_time", "Local Time", Kind.SWITCH, DynamicMinimapSetting.Field.SHOW_LOCAL_TIME, ON_OFF,
+                "Show the real-world time for your region.", F_PANEL);
+        row("local_time_zone", "Local Time Region", Kind.DROPDOWN, DynamicMinimapSetting.Field.LOCAL_TIME_ZONE,
+                new TimeZones(), "Choose your region. Daylight saving is applied automatically.",
+                F_PANEL, DynamicMinimapSetting.Field.SHOW_LOCAL_TIME);
+        // Local Time has its own 12/24-hour switch (same choices and translations as World Time Format).
+        row("local_time_format", "Local Time Format", Kind.SWITCH, DynamicMinimapSetting.Field.LOCAL_CLOCK_24_HOUR,
+                choices("clock_format", on("24-hour", "true", "24 HOUR"), off("12-hour", "false", "12 HOUR")),
+                "Choose a 12-hour or 24-hour clock for Local Time.", F_PANEL, DynamicMinimapSetting.Field.SHOW_LOCAL_TIME);
         row("biome", "Region", Kind.SWITCH, DynamicMinimapSetting.Field.SHOW_BIOME, ON_OFF,
                 "Show the name of the region you are in.", F_PANEL);
         // Integrations tab: BetterMap rows also need BetterMap installed (isDropdownDisabled).

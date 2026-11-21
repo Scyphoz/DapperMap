@@ -100,7 +100,8 @@ public final class DynamicMinimapHud extends CustomUIHud {
 
     private record InitialOverlayKey(int size, int shape, int resolution, boolean panel, int position,
                                      int alignment, boolean coords, boolean compass, boolean clock,
-                                     boolean biome, DynamicMinimapColours colours, int markings, int panelText) {}
+                                     boolean biome, boolean localTime, DynamicMinimapColours colours, int markings,
+                                     int panelText) {}
     /** First overlay per HUD set-up; least recently used dropped beyond 32 (was cleared wholesale at 16). */
     private static final java.util.Map<InitialOverlayKey, DynamicMinimapRenderer.NativeHudParts> INITIAL_OVERLAYS =
             DapperMapUtil.lruMap(32, true);
@@ -110,7 +111,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
                 // Alignment 0: the panel image is text-free, so alignment never changes it.
                 settings.textureResolution, settings.infoPanelShown(), settings.infoPanelPosition,
                 0, settings.showCoordinates, settings.showCompass,
-                settings.showClock, settings.showBiome, settings.colours, settings.compassMarkings(),
+                settings.showClock, settings.showBiome, settings.showLocalTime, settings.colours, settings.compassMarkings(),
                 settings.panelTextKey()); // Font Size changes the panel's size.
     }
 
@@ -255,6 +256,8 @@ public final class DynamicMinimapHud extends CustomUIHud {
     private String compassText = INITIAL_COMPASS;
     private String clockText = INITIAL_CLOCK;
     private String biomeText = INITIAL_BIOME;
+    /** Local Time value; empty until the first tick (the text is a native label, not part of any image). */
+    private String localTimeText = "";
 
     /** Headings and compass letters in the player's language (replaced by setText on a language change). */
     private DynamicMinimapRenderer.HudText text;
@@ -310,7 +313,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
         // The displayed terrain PNG is shared and never modified, so it needs no copy.
         return new DynamicMinimapRenderer.LiveSnapshot(terrain, this.logicalUiSize,
                 this.terrainPixels, this.panLeft + inset, this.panTop + inset, selfAngle, this.frameAngle,
-                this.coordsText, this.compassText, this.clockText, this.biomeText,
+                this.coordsText, this.compassText, this.clockText, this.clockText, this.biomeText, this.localTimeText,
                 java.util.List.copyOf(markers), this.text);
     }
 
@@ -785,11 +788,13 @@ public final class DynamicMinimapHud extends CustomUIHud {
         }
     }
 
-    public void setInfoVisibility(boolean showCoordinates, boolean showCompass, boolean showClock, boolean showBiome) {
+    public void setInfoVisibility(boolean showCoordinates, boolean showCompass, boolean showClock, boolean showBiome,
+                                  boolean showLocalTime) {
         if (this.settings.showCoordinates == showCoordinates
                 && this.settings.showCompass == showCompass
                 && this.settings.showClock == showClock
-                && this.settings.showBiome == showBiome) {
+                && this.settings.showBiome == showBiome
+                && this.settings.showLocalTime == showLocalTime) {
             return;
         }
 
@@ -797,6 +802,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
         this.settings.showCompass = showCompass;
         this.settings.showClock = showClock;
         this.settings.showBiome = showBiome;
+        this.settings.showLocalTime = showLocalTime;
 
         if (this.built) {
             this.overlayPublishPending = true;
@@ -839,17 +845,17 @@ public final class DynamicMinimapHud extends CustomUIHud {
         }
     }
 
-    /** Text selectors of the four readout values, indexed like the rows (coordinates, bearing, time, region). */
+    /** Text selectors of the readout values, indexed like the rows (coordinates, bearing, time, region, local time). */
     private static final String[] READOUT_TEXT = {"#WayfinderMmRoot #WayfinderMmReadout0.Text",
             "#WayfinderMmRoot #WayfinderMmReadout1.Text", "#WayfinderMmRoot #WayfinderMmReadout2.Text",
-            "#WayfinderMmRoot #WayfinderMmReadout3.Text"};
+            "#WayfinderMmRoot #WayfinderMmReadout3.Text", "#WayfinderMmRoot #WayfinderMmReadout4.Text"};
 
     /** Updates the readout values; only changed ones whose label is on the client are sent. */
-    public void setStatus(String coords, String compass, String clock, String biome) {
-        String[] values = {coords, compass, clock, biome};
-        String[] current = {this.coordsText, this.compassText, this.clockText, this.biomeText};
+    public void setStatus(String coords, String compass, String clock, String biome, String localTime) {
+        String[] values = {coords, compass, clock, biome, localTime};
+        String[] current = {this.coordsText, this.compassText, this.clockText, this.biomeText, this.localTimeText};
         UICommandBuilder builder = null;
-        for (int row = 0; row < 4; row++) {
+        for (int row = 0; row < READOUT_TEXT.length; row++) {
             if (values[row] == null || values[row].equals(current[row])) continue;
             current[row] = values[row];
             if (this.built && (this.shownReadouts & (1 << row)) != 0) {
@@ -861,6 +867,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
         this.compassText = current[1];
         this.clockText = current[2];
         this.biomeText = current[3];
+        this.localTimeText = current[4];
         if (builder != null) this.update(false, builder);
     }
 
@@ -1085,7 +1092,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
 
     private void appendReadoutLabels(StringBuilder out) {
         this.shownReadouts = 0;
-        String[] values = {this.coordsText, this.compassText, this.clockText, this.biomeText};
+        String[] values = {this.coordsText, this.compassText, this.clockText, this.biomeText, this.localTimeText};
         String alignment = DapperMapUtil.alignmentName(this.settings.infoPanelTextAlignment);
         // Brand, then per shown row a heading (static text, only sent with layout rebuilds) and its
         // value (updated by setStatus with Text sets only). The boxes are shared with the preview.

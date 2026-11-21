@@ -709,7 +709,7 @@ public final class DynamicMinimapRenderer {
             // Padding, the brand line, then one row per readout shown (sizes follow Font Size).
             int panelHeight = PANEL_PADDING_V * 2 + brandHeight(settings);
             int rowHeight = rowHeight(settings);
-            for (int row = 0; row < 4; row++) if (readoutShown(settings, row)) panelHeight += rowHeight;
+            for (int row = 0; row < READOUT_ROWS; row++) if (readoutShown(settings, row)) panelHeight += rowHeight;
             int panelWidth = panelWidth(settings);
             int gap = settings.isCircle() ? CIRCLE_GAP : SQUARE_GAP;
             int width = side ? mapSize + gap + panelWidth : Math.max(mapSize, panelWidth);
@@ -734,7 +734,7 @@ public final class DynamicMinimapRenderer {
          * panel is hidden.
          */
         public java.util.List<PanelLabel> panelLabels(DynamicMinimapSetting settings) {
-            java.util.List<PanelLabel> labels = new java.util.ArrayList<>(9);
+            java.util.List<PanelLabel> labels = new java.util.ArrayList<>(1 + 2 * READOUT_ROWS);
             if (!settings.infoPanelShown()) return labels;
             int position = settings.infoPanelPosition;
             boolean curved = settings.isCircle() && this.side;
@@ -748,7 +748,7 @@ public final class DynamicMinimapRenderer {
                     spacing(0.35D, title), true));
             int cursor = this.panelY + PANEL_PADDING_V + brandHeight(settings);
             int headingStep = font(HEADING_STEP, headings), rowHeight = rowHeight(settings);
-            for (int row = 0; row < 4; row++) {
+            for (int row : READOUT_ORDER) { // Display order: Local Time sits under World Time.
                 if (!readoutShown(settings, row)) continue;
                 int curve = curved ? (row == 0 || row == 3 ? 12 : 22) : 0;
                 int left = 8 + (position == DynamicMinimapSetting.INFO_RIGHT ? curve : 0);
@@ -849,7 +849,8 @@ public final class DynamicMinimapRenderer {
     private static NativeHudParts nativeHudParts(DynamicMinimapSetting settings, int mapSize, double angle, boolean cachedOnly) {
         HudLayout layout = HudLayout.of(settings, mapSize);
         int flags = (settings.infoPanelShown() ? 16 : 0) | (settings.showCoordinates ? 1 : 0)
-                | (settings.showCompass ? 2 : 0) | (settings.showClock ? 4 : 0) | (settings.showBiome ? 8 : 0);
+                | (settings.showCompass ? 2 : 0) | (settings.showClock ? 4 : 0) | (settings.showBiome ? 8 : 0)
+                | (settings.showLocalTime ? 32 : 0);
         // The live panel is text-free glass (headings and values are native client labels), so text
         // alignment no longer changes its pixels: key it as 0 to share one cached panel per layout.
         var key = new RowLayerKey(new OverlayLayout(mapSize, layout.width(), layout.height(), layout.panelWidth(), layout.panelHeight(), layout.gap(),
@@ -948,8 +949,17 @@ public final class DynamicMinimapRenderer {
     /** The player HUD's terrain, telemetry and visible marker assets frozen when settings open. */
     public record LiveSnapshot(byte[] terrain, int mapSize, int bufferSize, int panX, int panY,
                                double selfAngle, double frameAngle, String coords,
-                               String compass, String clock, String biome,
-                               java.util.List<PreviewMarker> markers, HudText text) { }
+                               String compass, String clock12, String clock24, String biome, String localTime,
+                               java.util.List<PreviewMarker> markers, HudText text) {
+        /**
+         * The same snapshot with fresh readouts for every Info Panel row (shown or not), so the
+         * preview can show rows that are off on the live HUD. Local Time is formatted per render.
+         */
+        public LiveSnapshot withReadouts(String coords, String compass, String clock12, String clock24, String biome) {
+            return new LiveSnapshot(this.terrain, this.mapSize, this.bufferSize, this.panX, this.panY, this.selfAngle,
+                    this.frameAngle, coords, compass, clock12, clock24, biome, this.localTime, this.markers, this.text);
+        }
+    }
 
     /** Settings preview stage size (the page shows it at 272x216). */
     public static final int PREVIEW_STAGE_WIDTH = 360, PREVIEW_STAGE_HEIGHT = 286;
@@ -966,7 +976,7 @@ public final class DynamicMinimapRenderer {
     public record SettingsPreview(byte[] png, java.util.List<PreviewText> texts) { }
 
     public static SettingsPreview renderSettingsPreview(DynamicMinimapSetting settings, LiveSnapshot snapshot) {
-        java.util.List<PreviewText> texts = new java.util.ArrayList<>(14);
+        java.util.List<PreviewText> texts = new java.util.ArrayList<>(16);
         BufferedImage stage = settingsPreviewImage(settings, snapshot, texts);
         byte[] png = stage == null ? null : toPng(stage);
         return png == null ? null : new SettingsPreview(png, java.util.List.copyOf(texts));
@@ -1273,7 +1283,7 @@ public final class DynamicMinimapRenderer {
     }
 
     private static PositionPreviewBase positionPreviewBase(DynamicMinimapSetting settings, LiveSnapshot snapshot) {
-        java.util.List<PreviewText> stageTexts = new java.util.ArrayList<>(14);
+        java.util.List<PreviewText> stageTexts = new java.util.ArrayList<>(16);
         BufferedImage hud = settingsPreviewImage(settings, snapshot, stageTexts);
         if (hud == null) return null;
         // The preview stage is a transparent canvas with the HUD centred inside it. Position the
@@ -1360,11 +1370,19 @@ public final class DynamicMinimapRenderer {
         if (image != null) g.drawImage(image, (int)Math.round(x), (int)Math.round(y), size, size, null);
     }
 
-    /** Info-panel headings, indexed like the readout rows (coordinates, bearing, world time, region). */
-    public static final String[] READOUT_HEADINGS = {"COORDINATES", "BEARING", "WORLD TIME", "REGION"};
+    /**
+     * Readout rows by index: 0 coordinates, 1 bearing, 2 world time, 3 region, 4 local time. Indexes
+     * also name the HUD labels (#WayfinderMmReadout{i}), so a new row takes the next index;
+     * {@link #READOUT_ORDER} sets where it is shown.
+     */
+    public static final int READOUT_ROWS = 5;
+    /** Top-to-bottom order of the rows in the panel (Local Time under World Time; Region stays last). */
+    public static final int[] READOUT_ORDER = {0, 1, 2, 4, 3};
+    /** Info-panel headings, indexed like the readout rows. */
+    public static final String[] READOUT_HEADINGS = {"COORDINATES", "BEARING", "WORLD TIME", "REGION", "LOCAL TIME"};
     /** Heading keys in dappermap.lang, in the same order. */
     private static final String[] READOUT_HEADING_KEYS = {"hud.heading.coordinates", "hud.heading.bearing",
-            "hud.heading.world_time", "hud.heading.region"};
+            "hud.heading.world_time", "hud.heading.region", "hud.heading.local_time"};
     private static final String[] CARDINAL_KEYS = {"hud.compass.n", "hud.compass.e", "hud.compass.s", "hud.compass.w"};
 
     /**
@@ -1372,14 +1390,15 @@ public final class DynamicMinimapRenderer {
      * (each language's own letters, e.g. 北/东/南/西 or С/В/Ю/З). Built once per HUD; the settings
      * preview uses the HUD's copy, so both always match.
      */
-    public record HudText(String[] headings, String[] cardinals) {
-        public static final HudText ENGLISH = new HudText(READOUT_HEADINGS, CARDINAL_LETTERS);
+    public record HudText(String[] headings, String[] cardinals, dev.scyphoz.dappermap.util.DapperMapUtil.Lang lang) {
+        public static final HudText ENGLISH = new HudText(READOUT_HEADINGS, CARDINAL_LETTERS,
+                dev.scyphoz.dappermap.util.DapperMapUtil.Lang.of((String) null));
 
         public static HudText of(dev.scyphoz.dappermap.util.DapperMapUtil.Lang lang) {
             String[] headings = new String[READOUT_HEADINGS.length], cardinals = new String[CARDINAL_LETTERS.length];
             for (int i = 0; i < headings.length; i++) headings[i] = lang.get(READOUT_HEADING_KEYS[i], READOUT_HEADINGS[i]);
             for (int i = 0; i < cardinals.length; i++) cardinals[i] = lang.get(CARDINAL_KEYS[i], CARDINAL_LETTERS[i]);
-            return new HudText(headings, cardinals);
+            return new HudText(headings, cardinals, lang); // Lang kept for preview readouts (Local Time).
         }
 
         /**
@@ -1391,14 +1410,16 @@ public final class DynamicMinimapRenderer {
         }
     }
     /** Value text colour per readout row. */
-    public static final DynamicMinimapColours.Key[] READOUT_COLOURS = {COORDS_TEXT, COMPASS_TEXT, CLOCK_TEXT, BIOME_TEXT};
+    public static final DynamicMinimapColours.Key[] READOUT_COLOURS = {COORDS_TEXT, COMPASS_TEXT, CLOCK_TEXT, BIOME_TEXT,
+            DynamicMinimapColours.Key.LOCAL_TIME_TEXT};
 
-    /** Whether readout row {@code i} (coordinates, bearing, world time, region) is shown. */
+    /** Whether readout row {@code i} (coordinates, bearing, world time, region, local time) is shown. */
     public static boolean readoutShown(DynamicMinimapSetting settings, int row) {
         return switch (row) {
             case 0 -> settings.showCoordinates;
             case 1 -> settings.showCompass;
             case 2 -> settings.showClock;
+            case 4 -> settings.showLocalTime;
             default -> settings.showBiome;
         };
     }
@@ -1468,7 +1489,14 @@ public final class DynamicMinimapRenderer {
             }
         }
         // Brand, then heading + value per shown row: the same boxes as the live HUD's labels.
-        String[] values = {snapshot.coords(), snapshot.compass(), snapshot.clock(), snapshot.biome()};
+        HudText hudText = snapshot.text() == null ? HudText.ENGLISH : snapshot.text();
+        // Local Time follows the draft (it may have just been switched on, or its region/format
+        // changed), so it's formatted here rather than taken from the snapshot. Preview renders only.
+        String localTime = settings.showLocalTime ? DynamicMinimapSession.formatLocalTime(System.currentTimeMillis(),
+                settings.localTimeZone, settings.localClock24Hour, hudText.lang()) : "";
+        // World Time in the page's World Time Format (both forms are captured with the snapshot).
+        String clock = settings.clock24Hour ? snapshot.clock24() : snapshot.clock12();
+        String[] values = {snapshot.coords(), snapshot.compass(), clock, snapshot.biome(), localTime};
         int alignment = settings.infoPanelTextAlignment;
         for (PanelLabel label : layout.panelLabels(settings)) {
             String id, text;

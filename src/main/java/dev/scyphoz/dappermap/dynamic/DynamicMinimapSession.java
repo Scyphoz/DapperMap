@@ -255,9 +255,27 @@ public final class DynamicMinimapSession {
     private byte[] displayedTerrainPng = null;
     private final DynamicAssetPublisher.ImagePublicationCache terrainPublications = new DynamicAssetPublisher.ImagePublicationCache();
 
-    public DynamicMinimapRenderer.LiveSnapshot capturePreview() {
-        return this.hud == null ? null : this.hud.snapshot(this.displayedTerrainPng,
+    /**
+     * Frozen HUD state for the settings preview. World thread (the settings page is built there).
+     * The live HUD skips readouts for rows (or a whole Info Panel) that are switched off, so they
+     * are worked out here for every row: the preview can then show any row the player turns on.
+     * Runs once per settings page, so it costs nothing per tick.
+     */
+    public DynamicMinimapRenderer.LiveSnapshot capturePreview(World world) {
+        DynamicMinimapRenderer.LiveSnapshot snapshot = this.hud == null ? null : this.hud.snapshot(this.displayedTerrainPng,
                 this.lastSelfBucket < 0 ? 0.0D : this.lastSelfBucket * (Math.PI * 2 / SELF_BUCKETS));
+        if (snapshot == null || world == null) return snapshot;
+        try {
+            // A separate cache, so the tick's cached readouts (and clock format) are untouched.
+            ReadoutCache preview = new ReadoutCache();
+            preview.setLang(this.readouts.lang);
+            var position = this.playerRef.getTransform().getPosition(); // Cached transform, as tickSafe reads it.
+            return snapshot.withReadouts(preview.coords(position.x(), position.y(), position.z()),
+                    preview.compass(this.peekYaw()), clockText(world, false, preview), clockText(world, true, preview),
+                    preview.region(this.playerRef));
+        } catch (RuntimeException failure) {
+            return snapshot; // The live HUD's own text (rows that were off stay blank).
+        }
     }
 
     private double bufferCenterX = Double.NaN;
@@ -950,7 +968,7 @@ public final class DynamicMinimapSession {
             this.hud.setInfoPanelEnabled(s.infoPanelEnabled);
             this.hud.setLayoutPosition(s.hudPositionX, s.hudPositionY, s.infoPanelPosition);
             this.hud.setInfoTextAlignment(s.infoPanelTextAlignment);
-            this.hud.setInfoVisibility(s.showCoordinates, s.showCompass, s.showClock, s.showBiome);
+            this.hud.setInfoVisibility(s.showCoordinates, s.showCompass, s.showClock, s.showBiome, s.showLocalTime);
             this.hud.setPanelFontSizes(s.fontTitle, s.fontHeadings, s.fontValues);
             this.hud.setArrowSize(s.markerArrow);
 
@@ -1123,7 +1141,10 @@ public final class DynamicMinimapSession {
             String compass = panel && this.settings.showCompass ? this.readouts.compass(yaw) : "";
             String clock = panel && this.settings.showClock ? clockText(world, this.settings.clock24Hour, this.readouts) : "";
             String biome = panel && this.settings.showBiome ? this.readouts.region(this.playerRef) : "";
-            this.hud.setStatus(coords, compass, clock, biome);
+            // Real-world time: reformatted only when the minute (or region/format) changes.
+            String localTime = panel && this.settings.showLocalTime
+                    ? this.readouts.localTime(now, this.settings.localTimeZone, this.settings.localClock24Hour) : "";
+            this.hud.setStatus(coords, compass, clock, biome, localTime);
             this.hud.flushPendingVisuals(this.settings.updateSpeed);
             // Player-up: keep the fast cadence while a rotation or a sharpen is still due.
             this.rotationCatchUp = this.settings.rotationMode == 1
@@ -2002,6 +2023,14 @@ public final class DynamicMinimapSession {
     /** "DAY  3:45 PM" / "NIGHT  21:10" in the readout language (keys hud.clock.*). */
     private static String formatClock(int hour, int minute, boolean isDay, boolean twentyFourHour,
                                       dev.scyphoz.dappermap.util.DapperMapUtil.Lang lang) {
+        return lang.format("hud.clock.line", "{day}  {time}", "day",
+                isDay ? lang.get("hud.clock.day", "DAY") : lang.get("hud.clock.night", "NIGHT"),
+                "time", clockBody(hour, minute, twentyFourHour, lang));
+    }
+
+    /** "3:45 PM" / "21:10": a time of day in the player's clock format and language. */
+    private static String clockBody(int hour, int minute, boolean twentyFourHour,
+                                    dev.scyphoz.dappermap.util.DapperMapUtil.Lang lang) {
         String body;
         if (twentyFourHour) {
             body = twoDigits(hour) + ":" + twoDigits(minute);
@@ -2015,8 +2044,19 @@ public final class DynamicMinimapSession {
             // Order varies by language (Chinese writes 下午3:45).
             body = lang.format("hud.clock.12h", "{time} {period}", "time", time, "period", period);
         }
-        return lang.format("hud.clock.line", "{day}  {time}", "day",
-                isDay ? lang.get("hud.clock.day", "DAY") : lang.get("hud.clock.night", "NIGHT"), "time", body);
+        return body;
+    }
+
+    /**
+     * "10:56 AM" / "22:56": real-world time in a Local Time region, in the Local Time clock format.
+     * The region's offset (daylight saving included) is applied but not shown.
+     */
+    static String formatLocalTime(long epochMs, int zoneIndex, boolean twentyFourHour,
+                                  dev.scyphoz.dappermap.util.DapperMapUtil.Lang lang) {
+        int offset = dev.scyphoz.dappermap.util.DapperMapUtil.LocalTimeZones.offsetSeconds(zoneIndex, epochMs);
+        // Local minute of the day from the UTC instant plus the region's current offset.
+        int minuteOfDay = (int) Math.floorMod(Math.floorDiv(epochMs, 60_000L) + offset / 60, 1440L);
+        return clockBody(minuteOfDay / 60, minuteOfDay % 60, twentyFourHour, lang);
     }
 
     private static String twoDigits(int value) { return value < 10 ? "0" + value : Integer.toString(value); }
@@ -2025,7 +2065,11 @@ public final class DynamicMinimapSession {
     static final class ReadoutCache {
         private int x, y, z, degrees, hour, minute;
         private boolean day, format;
-        private String coords, compass, clock, rawBiome, biome;
+        private String coords, compass, clock, rawBiome, biome, localTime;
+        /** Local Time inputs last formatted: UTC minute, region index and clock format. */
+        private long localMinute = Long.MIN_VALUE;
+        private int localZone = -1;
+        private boolean localFormat;
         /** Region readout inputs last seen (zone, region, biome ids; compared by identity first). */
         private String lastZone, lastRegion;
         /** Readout language and its bearing abbreviations (set when the HUD is built). */
@@ -2082,7 +2126,20 @@ public final class DynamicMinimapSession {
                     : label.substring(0, label.offsetByCodePoints(0, 19)) + "...";
             return biome;
         }
-        void clear() { coords = compass = clock = biome = rawBiome = lastZone = lastRegion = null; }
+        /**
+         * Local Time readout. Offsets are whole minutes (incl. :30 and :45 regions), so the text and
+         * any daylight-saving change can only alter on a UTC minute boundary: between them this is
+         * one division and three comparisons, with no timezone lookup or allocation.
+         */
+        String localTime(long nowMs, int zone, boolean format) {
+            long minute = Math.floorDiv(nowMs, 60_000L);
+            if (localTime == null || minute != localMinute || zone != localZone || format != localFormat) {
+                localMinute = minute; localZone = zone; localFormat = format;
+                localTime = formatLocalTime(nowMs, zone, format, this.lang);
+            }
+            return localTime;
+        }
+        void clear() { coords = compass = clock = biome = rawBiome = lastZone = lastRegion = localTime = null; }
     }
 
     private static String prettyName(String raw) {

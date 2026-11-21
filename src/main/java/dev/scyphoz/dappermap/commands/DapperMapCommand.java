@@ -194,12 +194,34 @@ public class DapperMapCommand extends AbstractPlayerCommand {
         toggle("info", "coordinates", "Coordinates", (s, on) -> s.showCoordinates = on);
         toggle("info", "bearing", "Bearing", (s, on) -> s.showCompass = on);
         toggle("info", "world-time", "World Time", (s, on) -> s.showClock = on);
-        // Its own command (and permission) since 3.2.0; world-time no longer takes 12|24.
-        add("info", "clock-format", Arg.NUMBER, "12|24", "Clock Format: 12-hour or 24-hour", (s, v, e, p, l) -> {
+        // World Time Format (named clock-format before 3.3.0); world-time itself only takes on|off.
+        add("info", "world-time-format", Arg.NUMBER, "12|24", "World Time Format: 12-hour or 24-hour", (s, v, e, p, l) -> {
             if (!v.equals("12") && !v.equals("24")) return null;
             s.clock24Hour = v.equals("24");
-            return done(value(l, "info", "clock-format", "Clock Format",
+            return done(value(l, "info", "world-time-format", "World Time Format",
                     l.get("choice.clock_format." + s.clock24Hour, v + "-hour")));
+        });
+        toggle("info", "local-time", "Local Time (real-world time)", (s, on) -> s.showLocalTime = on);
+        // Region by command name ("adelaide") or timezone id ("australia/adelaide"); "list" names them all.
+        add("info", "local-timezone", Arg.WORD, "<region>|list", "Local Time Region", (s, v, e, p, l) -> {
+            if (v.equals("list"))
+                return new Result(false, l.format("reply.local_timezone.list", "Local Time regions: {regions}.",
+                        "regions", String.join(", ", DapperMapUtil.LocalTimeZones.slugs())));
+            int zone = DapperMapUtil.LocalTimeZones.find(v);
+            if (zone < 0) return null;
+            s.localTimeZone = zone;
+            var region = DapperMapUtil.LocalTimeZones.at(zone);
+            String offset = DapperMapUtil.LocalTimeZones.offsetLabel(
+                    DapperMapUtil.LocalTimeZones.offsetSeconds(zone, System.currentTimeMillis()));
+            return done(value(l, "info", "local-timezone", "Local Time Region",
+                    zone == 0 ? "UTC" : region.label() + " (" + offset + ")"));
+        });
+        // Local Time's own clock format (separate from world-time-format).
+        add("info", "local-time-format", Arg.NUMBER, "12|24", "Local Time Format: 12-hour or 24-hour", (s, v, e, p, l) -> {
+            if (!v.equals("12") && !v.equals("24")) return null;
+            s.localClock24Hour = v.equals("24");
+            return done(value(l, "info", "local-time-format", "Local Time Format",
+                    l.get("choice.clock_format." + s.localClock24Hour, v + "-hour")));
         });
         toggle("info", "region", "Region", (s, on) -> s.showBiome = on);
         // Integrations
@@ -669,8 +691,10 @@ public class DapperMapCommand extends AbstractPlayerCommand {
                 "info: panel " + onOff(s.infoPanelEnabled) + ", position " + DapperMapUtil.nameAt(PANEL_POSITION_NAMES, s.infoPanelPosition)
                         + ", alignment " + DapperMapUtil.nameAt(PANEL_ALIGNMENT_NAMES, s.infoPanelTextAlignment)
                         + ", coordinates " + onOff(s.showCoordinates) + ", bearing " + onOff(s.showCompass)
-                        + ", world-time " + onOff(s.showClock) + ", clock-format " + (s.clock24Hour ? "24" : "12")
-                        + ", region " + onOff(s.showBiome),
+                        + ", world-time " + onOff(s.showClock) + ", world-time-format " + (s.clock24Hour ? "24" : "12")
+                        + ", region " + onOff(s.showBiome) + ", local-time " + onOff(s.showLocalTime)
+                        + ", local-timezone " + DapperMapUtil.LocalTimeZones.at(s.localTimeZone).slug()
+                        + ", local-time-format " + (s.localClock24Hour ? "24" : "12"),
                 "integration: worldmap " + onOff(s.showWorldMapMarkers) + ", bettermap " + onOff(s.betterMapEnabled)
                         + ", bettermap-markers " + onOff(s.betterMapMarkersEnabled)
                         + ", bettermap-caves " + onOff(s.betterMapCaveModeEnabled));
@@ -947,8 +971,12 @@ public class DapperMapCommand extends AbstractPlayerCommand {
             this.second = setting.arg() == Arg.TWO_NUMBERS ? this.withRequiredArg("y", key("command.position.y"), ArgTypes.INTEGER) : null;
             if (this.word != null) {
                 // Suggest the named values (not number ranges such as <16..256>).
-                String[] suggestions = Arrays.stream(setting.values().split("\\|"))
+                String[] named = Arrays.stream(setting.values().split("\\|"))
                         .filter(value -> !value.startsWith("<")).toArray(String[]::new);
+                // Local Time Region also suggests every region name.
+                String[] suggestions = !setting.values().startsWith("<region>") ? named
+                        : java.util.stream.Stream.concat(Arrays.stream(named), Arrays.stream(DapperMapUtil.LocalTimeZones.slugs()))
+                        .toArray(String[]::new);
                 this.word.suggest((sender, entered, count, result) -> {
                     String prefix = entered.toLowerCase(java.util.Locale.ROOT);
                     for (String value : suggestions) if (value.startsWith(prefix)) result.suggest(value);

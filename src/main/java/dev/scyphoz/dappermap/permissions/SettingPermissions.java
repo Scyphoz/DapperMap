@@ -104,8 +104,11 @@ public final class SettingPermissions {
         node("info.coordinates", "coordinates", Field.SHOW_COORDINATES);
         node("info.bearing", "compass", Field.SHOW_COMPASS);
         node("info.world-time", "clock", Field.SHOW_CLOCK);
-        node("info.clock-format", "clock_format", Field.CLOCK_24_HOUR);
+        node("info.world-time-format", "world_time_format", Field.CLOCK_24_HOUR); // Was info.clock-format before 3.3.0.
         node("info.region", "biome", Field.SHOW_BIOME);
+        node("info.local-time", "local_time", Field.SHOW_LOCAL_TIME);
+        node("info.local-timezone", "local_time_zone", Field.LOCAL_TIME_ZONE);
+        node("info.local-time-format", "local_time_format", Field.LOCAL_CLOCK_24_HOUR);
         // Integrations tab.
         node("integration.worldmap", "worldmap", Field.SHOW_WORLD_MAP_MARKERS);
         node("integration.bettermap", "bettermap", Field.BETTERMAP_ENABLED);

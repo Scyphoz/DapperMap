@@ -119,11 +119,22 @@ public final class DynamicMinimapSetting {
     public int infoPanelTextAlignment = INFO_ALIGN_LEFT;
 
     public int updateSpeed = 2;
-    public boolean clock24Hour = true;
+    /** World Time Format: true 24-hour, false 12-hour with AM/PM (default since 3.3.0). */
+    public boolean clock24Hour = false;
     public boolean showCoordinates = true;
     public boolean showClock = true;
     public boolean showCompass = true;
     public boolean showBiome = true;
+    /**
+     * Local Time row: the real-world time in {@link #localTimeZone}. Off by default: Hytale clients
+     * don't send their timezone (Connect only carries the game language), so a default region
+     * would show most players the wrong time until they pick theirs.
+     */
+    public boolean showLocalTime = false;
+    /** Local Time region: index into DapperMapUtil.LocalTimeZones (0 = UTC). */
+    public int localTimeZone = 0;
+    /** Local Time Format: true 24-hour, false 12-hour with AM/PM (default). Separate from World Time's. */
+    public boolean localClock24Hour = false;
     /** Compass ring: N/E/S/W letters (native game text drawn over the frame). */
     public boolean showCompassLetters = true;
     /** Compass ring: the small dashes around the map edge (not the large cardinal dashes). */
@@ -188,6 +199,9 @@ public final class DynamicMinimapSetting {
         SHOW_CLOCK("showClock", true, s -> s.showClock ? 1 : 0, (s, v) -> s.showClock = v != 0),
         SHOW_COMPASS("showCompass", true, s -> s.showCompass ? 1 : 0, (s, v) -> s.showCompass = v != 0),
         SHOW_BIOME("showBiome", true, s -> s.showBiome ? 1 : 0, (s, v) -> s.showBiome = v != 0),
+        SHOW_LOCAL_TIME("showLocalTime", true, s -> s.showLocalTime ? 1 : 0, (s, v) -> s.showLocalTime = v != 0),
+        LOCAL_TIME_ZONE("localTimeZone", false, s -> s.localTimeZone, (s, v) -> s.localTimeZone = v),
+        LOCAL_CLOCK_24_HOUR("localClock24Hour", true, s -> s.localClock24Hour ? 1 : 0, (s, v) -> s.localClock24Hour = v != 0),
         SHOW_COMPASS_LETTERS("showCompassLetters", true, s -> s.showCompassLetters ? 1 : 0, (s, v) -> s.showCompassLetters = v != 0),
         SHOW_COMPASS_DASHES("showCompassDashes", true, s -> s.showCompassDashes ? 1 : 0, (s, v) -> s.showCompassDashes = v != 0),
         SHOW_CARDINAL_DASHES("showCardinalDashes", true, s -> s.showCardinalDashes ? 1 : 0, (s, v) -> s.showCardinalDashes = v != 0),
@@ -250,7 +264,8 @@ public final class DynamicMinimapSetting {
      * player's panel switch itself is kept, so turning a row back on brings the panel back.
      */
     public boolean infoPanelShown() {
-        return this.infoPanelEnabled && (this.showCoordinates || this.showCompass || this.showClock || this.showBiome);
+        return this.infoPanelEnabled && (this.showCoordinates || this.showCompass || this.showClock || this.showBiome
+                || this.showLocalTime);
     }
 
     /**
@@ -349,6 +364,9 @@ public final class DynamicMinimapSetting {
         this.infoPanelPosition = clamp(this.infoPanelPosition, INFO_BELOW, INFO_RIGHT);
         this.infoPanelTextAlignment = clamp(this.infoPanelTextAlignment, INFO_ALIGN_LEFT, INFO_ALIGN_RIGHT);
         this.critterFilter = clamp(this.critterFilter, CRITTERS_SHOW, CRITTERS_HIDE_BOTH);
+        // Unknown region index (hand-edited file): back to UTC.
+        if (this.localTimeZone < 0 || this.localTimeZone >= dev.scyphoz.dappermap.util.DapperMapUtil.LocalTimeZones.count())
+            this.localTimeZone = 0;
 
         this.updateSpeed = clamp(this.updateSpeed, SPEED_FASTEST, SPEED_SLOWEST);
 

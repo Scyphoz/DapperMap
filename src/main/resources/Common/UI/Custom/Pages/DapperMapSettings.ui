@@ -4,7 +4,8 @@ $C = "../Common.ui";
 $C.@PageOverlay {
   LayoutMode: CenterMiddle;
   Group #DapperMapShell {
-    Anchor: (Width: 1060, Height: 700);
+    // 1308 wide: navigation (200) and preview (300) are fixed, so the settings column gets the extra 248 (496 -> 744).
+    Anchor: (Width: 1308, Height: 700);
     Background: PatchStyle(TexturePath: "DapperMapGlassPanelDeep.png", Border: 14);
     LayoutMode: Top;
     Padding: (Left: 20, Right: 20, Top: 16, Bottom: 16);
@@ -95,10 +96,34 @@ $C.@PageOverlay {
               Label #ColourEditorTitle { Anchor: (Height: 30); Text: "HUD COLOURS"; Style: (FontSize: 16, RenderBold: true, TextColor: #b9afff, HorizontalAlignment: Start, VerticalAlignment: Center); }
               Label #ColourEditorHint { Anchor: (Height: 32); Text: "Select an instrument element, then tune its colour."; Style: (FontSize: 11, Wrap: true, TextColor: #8f97af, HorizontalAlignment: Start, VerticalAlignment: Center); }
               Group { Anchor: (Height: 8); }
-              Group { Anchor: (Height: 44); Background: PatchStyle(TexturePath: "DapperMapGlassControl.png", Border: 9); LayoutMode: Full; Padding: (Horizontal: 8, Vertical: 5); $C.@DropdownBox #ColourTarget { @Anchor = (Full: 0); ShowLabel: true; } }
-              Label #ColourDescription { Anchor: (Height: 36); Style: (FontSize: 11, Wrap: true, TextColor: #65d8d2, HorizontalAlignment: Start, VerticalAlignment: Center); }
-              Group { Anchor: (Height: 44); Background: PatchStyle(TexturePath: "DapperMapGlassControl.png", Border: 9); LayoutMode: Full; Padding: (Horizontal: 8, Vertical: 5); ColorPickerDropdownBox #ColourPicker { Anchor: (Full: 0); Style: $C.@DefaultColorPickerDropdownBoxStyle; Color: #7b6cff; Format: Rgb; DisplayTextField: true; ResetTransparencyWhenChangingColor: true; } }
-              Label #ColourHex { Anchor: (Height: 28); Text: "#7B6CFF"; Style: (FontSize: 14, TextColor: #65d8d2, HorizontalAlignment: End, VerticalAlignment: Center); }
+              // Same two columns as the settings rows: a label and description on the left, the
+              // control in the right-hand column (so the element list opens at the column's width).
+              Group { Anchor: (Height: 66); LayoutMode: Left; Padding: (Left: 2, Right: 2, Top: 6, Bottom: 6);
+                Group { FlexWeight: 5; LayoutMode: Top;
+                  Label #ColourTargetLabel { Anchor: (Height: 20); Text: "Element"; Style: (FontSize: 14, TextColor: #cdc7e6, HorizontalAlignment: Start, VerticalAlignment: Center); }
+                  Label #ColourDescription { Anchor: (Height: 32); Style: (FontSize: 11, Wrap: true, TextColor: #65d8d2, HorizontalAlignment: Start, VerticalAlignment: Start); }
+                }
+                Group { Anchor: (Width: 12); }
+                Group { FlexWeight: 3; LayoutMode: Top;
+                  Group { FlexWeight: 1; }
+                  Group { Anchor: (Height: 44); Background: PatchStyle(TexturePath: "DapperMapGlassControl.png", Border: 9); LayoutMode: Full; Padding: (Horizontal: 8, Vertical: 5); $C.@DropdownBox #ColourTarget { @Anchor = (Full: 0); ShowLabel: true; } }
+                  Group { FlexWeight: 1; }
+                }
+              }
+              // Colour: its description is the selected colour's hex value (updated as it changes).
+              Group { Anchor: (Height: 66); LayoutMode: Left; Padding: (Left: 2, Right: 2, Top: 6, Bottom: 6);
+                Group { FlexWeight: 5; LayoutMode: Top;
+                  Label #ColourPickerLabel { Anchor: (Height: 20); Text: "Colour"; Style: (FontSize: 14, TextColor: #cdc7e6, HorizontalAlignment: Start, VerticalAlignment: Center); }
+                  Label #ColourHex { Anchor: (Height: 32); Text: "#7B6CFF"; Style: (FontSize: 11, TextColor: #65d8d2, HorizontalAlignment: Start, VerticalAlignment: Start); }
+                }
+                Group { Anchor: (Width: 12); }
+                Group { FlexWeight: 3; LayoutMode: Top;
+                  Group { FlexWeight: 1; }
+                  Group { Anchor: (Height: 44); Background: PatchStyle(TexturePath: "DapperMapGlassControl.png", Border: 9); LayoutMode: Full; Padding: (Horizontal: 8, Vertical: 5); ColorPickerDropdownBox #ColourPicker { Anchor: (Full: 0); Style: $C.@DefaultColorPickerDropdownBoxStyle; Color: #7b6cff; Format: Rgb; DisplayTextField: true; ResetTransparencyWhenChangingColor: true; } }
+                  Group { FlexWeight: 1; }
+                }
+              }
+              Group { Anchor: (Height: 8); }
               Group { Anchor: (Height: 40); LayoutMode: Left;
                 Group #ColourResetSlot { FlexWeight: 1; Background: PatchStyle(TexturePath: "DapperMapGlassButton.png", Border: 10); LayoutMode: Full; Label #ColourResetLabel { Anchor: (Full: 0); Text: "RESET THIS COLOUR"; Style: (FontSize: 14, TextColor: #ffd16b, HorizontalAlignment: Center, VerticalAlignment: Center); } Group #ColourResetButtonSlot { Anchor: (Full: 0); LayoutMode: Full; } }
                 Group { Anchor: (Width: 8); }
