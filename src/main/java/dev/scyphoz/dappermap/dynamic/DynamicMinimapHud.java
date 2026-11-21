@@ -289,9 +289,8 @@ public final class DynamicMinimapHud extends CustomUIHud {
     }
 
     /**
-     * Copy the mounted HUD state for a frozen settings preview: terrain, pan, headings and the
-     * readouts as shown. Markers and the readouts of hidden rows come from the session's full
-     * preview pass (DynamicMinimapSession.capturePreview), not from the HUD's marker slots.
+     * The mounted HUD's state for the settings preview: terrain, pan, headings and readouts. The
+     * session adds its markers (DynamicMinimapSession.livePreviewSnapshot).
      */
     public DynamicMinimapRenderer.LiveSnapshot snapshot(byte[] terrain, double selfAngle) {
         if (!this.built || !this.terrainShown || terrain == null) return null;
@@ -300,7 +299,7 @@ public final class DynamicMinimapHud extends CustomUIHud {
         // The displayed terrain PNG is shared and never modified, so it needs no copy.
         return new DynamicMinimapRenderer.LiveSnapshot(terrain, this.logicalUiSize,
                 this.terrainPixels, this.panLeft + inset, this.panTop + inset, selfAngle, this.frameAngle,
-                this.coordsText, this.compassText, this.clockText, this.clockText, this.biomeText, this.localTimeText,
+                this.coordsText, this.compassText, this.clockText, this.biomeText, this.localTimeText,
                 java.util.List.of(), this.text, null, null);
     }
 

@@ -153,15 +153,51 @@ public class DapperMapSessionManager {
     }
 
     /**
-     * Settings preview snapshot (one full pass, see DynamicMinimapSession.capturePreview);
-     * {@code world} is the player's world (the page's world thread). {@code markersReady} gets an
-     * updated snapshot if the world-map markers needed their own pass.
+     * Live settings preview: a settings page's draft, used as the player's live settings while
+     * the page is open (see {@link #pushLive}). Never saved; dropped when the page closes.
      */
-    public dev.scyphoz.dappermap.dynamic.DynamicMinimapRenderer.LiveSnapshot capturePreview(UUID uuid,
-                                                                                            com.hypixel.hytale.server.core.universe.world.World world,
-                                                                                            java.util.function.Consumer<dev.scyphoz.dappermap.dynamic.DynamicMinimapRenderer.LiveSnapshot> markersReady) {
+    private final Map<UUID, DynamicMinimapSetting> previewDrafts = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /**
+     * Starts a settings page's live preview: the player's live minimap keeps running while the
+     * page is open and hands {@code listener} its state (world thread). Returns the current state
+     * for the first render, or null when the player has no running minimap. World thread.
+     */
+    public dev.scyphoz.dappermap.dynamic.DynamicMinimapRenderer.LiveSnapshot startLivePreview(UUID uuid,
+                                                                                              com.hypixel.hytale.server.core.universe.world.World world,
+                                                                                              java.util.function.Consumer<dev.scyphoz.dappermap.dynamic.DynamicMinimapRenderer.LiveSnapshot> listener) {
         DynamicMinimapSession session = uuid == null ? null : this.sessionsByPlayer.get(uuid);
-        return session == null ? null : session.capturePreview(world, markersReady);
+        if (session == null) return null;
+        session.setPreviewListener(listener);
+        return session.livePreviewSnapshot(world);
+    }
+
+    /**
+     * The page's draft changed: run the live minimap with it (admin limits and load shedding
+     * applied, as for saved settings). The minimap stays on even if the draft turns it off; the
+     * page shows that case itself.
+     */
+    public void previewDraft(UUID uuid, DynamicMinimapSetting draft) {
+        DynamicMinimapSession session = uuid == null || draft == null ? null : this.sessionsByPlayer.get(uuid);
+        if (session == null || session.previewListener() == null) return;
+        DynamicMinimapSetting copy = draft.copy();
+        copy.enabled = true;
+        this.previewDrafts.put(uuid, copy);
+        this.pushLive(uuid, session);
+        session.previewDraftChanged();
+    }
+
+    /**
+     * Ends a page's live preview (page closed, applied or cancelled): the live minimap goes back
+     * to the player's saved settings. Ignored if another page took over the preview since.
+     */
+    public void endLivePreview(UUID uuid, java.util.function.Consumer<dev.scyphoz.dappermap.dynamic.DynamicMinimapRenderer.LiveSnapshot> listener) {
+        DynamicMinimapSession session = uuid == null ? null : this.sessionsByPlayer.get(uuid);
+        if (session != null && session.previewListener() != listener) return; // Another page's preview.
+        if (uuid != null) this.previewDrafts.remove(uuid);
+        if (session == null) return;
+        session.setPreviewListener(null);
+        this.pushLive(uuid, session);
     }
 
     public void setSettings(UUID playerUuid, DynamicMinimapSetting settings) {
@@ -209,7 +245,9 @@ public class DapperMapSessionManager {
     private void pushLive(UUID uuid, DynamicMinimapSession session) {
         DynamicMinimapSetting target = session.settings();
         synchronized (target) {
-            DynamicMinimapSetting own = this.settingsByPlayer.get(uuid);
+            // A settings page's draft while it previews live, else the player's own settings.
+            DynamicMinimapSetting own = this.previewDrafts.get(uuid);
+            if (own == null) own = this.settingsByPlayer.get(uuid);
             if (own != null) target.copyFrom(liveSettings(own)); // Same field list as copy().
         }
         session.requestPromptTick(); // Idle players would otherwise see the change up to a marker interval late.
@@ -290,6 +328,7 @@ public class DapperMapSessionManager {
             this.settingsByPlayer.remove(uuid);
             this.customisedPlayers.remove(uuid);
             this.adminPageFromPlayerPage.remove(uuid);
+            this.previewDrafts.remove(uuid);
             if (this.settingsStore != null) {
                 this.settingsStore.evict(uuid);
             }

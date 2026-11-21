@@ -957,29 +957,23 @@ public final class DynamicMinimapRenderer {
      */
     public record PreviewMarker(int kind, double x, double y, String key, String image, int rgb, int baseSize) { }
 
-    /** The player HUD's terrain, telemetry and visible marker assets frozen when settings open. */
+    /**
+     * The live HUD's state for the settings preview: terrain, pan, readouts as shown and its
+     * markers. While the settings page is open the live HUD runs with the page's settings, so
+     * this is what the HUD would show with them (DynamicMinimapSession.livePreviewSnapshot).
+     * {@code playerKey}/{@code playerHelmetKey}: the viewer's own head (bare, with helmet), for the
+     * player sample when nobody is near.
+     */
     public record LiveSnapshot(byte[] terrain, int mapSize, int bufferSize, int panX, int panY,
                                double selfAngle, double frameAngle, String coords,
-                               String compass, String clock12, String clock24, String biome, String localTime,
+                               String compass, String clock, String biome, String localTime,
                                java.util.List<PreviewMarker> markers, HudText text,
                                String playerKey, String playerHelmetKey) {
-        /**
-         * The same snapshot with fresh readouts for every Info Panel row (shown or not), so the
-         * preview can show rows that are off on the live HUD (Local Time is formatted per render),
-         * plus the viewer's own head icon keys (bare, with helmet) for the player marker sample.
-         */
-        public LiveSnapshot withPreviewData(String coords, String compass, String clock12, String clock24, String biome,
-                                            String playerKey, String playerHelmetKey) {
+        /** The same HUD state with the session's markers and the viewer's head keys. */
+        public LiveSnapshot withMarkers(java.util.List<PreviewMarker> markers, String playerKey, String playerHelmetKey) {
             return new LiveSnapshot(this.terrain, this.mapSize, this.bufferSize, this.panX, this.panY, this.selfAngle,
-                    this.frameAngle, coords, compass, clock12, clock24, biome, this.localTime, this.markers, this.text,
-                    playerKey, playerHelmetKey);
-        }
-
-        /** The same snapshot with the markers of the full preview pass. */
-        public LiveSnapshot withMarkers(java.util.List<PreviewMarker> markers) {
-            return new LiveSnapshot(this.terrain, this.mapSize, this.bufferSize, this.panX, this.panY, this.selfAngle,
-                    this.frameAngle, this.coords, this.compass, this.clock12, this.clock24, this.biome, this.localTime,
-                    markers, this.text, this.playerKey, this.playerHelmetKey);
+                    this.frameAngle, this.coords, this.compass, this.clock, this.biome, this.localTime,
+                    markers, this.text, playerKey, playerHelmetKey);
         }
     }
 
@@ -1041,120 +1035,32 @@ public final class DynamicMinimapRenderer {
                 g.drawImage(terrain, mapX + panX, mapY + panY,
                         mapX + panX + bufferSize, mapY + panY + bufferSize,
                         0, 0, terrain.getWidth(), terrain.getHeight(), null);
-                java.util.List<double[]> creatureCandidates = new java.util.ArrayList<>();
+                // Markers as the live HUD has them (it runs with the page's settings while the page is
+                // open), each drawn from its own kind, colour and size: map markers first, then
+                // creatures, then other players on top, as on the live map.
                 java.util.List<double[]> occupied = new java.util.ArrayList<>();
-                // Creature types seen around the player (Icons mode): the colour samples use their faces.
-                java.util.LinkedHashSet<String> creatureKeys = new java.util.LinkedHashSet<>();
-                // Markers from the full pass, drawn from the page's settings. Map, BetterMap and
-                // death markers first; creatures become a few colour samples (below); players are
-                // drawn last, above every creature, as on the live map.
+                java.util.List<PreviewMarker> creatures = new java.util.ArrayList<>();
                 java.util.List<PreviewMarker> players = new java.util.ArrayList<>();
                 boolean deathShown = false, mapShown = false;
-                int mapMarkerScale = preview.markerMap;
                 for (PreviewMarker marker : snapshot.markers()) {
-                    double[] centre = {marker.x() * ratio, marker.y() * ratio};
-                    switch (marker.kind()) {
-                        case MARKER_CREATURE -> {
-                            // Live creatures are not drawn; their spots become sample positions.
-                            if (marker.key() != null && creatureKeys.size() < 8) creatureKeys.add(marker.key());
-                            if (centre[0] >= 10 && centre[0] <= mapSize - 10 && centre[1] >= 10 && centre[1] <= mapSize - 10)
-                                creatureCandidates.add(centre);
-                        }
-                        case MARKER_PLAYER -> players.add(marker);
-                        default -> {
-                            boolean death = marker.kind() == MARKER_DEATH;
-                            boolean shown = death ? preview.showDeathMarker
-                                    : marker.kind() == MARKER_BETTERMAP ? preview.betterMapEnabled : preview.showWorldMapMarkers;
-                            if (!shown) continue;
-                            // Death markers take the page's Death Markers colour; others keep their own tint.
-                            int rgb = death ? preview.colours.rgb(DEATH) : marker.rgb();
-                            byte[] image = marker.image() == null ? renderDot(rgb)
-                                    : dev.scyphoz.dappermap.integration.NativeWorldMapIntegration.previewIcon(marker.image(), rgb);
-                            if (image == null) continue;
-                            int size = DynamicMinimapSetting.scaledBy(preview.scaledMarkerSize(marker.baseSize()), mapMarkerScale);
-                            drawPreviewAsset(g, decoded, image, mapX + centre[0] - size / 2.0, mapY + centre[1] - size / 2.0, size);
-                            occupied.add(centre);
-                            if (death) deathShown = true; else mapShown = true;
-                        }
+                    if (marker.kind() == MARKER_CREATURE) creatures.add(marker);
+                    else if (marker.kind() == MARKER_PLAYER) players.add(marker);
+                    else if (drawLiveMarker(g, decoded, preview, marker, ratio, mapX, mapY, occupied)) {
+                        if (marker.kind() == MARKER_DEATH) deathShown = true; else mapShown = true;
                     }
                 }
-                // A setting that's on with nothing of its kind nearby still shows one sample, so its
-                // look (and colour) can be judged; players are drawn after the creature samples.
+                // A setting that's on with nothing of its kind nearby shows a sample, so its look
+                // (colour, style, size) can still be judged.
                 drawMarkerSamples(g, decoded, preview, snapshot, mapX, mapY, mapSize, occupied,
                         false, preview.showDeathMarker && !deathShown, preview.showWorldMapMarkers && !mapShown);
-                // Keep only a few spaced creature examples, one per threat colour, so colour edits
-                // are easy to follow; the rest of the live creature pool is left out of the preview.
-                // Icons mode shows real creature faces from around the player (dots if none).
                 if (preview.showEntities) {
-                    // Hostile Only hides neutral and friendly creatures, so the preview does too.
-                    // Uncollected Memories adds a sample in the memory colour (memory creatures are
-                    // rarely hostile, so Hostile Only leaves it out, as on the live map).
-                    boolean memorySample = preview.memoryHints && !preview.hostileCreaturesOnly;
-                    DynamicMinimapColours.Key[] kinds = preview.hostileCreaturesOnly
-                            ? new DynamicMinimapColours.Key[]{HOSTILE_ACTIVE, HOSTILE}
-                            : memorySample
-                            ? new DynamicMinimapColours.Key[]{HOSTILE_ACTIVE, HOSTILE, NEUTRAL, FRIENDLY, MEMORY}
-                            : new DynamicMinimapColours.Key[]{HOSTILE_ACTIVE, HOSTILE, NEUTRAL, FRIENDLY};
-                    double[][] positions = {
-                            {0.28, 0.32}, {0.68, 0.34}, {0.30, 0.68}, {0.70, 0.68}, {0.50, 0.80}
-                    };
-                    java.util.Collections.shuffle(creatureCandidates,
-                            new java.util.Random(snapshot.coords().hashCode()));
-                    java.util.List<double[]> samples = new java.util.ArrayList<>();
-                    double separation = mapSize * 0.18;
-                    for (double[] candidate : creatureCandidates) {
-                        if (samples.size() == kinds.length) break;
-                        if (preview.isCircle() && Math.hypot(candidate[0] - mapSize / 2.0,
-                                candidate[1] - mapSize / 2.0) > mapSize * 0.43) continue;
-                        if (Math.hypot(candidate[0] - mapSize / 2.0,
-                                candidate[1] - mapSize / 2.0) < mapSize * 0.20) continue;
-                        if (previewPositionClear(candidate, occupied, separation * 0.55)
-                                && previewPositionClear(candidate, samples, separation)) {
-                            samples.add(candidate);
-                        }
-                    }
-                    for (double[] fallback : positions) {
-                        if (samples.size() == kinds.length) break;
-                        double[] candidate = {mapSize * fallback[0], mapSize * fallback[1]};
-                        if (previewPositionClear(candidate, occupied, separation * 0.55)
-                                && previewPositionClear(candidate, samples, separation)) samples.add(candidate);
-                    }
-                    for (double[] fallback : positions) {
-                        if (samples.size() == kinds.length) break;
-                        double[] candidate = {mapSize * fallback[0], mapSize * fallback[1]};
-                        if (previewPositionClear(candidate, samples, separation * 0.55)) samples.add(candidate);
-                    }
-                    int dotSize = Math.max(9, (int)Math.round(10 * mapSize / 220.0));
-                    int iconSize = DynamicCreatureIcons.markerSize(preview);
-                    java.util.List<String> keys = preview.creatureIcons
-                            ? new java.util.ArrayList<>(creatureKeys) : java.util.List.of();
-                    for (int i = 0; i < samples.size(); i++) {
-                        int rgb = preview.colours.awt(kinds[i], 255).getRGB() & 0xFFFFFF;
-                        // A different creature for each sample where possible, edged in that colour.
-                        byte[] image = keys.isEmpty() ? null
-                                : DynamicCreatureIcons.previewIcon(keys.get(i % keys.size()), rgb);
-                        // Sample creatures follow Marker Size: Creatures, as on the live map.
-                        int size = DynamicMinimapSetting.scaledBy(image != null ? iconSize : dotSize, preview.markerCreatures);
-                        if (image == null) image = renderDot(rgb);
-                        drawPreviewAsset(g, decoded, image,
-                                mapX + samples.get(i)[0] - size / 2.0,
-                                mapY + samples.get(i)[1] - size / 2.0, size);
-                    }
+                    if (creatures.isEmpty()) drawCreatureSamples(g, decoded, preview, mapX, mapY, mapSize, occupied);
+                    for (PreviewMarker creature : creatures) drawLiveMarker(g, decoded, preview, creature, ratio, mapX, mapY, occupied);
                 }
-                // Other players, above every creature: each nearby player in the page's style,
-                // colour and Marker Size, or one sample (the viewer's own head) when none are near.
                 if (preview.showOtherPlayers) {
-                    if (players.isEmpty()) {
+                    if (players.isEmpty())
                         drawMarkerSamples(g, decoded, preview, snapshot, mapX, mapY, mapSize, occupied, true, false, false);
-                    } else {
-                        int rgb = preview.colours.rgb(PLAYERS);
-                        for (PreviewMarker player : players) {
-                            byte[] icon = playerPreviewIcon(preview, player.key(), rgb);
-                            int size = playerPreviewSize(preview, icon != null);
-                            drawPreviewAsset(g, decoded, icon != null ? icon : renderDot(rgb),
-                                    mapX + player.x() * ratio - size / 2.0, mapY + player.y() * ratio - size / 2.0, size);
-                        }
-                    }
+                    for (PreviewMarker player : players) drawLiveMarker(g, decoded, preview, player, ratio, mapX, mapY, occupied);
                 }
             }
             g.setClip(oldClip);
@@ -1193,6 +1099,67 @@ public final class DynamicMinimapRenderer {
             }
             return stage;
         } catch (Exception ignored) { return null; }
+    }
+
+    /**
+     * Draws one live HUD marker in the preview, sized as the live projection sizes it (icons
+     * arrive map-sized, dots and map markers grow with the map, then the group's Marker Size).
+     * Returns false when its image can't be loaded.
+     */
+    private static boolean drawLiveMarker(Graphics2D g, DecodedPreview decoded, DynamicMinimapSetting preview,
+                                          PreviewMarker marker, double ratio, int mapX, int mapY,
+                                          java.util.List<double[]> occupied) {
+        boolean icon = marker.key() != null; // Creature face or player head.
+        byte[] image = icon ? DynamicCreatureIcons.previewIcon(marker.key(), marker.rgb())
+                : marker.image() != null
+                ? dev.scyphoz.dappermap.integration.NativeWorldMapIntegration.previewIcon(marker.image(), marker.rgb())
+                : renderDot(marker.rgb());
+        if (image == null && icon) image = renderDot(marker.rgb()); // Face still being drawn: a dot this time.
+        if (image == null) return false;
+        int percent = marker.kind() == MARKER_CREATURE ? preview.markerCreatures
+                : marker.kind() == MARKER_PLAYER ? preview.markerPlayers : preview.markerMap;
+        int size = DynamicMinimapSetting.scaledBy(Math.max(8, icon ? marker.baseSize()
+                : preview.scaledMarkerSize(marker.baseSize())), percent);
+        double x = marker.x() * ratio, y = marker.y() * ratio;
+        drawPreviewAsset(g, decoded, image, mapX + x - size / 2.0, mapY + y - size / 2.0, size);
+        occupied.add(new double[]{x, y});
+        return true;
+    }
+
+    /**
+     * Creature colour samples, for when Creature Markers are on but no creature is near: a few
+     * spaced examples, one per threat colour (plus the memory colour), as dots in the page's
+     * colours and Marker Size, so colour and size edits can still be judged.
+     */
+    private static void drawCreatureSamples(Graphics2D g, DecodedPreview decoded, DynamicMinimapSetting preview,
+                                            int mapX, int mapY, int mapSize, java.util.List<double[]> occupied) {
+        // Hostile Only hides neutral and friendly creatures, so the samples do too; Uncollected
+        // Memories adds one in the memory colour (memory creatures are rarely hostile).
+        boolean memorySample = preview.memoryHints && !preview.hostileCreaturesOnly;
+        DynamicMinimapColours.Key[] kinds = preview.hostileCreaturesOnly
+                ? new DynamicMinimapColours.Key[]{HOSTILE_ACTIVE, HOSTILE}
+                : memorySample
+                ? new DynamicMinimapColours.Key[]{HOSTILE_ACTIVE, HOSTILE, NEUTRAL, FRIENDLY, MEMORY}
+                : new DynamicMinimapColours.Key[]{HOSTILE_ACTIVE, HOSTILE, NEUTRAL, FRIENDLY};
+        double[][] positions = {{0.28, 0.32}, {0.68, 0.34}, {0.30, 0.68}, {0.70, 0.68}, {0.50, 0.80}};
+        java.util.List<double[]> samples = new java.util.ArrayList<>();
+        double separation = mapSize * 0.18;
+        // Spots clear of the other samples and markers first, then any free spot.
+        for (int pass = 0; pass < 2 && samples.size() < kinds.length; pass++) {
+            for (double[] fallback : positions) {
+                if (samples.size() == kinds.length) break;
+                double[] candidate = {mapSize * fallback[0], mapSize * fallback[1]};
+                if ((pass == 1 || previewPositionClear(candidate, occupied, separation * 0.55))
+                        && previewPositionClear(candidate, samples, separation * (pass == 1 ? 0.55 : 1.0))) samples.add(candidate);
+            }
+        }
+        // Dots in the page's colours and Creature Marker Size, as on the live map.
+        int size = DynamicMinimapSetting.scaledBy(Math.max(9, (int)Math.round(10 * mapSize / 220.0)), preview.markerCreatures);
+        for (int i = 0; i < samples.size(); i++) {
+            byte[] image = renderDot(preview.colours.rgb(kinds[i]));
+            drawPreviewAsset(g, decoded, image, mapX + samples.get(i)[0] - size / 2.0, mapY + samples.get(i)[1] - size / 2.0, size);
+            occupied.add(samples.get(i));
+        }
     }
 
     /**
@@ -1280,24 +1247,25 @@ public final class DynamicMinimapRenderer {
             POSITION_BASES.removeIf(cached -> cached.snapshot() == snapshot);
         }
         synchronized (DECODED_PREVIEWS) {
-            DECODED_PREVIEWS.removeIf(cached -> cached.snapshot == snapshot);
+            DECODED_PREVIEWS.removeIf(cached -> cached.terrainPng == snapshot.terrain());
         }
     }
 
     /**
-     * Decoded images for one preview snapshot: its terrain PNG and the icon PNGs drawn over it,
-     * keyed by array identity. Snapshots and the cached icon arrays are never mutated, so a decode
-     * stays valid for the snapshot's life and previews no longer re-decode them on every render.
+     * Decoded images for one preview terrain PNG and the icon PNGs drawn over it, keyed by array
+     * identity. Live preview snapshots replace each other often but share a terrain until it is
+     * redrawn, so they share these decodes; nothing is re-decoded on every render.
      * The images are only read (drawImage). Render pool only.
      */
     private static final class DecodedPreview {
         /** Icon arrays remembered per snapshot; new arrays beyond this just decode as before. */
         private static final int ICON_LIMIT = 64;
-        final LiveSnapshot snapshot;
+        /** The terrain PNG this entry decodes (identity): snapshots sharing a terrain share the decodes. */
+        final byte[] terrainPng;
         private volatile BufferedImage terrain;
         private final java.util.IdentityHashMap<byte[], BufferedImage> icons = new java.util.IdentityHashMap<>();
 
-        DecodedPreview(LiveSnapshot snapshot) { this.snapshot = snapshot; }
+        DecodedPreview(byte[] terrainPng) { this.terrainPng = terrainPng; }
 
         /** The snapshot terrain, decoded once (a racing first decode is harmless). */
         BufferedImage terrain(byte[] png) {
@@ -1330,7 +1298,7 @@ public final class DynamicMinimapRenderer {
         }
     }
 
-    /** Recent snapshots' decodes (one per open settings page, typically), most recent first. */
+    /** Recent terrains' decodes (one per open settings page, typically), most recent first. */
     private static final java.util.ArrayDeque<DecodedPreview> DECODED_PREVIEWS = new java.util.ArrayDeque<>();
     private static final int DECODED_PREVIEW_LIMIT = 4;
     /** Terrain pixels kept decoded across snapshots (8M ARGB pixels = 32 MB; the default size is ~0.6M each). */
@@ -1339,12 +1307,12 @@ public final class DynamicMinimapRenderer {
     private static DecodedPreview decodedPreview(LiveSnapshot snapshot) {
         synchronized (DECODED_PREVIEWS) {
             DecodedPreview found = null;
-            for (DecodedPreview cached : DECODED_PREVIEWS) if (cached.snapshot == snapshot) { found = cached; break; }
+            for (DecodedPreview cached : DECODED_PREVIEWS) if (cached.terrainPng == snapshot.terrain()) { found = cached; break; }
             if (found != null) {
                 if (DECODED_PREVIEWS.peekFirst() != found) { DECODED_PREVIEWS.remove(found); DECODED_PREVIEWS.addFirst(found); }
                 return found;
             }
-            found = new DecodedPreview(snapshot);
+            found = new DecodedPreview(snapshot.terrain());
             DECODED_PREVIEWS.addFirst(found);
             trimDecodedPreviews();
             return found;
@@ -1498,15 +1466,14 @@ public final class DynamicMinimapRenderer {
      * (each language's own letters, e.g. 北/东/南/西 or С/В/Ю/З). Built once per HUD; the settings
      * preview uses the HUD's copy, so both always match.
      */
-    public record HudText(String[] headings, String[] cardinals, dev.scyphoz.dappermap.util.DapperMapUtil.Lang lang) {
-        public static final HudText ENGLISH = new HudText(READOUT_HEADINGS, CARDINAL_LETTERS,
-                dev.scyphoz.dappermap.util.DapperMapUtil.Lang.of((String) null));
+    public record HudText(String[] headings, String[] cardinals) {
+        public static final HudText ENGLISH = new HudText(READOUT_HEADINGS, CARDINAL_LETTERS);
 
         public static HudText of(dev.scyphoz.dappermap.util.DapperMapUtil.Lang lang) {
             String[] headings = new String[READOUT_HEADINGS.length], cardinals = new String[CARDINAL_LETTERS.length];
             for (int i = 0; i < headings.length; i++) headings[i] = lang.get(READOUT_HEADING_KEYS[i], READOUT_HEADINGS[i]);
             for (int i = 0; i < cardinals.length; i++) cardinals[i] = lang.get(CARDINAL_KEYS[i], CARDINAL_LETTERS[i]);
-            return new HudText(headings, cardinals, lang); // Lang kept for preview readouts (Local Time).
+            return new HudText(headings, cardinals);
         }
 
         /**
@@ -1597,14 +1564,9 @@ public final class DynamicMinimapRenderer {
             }
         }
         // Brand, then heading + value per shown row: the same boxes as the live HUD's labels.
-        HudText hudText = snapshot.text() == null ? HudText.ENGLISH : snapshot.text();
-        // Local Time follows the draft (it may have just been switched on, or its region/format
-        // changed), so it's formatted here rather than taken from the snapshot. Preview renders only.
-        String localTime = settings.showLocalTime ? DynamicMinimapSession.formatLocalTime(System.currentTimeMillis(),
-                settings.localTimeZone, settings.localClock24Hour, hudText.lang()) : "";
-        // World Time in the page's World Time Format (both forms are captured with the snapshot).
-        String clock = settings.clock24Hour ? snapshot.clock24() : snapshot.clock12();
-        String[] values = {snapshot.coords(), snapshot.compass(), clock, snapshot.biome(), localTime};
+        // The live HUD's readouts: it runs with the page's settings, so rows switched on in the
+        // page (and their formats) are already worked out.
+        String[] values = {snapshot.coords(), snapshot.compass(), snapshot.clock(), snapshot.biome(), snapshot.localTime()};
         int alignment = settings.infoPanelTextAlignment;
         for (PanelLabel label : layout.panelLabels(settings)) {
             String id, text;

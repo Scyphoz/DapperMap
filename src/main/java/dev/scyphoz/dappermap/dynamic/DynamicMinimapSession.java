@@ -256,82 +256,84 @@ public final class DynamicMinimapSession {
     private final DynamicAssetPublisher.ImagePublicationCache terrainPublications = new DynamicAssetPublisher.ImagePublicationCache();
 
     /**
-     * Frozen HUD state for the settings preview, captured once when the settings page opens. World
-     * thread. The live HUD skips work for anything switched off (hidden readout rows, marker types
-     * that are off), so this runs one full pass with everything on, through the live HUD's own
-     * code: every readout, one creature/player scan, and the world-map, BetterMap and death
-     * markers. The preview then shows or hides each part from the page's settings.
-     *
-     * <p>{@code markersReady} receives an updated snapshot if the world-map markers needed their
-     * own pass (Hytale runs providers off the world thread); it is called on the world thread.
-     * Cost: once per settings page, nothing per tick.
+     * Live settings preview (option 3). While a DapperMap settings page is open its draft is the
+     * session's live settings (DapperMapSessionManager.previewDraft) and the session keeps running
+     * instead of pausing for the page, so its HUD state is exactly what the HUD would show with
+     * the draft. After a tick, a changed state is handed to the page's listener on the world thread:
+     * soon after a draft change (PREVIEW_PUSH_FAST_MS), else at most every PREVIEW_PUSH_MS while
+     * creatures move or terrain changes. The HUD is hidden by the client while a page is open; the
+     * session sends it the same updates it would send without a page.
      */
-    public DynamicMinimapRenderer.LiveSnapshot capturePreview(World world,
-                                                              java.util.function.Consumer<DynamicMinimapRenderer.LiveSnapshot> markersReady) {
+    private volatile java.util.function.Consumer<DynamicMinimapRenderer.LiveSnapshot> previewListener;
+    /** When the draft last changed (ms): pushes run at the fast cadence for a short while after. */
+    private volatile long previewDraftChangedMs;
+    private long lastPreviewPushMs;
+    private DynamicMinimapRenderer.LiveSnapshot lastPreviewSnapshot;
+    /** The viewer's own head keys {bare, with helmet}, for the player sample; looked up once per preview. */
+    private String[] previewHeads;
+    private static final long PREVIEW_PUSH_MS = 1500L, PREVIEW_PUSH_FAST_MS = 250L, PREVIEW_FAST_WINDOW_MS = 3000L;
+
+    /** Attaches (or with null, detaches) a settings page's live preview listener. Any thread. */
+    public void setPreviewListener(java.util.function.Consumer<DynamicMinimapRenderer.LiveSnapshot> listener) {
+        this.previewListener = listener;
+        this.previewDraftChangedMs = System.currentTimeMillis();
+        this.lastPreviewSnapshot = null;
+        this.previewHeads = null;
+        this.requestPromptTick();
+    }
+
+    /** The current listener (compared by the manager so one page never detaches another's). */
+    public java.util.function.Consumer<DynamicMinimapRenderer.LiveSnapshot> previewListener() {
+        return this.previewListener;
+    }
+
+    /** The page's draft just changed: push the next changed state quickly. */
+    public void previewDraftChanged() {
+        this.previewDraftChangedMs = System.currentTimeMillis();
+    }
+
+    /** Hands a changed HUD state to the page after a tick (world thread). Cheap when unchanged. */
+    private void pushPreview(World world, long now) {
+        var listener = this.previewListener;
+        if (listener == null) return;
+        long gap = now - this.previewDraftChangedMs < PREVIEW_FAST_WINDOW_MS ? PREVIEW_PUSH_FAST_MS : PREVIEW_PUSH_MS;
+        if (now - this.lastPreviewPushMs < gap) return;
+        this.lastPreviewPushMs = now;
+        DynamicMinimapRenderer.LiveSnapshot snapshot = this.livePreviewSnapshot(world);
+        if (snapshot == null || snapshot.equals(this.lastPreviewSnapshot)) return;
+        this.lastPreviewSnapshot = snapshot;
+        try {
+            listener.accept(snapshot);
+        } catch (RuntimeException failure) {
+            DapperMapUtil.logFailure("settings preview", failure);
+        }
+    }
+
+    /**
+     * The HUD's current state for the settings preview: its terrain, pan and readouts, plus the
+     * markers it holds now (creatures and players, world-map, BetterMap and death markers),
+     * projected as the HUD projects them. World thread. Null until the HUD shows terrain.
+     */
+    public DynamicMinimapRenderer.LiveSnapshot livePreviewSnapshot(World world) {
         DynamicMinimapRenderer.LiveSnapshot snapshot = this.hud == null ? null : this.hud.snapshot(this.displayedTerrainPng,
                 this.lastSelfBucket < 0 ? 0.0D : this.lastSelfBucket * (Math.PI * 2 / SELF_BUCKETS));
-        if (snapshot == null || world == null) return snapshot;
-        try {
-            Store<EntityStore> store = world.getEntityStore().getStore();
-            Ref<EntityStore> ref = this.playerRef.getReference();
-            // Readouts for every row, with a separate cache so the tick's cached readouts are untouched.
-            ReadoutCache readout = new ReadoutCache();
-            readout.setLang(this.readouts.lang);
-            var cached = this.playerRef.getTransform().getPosition(); // Cached transform, as tickSafe reads it.
-            // The viewer's own head stands in for other players when none are nearby.
-            String[] heads = ref == null || !ref.isValid() ? null
-                    : DynamicCreatureIcons.previewPlayerKeys(ref, store, this.playerRef.getUsername());
-            snapshot = snapshot.withPreviewData(readout.coords(cached.x(), cached.y(), cached.z()),
-                    readout.compass(this.peekYaw()), clockText(world, false, readout), clockText(world, true, readout),
-                    readout.region(this.playerRef), heads == null ? null : heads[0], heads == null ? null : heads[1]);
-            if (ref == null || !ref.isValid() || Double.isNaN(this.bufferCenterX)) return snapshot;
-            TransformComponent transform = store.getComponent(ref, TransformComponent.getComponentType());
-            if (transform == null) return snapshot;
-
-            List<DynamicMinimapRenderer.PreviewMarker> markers = new ArrayList<>();
-            // Creatures and players: one scan with both on (icons, so creature faces and player
-            // heads are known), no Hostile Only or Critter filter. Fresh key caches, so the live
-            // scan's caches keep their own entries.
-            DynamicMinimapSetting all = this.settings.copy();
-            all.showEntities = true;
-            all.showOtherPlayers = true;
-            all.hostileCreaturesOnly = false;
-            all.critterFilter = DynamicMinimapSetting.CRITTERS_SHOW;
-            all.creatureIcons = true;
-            all.playerIcons = true;
-            for (DynamicMinimapMarker marker : DynamicEntityScanner.scan(store, ref, transform.getPosition(),
-                    this.settings.zoomBlocks + 16.0D, all, this.threatCache, new DynamicCreatureIcons.KeyCache(),
-                    new DynamicCreatureIcons.PlayerKeyCache(), null)) {
-                this.addPreviewMarker(markers, marker);
+        if (snapshot == null) return null;
+        List<DynamicMinimapRenderer.PreviewMarker> markers = new ArrayList<>(this.cachedMarkers.size() + this.cachedWorldMapMarkers.size());
+        for (DynamicMinimapMarker marker : this.cachedMarkers) this.addPreviewMarker(markers, marker);
+        for (DynamicMinimapMarker marker : this.cachedWorldMapMarkers) this.addPreviewMarker(markers, marker);
+        if (this.previewHeads == null && world != null) {
+            // The viewer's own head stands in for other players when none are near (once per preview).
+            try {
+                var ref = this.playerRef.getReference();
+                String[] heads = ref == null || !ref.isValid() ? null : DynamicCreatureIcons.previewPlayerKeys(
+                        ref, world.getEntityStore().getStore(), this.playerRef.getUsername());
+                this.previewHeads = heads != null ? heads : new String[2];
+            } catch (RuntimeException ignored) {
+                this.previewHeads = new String[2];
             }
-            // World-map, BetterMap and death markers: the live cache when it already covers all
-            // three, else one provider pass (the preview updates when it finishes).
-            boolean betterMap = BetterMapIntegration.isAvailable();
-            if (this.scannedNative && this.scannedDeaths && (this.scannedBetterMap || !betterMap)) {
-                for (DynamicMinimapMarker marker : this.cachedWorldMapMarkers) this.addPreviewMarker(markers, marker);
-            } else if (markersReady != null) {
-                Player player = store.getComponent(ref, Player.getComponentType());
-                NativeWorldMapIntegration.Pass pass = player == null ? null : NativeWorldMapIntegration.requestMarkers(world,
-                        player, this.uuid, this.settings.colours.awt(DynamicMinimapColours.Key.NEUTRAL, 255),
-                        this.settings.colours.awt(DynamicMinimapColours.Key.DEATH, 255), true, betterMap, true);
-                if (pass != null) {
-                    DynamicMinimapRenderer.LiveSnapshot base = snapshot.withMarkers(List.copyOf(markers));
-                    pass.future().thenAccept(found -> {
-                        if (found == null || found.isEmpty()) return;
-                        try {
-                            world.execute(() -> {
-                                List<DynamicMinimapRenderer.PreviewMarker> merged = new ArrayList<>(base.markers());
-                                for (DynamicMinimapMarker marker : found) this.addPreviewMarker(merged, marker);
-                                markersReady.accept(base.withMarkers(List.copyOf(merged)));
-                            });
-                        } catch (RuntimeException ignored) { } // World stopped: the page is gone too.
-                    });
-                }
-            }
-            return snapshot.withMarkers(List.copyOf(markers));
-        } catch (RuntimeException failure) {
-            return snapshot; // Readouts and markers from the live HUD's state only.
         }
+        String[] heads = this.previewHeads == null ? new String[2] : this.previewHeads;
+        return snapshot.withMarkers(List.copyOf(markers), heads[0], heads[1]);
     }
 
     /**
@@ -1131,7 +1133,8 @@ public final class DynamicMinimapSession {
             // other mods' pages and Hytale's own were all checked). Pause the map's work then:
             // no creature scan, marker projection, terrain or rotation render, pan or readouts.
             // Settings changes above still apply, so closing a page shows them straight away.
-            if (player != null && player.getPageManager().getCustomPage() != null) {
+            // A DapperMap settings page previewing live keeps the map running (with its draft).
+            if (player != null && player.getPageManager().getCustomPage() != null && this.previewListener == null) {
                 this.pausedForPage = true;
                 this.rotationCatchUp = false;
                 this.hud.flushPendingVisuals(this.settings.updateSpeed);
@@ -1244,6 +1247,7 @@ public final class DynamicMinimapSession {
                     ? this.readouts.localTime(now, this.settings.localTimeZone, this.settings.localClock24Hour) : "";
             this.hud.setStatus(coords, compass, clock, biome, localTime);
             this.hud.flushPendingVisuals(this.settings.updateSpeed);
+            this.pushPreview(world, now); // Live settings preview, when a settings page is open.
             // Player-up: keep the fast cadence while a rotation or a sharpen is still due.
             this.rotationCatchUp = this.settings.rotationMode == 1
                     && (mapRotationBucket != this.lastMapRotationBucket || this.displayedRotationReduced
@@ -2149,8 +2153,8 @@ public final class DynamicMinimapSession {
      * "10:56 AM" / "22:56": real-world time in a Local Time region, in the Local Time clock format.
      * The region's offset (daylight saving included) is applied but not shown.
      */
-    static String formatLocalTime(long epochMs, int zoneIndex, boolean twentyFourHour,
-                                  dev.scyphoz.dappermap.util.DapperMapUtil.Lang lang) {
+    private static String formatLocalTime(long epochMs, int zoneIndex, boolean twentyFourHour,
+                                          dev.scyphoz.dappermap.util.DapperMapUtil.Lang lang) {
         int offset = dev.scyphoz.dappermap.util.DapperMapUtil.LocalTimeZones.offsetSeconds(zoneIndex, epochMs);
         // Local minute of the day from the UTC instant plus the region's current offset.
         int minuteOfDay = (int) Math.floorMod(Math.floorDiv(epochMs, 60_000L) + offset / 60, 1440L);

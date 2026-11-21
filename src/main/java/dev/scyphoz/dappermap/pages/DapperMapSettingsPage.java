@@ -87,6 +87,14 @@ public final class DapperMapSettingsPage
     private java.util.Map<String, Boolean> permissionMemo;
     private World previewWorld;
     private DynamicMinimapRenderer.LiveSnapshot previewSnapshot;
+    /**
+     * Live preview (option 3): the player's live minimap runs with this page's draft while it's
+     * open and hands its state here (world thread) whenever it changes. Also the page's token for
+     * DapperMapSessionManager.endLivePreview, so one page never ends another's preview.
+     */
+    private final java.util.function.Consumer<DynamicMinimapRenderer.LiveSnapshot> previewListener = this::livePreviewChanged;
+    /** The draft last handed to the live minimap (so unchanged drafts aren't pushed again). */
+    private DynamicMinimapSetting lastPreviewDraft;
     /** Unsaved working copy used by the settings UI and live preview. */
     private DynamicMinimapSetting draftSettings;
     /** Player reset-to-defaults must remove the override only when Apply is pressed. */
@@ -148,7 +156,7 @@ public final class DapperMapSettingsPage
         }
         if (this.adminMode && this.draftLimits == null) this.draftLimits = this.config.limits();
         if (this.adminMode && this.draftTerrainColours < 0) this.draftTerrainColours = this.config.getTerrainColours();
-        if (this.previewSnapshot == null) this.previewSnapshot = this.capturePreview();
+        if (this.previewSnapshot == null) this.previewSnapshot = this.sessions.startLivePreview(this.playerRef.getUuid(), this.previewWorld, this.previewListener);
         DynamicMinimapSetting settings = this.draftSettings;
         this.betterMapCaveAvailable = BetterMapIntegration.isCaveModeEnabled(
                 store.getComponent(ref, Player.getComponentType()));
@@ -388,27 +396,36 @@ public final class DapperMapSettingsPage
     }
 
     /**
-     * The preview snapshot for this page: one full pass of the live HUD's readouts and markers
-     * (DynamicMinimapSession.capturePreview). When the world-map markers arrive later from their
-     * own pass, the snapshot is replaced and the preview redrawn (world thread).
+     * The live minimap's state changed (it runs with this page's draft): redraw the preview from
+     * it. Decodes of a terrain the preview no longer shows are freed. World thread.
      */
-    private DynamicMinimapRenderer.LiveSnapshot capturePreview() {
-        return this.sessions.capturePreview(this.playerRef.getUuid(), this.previewWorld, refreshed -> {
-            if (this.closed || this.previewSnapshot == null || this.draftSettings == null) return;
-            this.previewSnapshot = refreshed;
-            UICommandBuilder ui = new UICommandBuilder();
-            this.updatePreview(ui, this.draftSettings);
-            if (ui.getCommands().length > 0) this.sendUpdate(ui, new UIEventBuilder(), false);
-        });
+    private void livePreviewChanged(DynamicMinimapRenderer.LiveSnapshot snapshot) {
+        if (this.closed || snapshot == null || this.draftSettings == null) return;
+        DynamicMinimapRenderer.LiveSnapshot old = this.previewSnapshot;
+        this.previewSnapshot = snapshot;
+        if (old != null && old.terrain() != snapshot.terrain()) DynamicMinimapRenderer.forgetPreview(old);
+        UICommandBuilder ui = new UICommandBuilder();
+        this.updatePreview(ui, this.draftSettings);
+        if (ui.getCommands().length > 0) this.sendUpdate(ui, new UIEventBuilder(), false);
+    }
+
+    /** Hands the draft to the live minimap when it differs from the one it already runs with. */
+    private void pushPreviewDraft(DynamicMinimapSetting settings) {
+        DynamicMinimapSetting last = this.lastPreviewDraft;
+        if (last != null && last.sameExceptPosition(settings)
+                && last.hudPositionX == settings.hudPositionX && last.hudPositionY == settings.hudPositionY) return;
+        this.lastPreviewDraft = settings.copy();
+        this.sessions.previewDraft(this.playerRef.getUuid(), settings);
     }
 
     private void updatePreview(UICommandBuilder ui, DynamicMinimapSetting settings) {
         int request = ++this.previewRequest;
+        this.pushPreviewDraft(settings); // The live minimap previews the draft (a no-op when unchanged).
         if (!settings.enabled) {
             this.showPreviewNotice(ui, "preview.disabled", "MINIMAP DISABLED");
             return;
         }
-        if (this.previewSnapshot == null) this.previewSnapshot = this.capturePreview();
+        if (this.previewSnapshot == null) this.previewSnapshot = this.sessions.startLivePreview(this.playerRef.getUuid(), this.previewWorld, this.previewListener);
         if (this.previewSnapshot == null) {
             this.showPreviewNotice(ui, "preview.unavailable", "LIVE HUD PREVIEW UNAVAILABLE");
             return;
@@ -577,6 +594,8 @@ public final class DapperMapSettingsPage
 
     @Override public void onDismiss(Ref<EntityStore> ref, Store<EntityStore> store) {
         this.closed = true;
+        // The live minimap goes back to the saved settings (Apply has saved the draft already).
+        this.sessions.endLivePreview(this.playerRef.getUuid(), this.previewListener);
         ++this.previewRequest;
         DynamicMinimapRenderer.forgetPreview(this.previewSnapshot); // Frees its preview images now.
         this.previewSnapshot = null;
