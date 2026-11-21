@@ -18,12 +18,6 @@ import java.util.concurrent.ConcurrentMap;
 /** Sends generated PNG assets to a player's client and avoids retransmitting identical bytes. */
 public final class DynamicAssetPublisher {
     /**
-     * Per-player marker images (by path) for the settings preview. Access-ordered and bounded:
-     * the least recently delivered image is dropped, so icons seen late in a session still
-     * reach the preview. Guarded by the map's own monitor.
-     */
-    private static final ConcurrentMap<UUID, Map<String, byte[]>> MARKER_BYTES = new ConcurrentHashMap<>();
-    /**
      * Remembered SHA-256 of shared, never-modified PNG arrays (renderer caches, tinted icons).
      * byte[] keys use identity equals/hashCode, so this is an identity map; entries vanish when
      * the cache that owns the array drops it.
@@ -123,13 +117,12 @@ public final class DynamicAssetPublisher {
     }
 
     /**
-     * Forgets everything recorded for a player (delivered paths and preview marker images).
+     * Forgets everything recorded for a player (delivered paths).
      * Call on disconnect and whenever the client may have dropped its dynamic assets.
      */
     public static void clear(UUID uuid) {
         if (uuid != null) {
             DELIVERED.remove(uuid);
-            MARKER_BYTES.remove(uuid);
         }
 
     }
@@ -139,14 +132,6 @@ public final class DynamicAssetPublisher {
         int total = 0;
         for (Delivered delivered : DELIVERED.values()) total += delivered.paths().size();
         return total;
-    }
-
-    public static byte[] markerBytes(UUID uuid, String path) {
-        Map<String, byte[]> assets = uuid == null ? null : MARKER_BYTES.get(uuid);
-        if (assets == null) return null;
-        synchronized (assets) {
-            return assets.get(path); // Shared, never modified: encoded PNGs are immutable once prepared.
-        }
     }
 
     private static boolean deliverPrepared(PlayerRef playerRef, PreparedAsset prepared, boolean rebuildCommonAssets) {
@@ -160,10 +145,7 @@ public final class DynamicAssetPublisher {
         // Already on this connection's client with the same content: nothing to send.
         if (uuid != null) {
             Map<String, String> delivered = deliveredFor(uuid, packetHandler);
-            if (delivered != null && hash.equals(delivered.get(path))) {
-                rememberMarker(uuid, path, data); // Keep it in the preview store (refreshes its LRU position).
-                return true;
-            }
+            if (delivered != null && hash.equals(delivered.get(path))) return true;
         }
         try {
             // Hytale's asset protocol: initialise, the bytes in parts, finalise.
@@ -174,7 +156,6 @@ public final class DynamicAssetPublisher {
             for (byte[] part : splitBytes(data, PART_SIZE)) packetHandler.writeNoCache(new AssetPart(part));
             packetHandler.writeNoCache(new AssetFinalize());
             DapperMapServerLoad.recordAsset(data.length); // Counter only (admin stats).
-            rememberMarker(uuid, path, data);
             if (rebuildCommonAssets) packetHandler.writeNoCache(new RequestCommonAssetsRebuild());
             if (uuid != null) {
                 // A record set from an older connection is replaced, never added to.
@@ -186,20 +167,6 @@ public final class DynamicAssetPublisher {
             return true;
         } catch (Exception sendFailed) {
             return false; // Not recorded as delivered, so it is sent again next time.
-        }
-    }
-
-    /** Marker images (including creature icons) are kept, by reference, for the settings preview. */
-    private static void rememberMarker(UUID uuid, String path, byte[] data) {
-        if (uuid == null || !path.startsWith("UI/DapperMap/")
-                || !(path.contains("/mk-") || path.contains("/bettermap-")
-                || path.contains("/worldmap-") || path.contains("/creature-")
-                || path.contains("/player-"))) return; // Player head icons show in the settings preview too.
-        // Least recently delivered image dropped beyond the HUD's slot count; guarded by its own monitor.
-        Map<String, byte[]> markers = MARKER_BYTES.computeIfAbsent(uuid,
-                ignored -> DapperMapUtil.lruMap(DynamicMinimapHud.MARKER_SLOTS, false));
-        synchronized (markers) {
-            markers.put(path, data); // Reference, not a copy: the bytes are immutable.
         }
     }
 

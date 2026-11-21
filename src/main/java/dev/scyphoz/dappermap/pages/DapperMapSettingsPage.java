@@ -148,7 +148,7 @@ public final class DapperMapSettingsPage
         }
         if (this.adminMode && this.draftLimits == null) this.draftLimits = this.config.limits();
         if (this.adminMode && this.draftTerrainColours < 0) this.draftTerrainColours = this.config.getTerrainColours();
-        if (this.previewSnapshot == null) this.previewSnapshot = this.sessions.capturePreview(this.playerRef.getUuid(), this.previewWorld);
+        if (this.previewSnapshot == null) this.previewSnapshot = this.capturePreview();
         DynamicMinimapSetting settings = this.draftSettings;
         this.betterMapCaveAvailable = BetterMapIntegration.isCaveModeEnabled(
                 store.getComponent(ref, Player.getComponentType()));
@@ -387,13 +387,28 @@ public final class DapperMapSettingsPage
         ui.set("#PreviewDisabled.Visible", true);
     }
 
+    /**
+     * The preview snapshot for this page: one full pass of the live HUD's readouts and markers
+     * (DynamicMinimapSession.capturePreview). When the world-map markers arrive later from their
+     * own pass, the snapshot is replaced and the preview redrawn (world thread).
+     */
+    private DynamicMinimapRenderer.LiveSnapshot capturePreview() {
+        return this.sessions.capturePreview(this.playerRef.getUuid(), this.previewWorld, refreshed -> {
+            if (this.closed || this.previewSnapshot == null || this.draftSettings == null) return;
+            this.previewSnapshot = refreshed;
+            UICommandBuilder ui = new UICommandBuilder();
+            this.updatePreview(ui, this.draftSettings);
+            if (ui.getCommands().length > 0) this.sendUpdate(ui, new UIEventBuilder(), false);
+        });
+    }
+
     private void updatePreview(UICommandBuilder ui, DynamicMinimapSetting settings) {
         int request = ++this.previewRequest;
         if (!settings.enabled) {
             this.showPreviewNotice(ui, "preview.disabled", "MINIMAP DISABLED");
             return;
         }
-        if (this.previewSnapshot == null) this.previewSnapshot = this.sessions.capturePreview(this.playerRef.getUuid(), this.previewWorld);
+        if (this.previewSnapshot == null) this.previewSnapshot = this.capturePreview();
         if (this.previewSnapshot == null) {
             this.showPreviewNotice(ui, "preview.unavailable", "LIVE HUD PREVIEW UNAVAILABLE");
             return;

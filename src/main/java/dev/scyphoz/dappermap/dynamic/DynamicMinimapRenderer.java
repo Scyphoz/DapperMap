@@ -944,20 +944,42 @@ public final class DynamicMinimapRenderer {
     }
 
 
-    /** One preview marker. {@code creature}: a creature icon or dot; {@code iconKey}: its creature type (icons only). */
-    public record PreviewMarker(byte[] image, int x, int y, int size, boolean creature, String iconKey) { }
+    /** Preview marker kinds: which setting shows a marker in the settings preview. */
+    public static final int MARKER_CREATURE = 0, MARKER_PLAYER = 1, MARKER_MAP = 2, MARKER_DEATH = 3,
+            MARKER_BETTERMAP = 4;
+
+    /**
+     * One marker from the settings page's full preview pass, centred at (x, y) in the snapshot's
+     * map units. The preview draws it from the page's settings (on/off, style, colour, Marker
+     * Size). {@code key}: creature or player icon key (icons only); {@code image}: world-map or
+     * BetterMap icon name (null for an imageless dot); {@code rgb}: the marker's own tint;
+     * {@code baseSize}: its size before Marker Size and map-size growth.
+     */
+    public record PreviewMarker(int kind, double x, double y, String key, String image, int rgb, int baseSize) { }
+
     /** The player HUD's terrain, telemetry and visible marker assets frozen when settings open. */
     public record LiveSnapshot(byte[] terrain, int mapSize, int bufferSize, int panX, int panY,
                                double selfAngle, double frameAngle, String coords,
                                String compass, String clock12, String clock24, String biome, String localTime,
-                               java.util.List<PreviewMarker> markers, HudText text) {
+                               java.util.List<PreviewMarker> markers, HudText text,
+                               String playerKey, String playerHelmetKey) {
         /**
          * The same snapshot with fresh readouts for every Info Panel row (shown or not), so the
-         * preview can show rows that are off on the live HUD. Local Time is formatted per render.
+         * preview can show rows that are off on the live HUD (Local Time is formatted per render),
+         * plus the viewer's own head icon keys (bare, with helmet) for the player marker sample.
          */
-        public LiveSnapshot withReadouts(String coords, String compass, String clock12, String clock24, String biome) {
+        public LiveSnapshot withPreviewData(String coords, String compass, String clock12, String clock24, String biome,
+                                            String playerKey, String playerHelmetKey) {
             return new LiveSnapshot(this.terrain, this.mapSize, this.bufferSize, this.panX, this.panY, this.selfAngle,
-                    this.frameAngle, coords, compass, clock12, clock24, biome, this.localTime, this.markers, this.text);
+                    this.frameAngle, coords, compass, clock12, clock24, biome, this.localTime, this.markers, this.text,
+                    playerKey, playerHelmetKey);
+        }
+
+        /** The same snapshot with the markers of the full preview pass. */
+        public LiveSnapshot withMarkers(java.util.List<PreviewMarker> markers) {
+            return new LiveSnapshot(this.terrain, this.mapSize, this.bufferSize, this.panX, this.panY, this.selfAngle,
+                    this.frameAngle, this.coords, this.compass, this.clock12, this.clock24, this.biome, this.localTime,
+                    markers, this.text, this.playerKey, this.playerHelmetKey);
         }
     }
 
@@ -1023,25 +1045,43 @@ public final class DynamicMinimapRenderer {
                 java.util.List<double[]> occupied = new java.util.ArrayList<>();
                 // Creature types seen around the player (Icons mode): the colour samples use their faces.
                 java.util.LinkedHashSet<String> creatureKeys = new java.util.LinkedHashSet<>();
+                // Markers from the full pass, drawn from the page's settings. Map, BetterMap and
+                // death markers first; creatures become a few colour samples (below); players are
+                // drawn last, above every creature, as on the live map.
+                java.util.List<PreviewMarker> players = new java.util.ArrayList<>();
+                boolean deathShown = false, mapShown = false;
+                int mapMarkerScale = preview.markerMap;
                 for (PreviewMarker marker : snapshot.markers()) {
-                    int x = mapX + (int)Math.round(marker.x() * ratio);
-                    int y = mapY + (int)Math.round(marker.y() * ratio);
-                    int size = Math.max(1, (int)Math.round(marker.size() * ratio));
-                    if (marker.creature()) {
-                        // Live creatures are not drawn; their spots become sample positions.
-                        if (marker.iconKey() != null && creatureKeys.size() < 8) creatureKeys.add(marker.iconKey());
-                        double centerX = (marker.x() + marker.size() / 2.0) * ratio;
-                        double centerY = (marker.y() + marker.size() / 2.0) * ratio;
-                        if (centerX >= 10 && centerX <= mapSize - 10
-                                && centerY >= 10 && centerY <= mapSize - 10) {
-                            creatureCandidates.add(new double[]{centerX, centerY});
+                    double[] centre = {marker.x() * ratio, marker.y() * ratio};
+                    switch (marker.kind()) {
+                        case MARKER_CREATURE -> {
+                            // Live creatures are not drawn; their spots become sample positions.
+                            if (marker.key() != null && creatureKeys.size() < 8) creatureKeys.add(marker.key());
+                            if (centre[0] >= 10 && centre[0] <= mapSize - 10 && centre[1] >= 10 && centre[1] <= mapSize - 10)
+                                creatureCandidates.add(centre);
                         }
-                    } else {
-                        drawPreviewAsset(g, decoded, marker.image(), x, y, size);
-                        occupied.add(new double[]{(marker.x() + marker.size() / 2.0) * ratio,
-                                (marker.y() + marker.size() / 2.0) * ratio});
+                        case MARKER_PLAYER -> players.add(marker);
+                        default -> {
+                            boolean death = marker.kind() == MARKER_DEATH;
+                            boolean shown = death ? preview.showDeathMarker
+                                    : marker.kind() == MARKER_BETTERMAP ? preview.betterMapEnabled : preview.showWorldMapMarkers;
+                            if (!shown) continue;
+                            // Death markers take the page's Death Markers colour; others keep their own tint.
+                            int rgb = death ? preview.colours.rgb(DEATH) : marker.rgb();
+                            byte[] image = marker.image() == null ? renderDot(rgb)
+                                    : dev.scyphoz.dappermap.integration.NativeWorldMapIntegration.previewIcon(marker.image(), rgb);
+                            if (image == null) continue;
+                            int size = DynamicMinimapSetting.scaledBy(preview.scaledMarkerSize(marker.baseSize()), mapMarkerScale);
+                            drawPreviewAsset(g, decoded, image, mapX + centre[0] - size / 2.0, mapY + centre[1] - size / 2.0, size);
+                            occupied.add(centre);
+                            if (death) deathShown = true; else mapShown = true;
+                        }
                     }
                 }
+                // A setting that's on with nothing of its kind nearby still shows one sample, so its
+                // look (and colour) can be judged; players are drawn after the creature samples.
+                drawMarkerSamples(g, decoded, preview, snapshot, mapX, mapY, mapSize, occupied,
+                        false, preview.showDeathMarker && !deathShown, preview.showWorldMapMarkers && !mapShown);
                 // Keep only a few spaced creature examples, one per threat colour, so colour edits
                 // are easy to follow; the rest of the live creature pool is left out of the preview.
                 // Icons mode shows real creature faces from around the player (dots if none).
@@ -1101,6 +1141,21 @@ public final class DynamicMinimapRenderer {
                                 mapY + samples.get(i)[1] - size / 2.0, size);
                     }
                 }
+                // Other players, above every creature: each nearby player in the page's style,
+                // colour and Marker Size, or one sample (the viewer's own head) when none are near.
+                if (preview.showOtherPlayers) {
+                    if (players.isEmpty()) {
+                        drawMarkerSamples(g, decoded, preview, snapshot, mapX, mapY, mapSize, occupied, true, false, false);
+                    } else {
+                        int rgb = preview.colours.rgb(PLAYERS);
+                        for (PreviewMarker player : players) {
+                            byte[] icon = playerPreviewIcon(preview, player.key(), rgb);
+                            int size = playerPreviewSize(preview, icon != null);
+                            drawPreviewAsset(g, decoded, icon != null ? icon : renderDot(rgb),
+                                    mapX + player.x() * ratio - size / 2.0, mapY + player.y() * ratio - size / 2.0, size);
+                        }
+                    }
+                }
             }
             g.setClip(oldClip);
             int arrowSize = preview.selfArrowSize(mapSize); // Marker Size: Your Arrow.
@@ -1138,6 +1193,59 @@ public final class DynamicMinimapRenderer {
             }
             return stage;
         } catch (Exception ignored) { return null; }
+    }
+
+    /**
+     * One-marker samples for the settings preview, for settings that are on with nothing of their
+     * kind on the map: a player (the viewer's own head), a death marker and a world-map marker
+     * (Hytale's spawn icon), each in the page's style, colour and Marker Size, at a fixed spot
+     * clear of the creature samples. Each spot is added to {@code occupied}.
+     */
+    private static void drawMarkerSamples(Graphics2D g, DecodedPreview decoded, DynamicMinimapSetting preview,
+                                          LiveSnapshot snapshot, int mapX, int mapY, int mapSize,
+                                          java.util.List<double[]> occupied, boolean player, boolean death, boolean map) {
+        if (player) {
+            int rgb = preview.colours.rgb(PLAYERS);
+            byte[] icon = playerPreviewIcon(preview,
+                    preview.playerIconHelmets ? snapshot.playerHelmetKey() : snapshot.playerKey(), rgb);
+            drawSample(g, decoded, icon != null ? icon : renderDot(rgb), playerPreviewSize(preview, icon != null),
+                    sampleSpot(0.76, 0.50, mapSize), mapX, mapY, occupied);
+        }
+        int mapMarkerSize = DynamicMinimapSetting.scaledBy(preview.scaledMarkerSize(18), preview.markerMap);
+        if (death) {
+            byte[] image = dev.scyphoz.dappermap.integration.NativeWorldMapIntegration.previewIcon(
+                    dev.scyphoz.dappermap.integration.NativeWorldMapIntegration.DEATH_ICON, preview.colours.rgb(DEATH));
+            if (image != null) drawSample(g, decoded, image, mapMarkerSize, sampleSpot(0.24, 0.50, mapSize), mapX, mapY, occupied);
+        }
+        if (map) {
+            // Hytale's spawn icon stands in for world-map markers (untinted, as on the live map).
+            byte[] image = dev.scyphoz.dappermap.integration.NativeWorldMapIntegration.previewIcon(
+                    dev.scyphoz.dappermap.integration.NativeWorldMapIntegration.SPAWN_ICON, 0xFFFFFF);
+            if (image != null) drawSample(g, decoded, image, mapMarkerSize, sampleSpot(0.50, 0.25, mapSize), mapX, mapY, occupied);
+        }
+    }
+
+    /** A player's head icon edged in {@code rgb} when the page uses icons and the head is known, else null (a dot). */
+    private static byte[] playerPreviewIcon(DynamicMinimapSetting preview, String key, int rgb) {
+        return preview.playerIcons && key != null ? DynamicCreatureIcons.previewIcon(key, rgb) : null;
+    }
+
+    /** Player marker size as on the live map: icons a little larger than creature icons, dots 11 at 220 px. */
+    private static int playerPreviewSize(DynamicMinimapSetting preview, boolean icon) {
+        return DynamicMinimapSetting.scaledBy(icon ? DynamicCreatureIcons.markerSize(preview) + 2
+                : preview.scaledMarkerSize(11), preview.markerPlayers);
+    }
+
+    /** Draws one sample centred on {@code spot} (map units) and marks the spot as taken. */
+    private static void drawSample(Graphics2D g, DecodedPreview decoded, byte[] image, int size, double[] spot,
+                                   int mapX, int mapY, java.util.List<double[]> occupied) {
+        drawPreviewAsset(g, decoded, image, mapX + spot[0] - size / 2.0, mapY + spot[1] - size / 2.0, size);
+        occupied.add(spot);
+    }
+
+    /** Where a marker sample goes: its fixed spot (fractions of the map). */
+    private static double[] sampleSpot(double fallbackX, double fallbackY, int mapSize) {
+        return new double[]{mapSize * fallbackX, mapSize * fallbackY};
     }
 
     /** True when the candidate point is at least minimumDistance from every other point. */

@@ -288,33 +288,25 @@ public final class DynamicMinimapHud extends CustomUIHud {
         return this.bufferPixels;
     }
 
-    /** Copy the mounted HUD state for a frozen settings preview. */
+    /**
+     * Copy the mounted HUD state for a frozen settings preview: terrain, pan, headings and the
+     * readouts as shown. Markers and the readouts of hidden rows come from the session's full
+     * preview pass (DynamicMinimapSession.capturePreview), not from the HUD's marker slots.
+     */
     public DynamicMinimapRenderer.LiveSnapshot snapshot(byte[] terrain, double selfAngle) {
         if (!this.built || !this.terrainShown || terrain == null) return null;
-        java.util.List<DynamicMinimapRenderer.PreviewMarker> markers = new java.util.ArrayList<>();
-        for (MarkerLayer layer : this.layers) {
-            for (int i = 0; i < layer.active; i++) {
-                if (!layer.visible[i] || layer.path[i] == null) continue;
-                byte[] icon = DynamicAssetPublisher.markerBytes(this.uuid, layer.path[i]);
-                if (icon == null) continue;
-                // Creature icons and creature dots (player dots are larger) are marked as creatures:
-                // the preview replaces them with a few colour samples instead of drawing them all.
-                String iconKey = DynamicCreatureIcons.keyFromPath(layer.path[i]);
-                boolean creature = iconKey != null || (layer.path[i].contains("/mk-") && layer.size[i] <= 9);
-                // Edge icons are positioned in viewport space; map dots move with the pan.
-                markers.add(new DynamicMinimapRenderer.PreviewMarker(
-                        icon, (layer.fixed ? 0 : this.panLeft) + layer.left[i],
-                        (layer.fixed ? 0 : this.panTop) + layer.top[i],
-                        layer.size[i], creature, iconKey));
-            }
-        }
         // The preview draws the terrain image into its own box (cropped player-up frames are inset).
         int inset = this.terrainInset();
         // The displayed terrain PNG is shared and never modified, so it needs no copy.
         return new DynamicMinimapRenderer.LiveSnapshot(terrain, this.logicalUiSize,
                 this.terrainPixels, this.panLeft + inset, this.panTop + inset, selfAngle, this.frameAngle,
                 this.coordsText, this.compassText, this.clockText, this.clockText, this.biomeText, this.localTimeText,
-                java.util.List.copyOf(markers), this.text);
+                java.util.List.of(), this.text, null, null);
+    }
+
+    /** Current terrain pan {left, top} in HUD map units: where buffer position 0,0 sits on the map. World thread. */
+    int[] panOffset() {
+        return new int[]{this.panLeft, this.panTop};
     }
 
     public boolean isShown() {

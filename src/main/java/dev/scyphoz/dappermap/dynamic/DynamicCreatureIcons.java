@@ -238,6 +238,25 @@ public final class DynamicCreatureIcons {
     }
 
     /**
+     * Icon keys of a player's own head for the settings preview's player sample: {bare, with the
+     * helmet they show} (the same key twice when no helmet shows), or null. Registers the head so
+     * the render pool can draw it. World thread; once per settings page.
+     */
+    public static String[] previewPlayerKeys(Ref<EntityStore> ref, ComponentAccessor<EntityStore> accessor, String username) {
+        try {
+            var component = accessor.getComponent(ref,
+                    com.hypixel.hytale.server.core.modules.entity.player.PlayerSkinComponent.getComponentType());
+            com.hypixel.hytale.protocol.PlayerSkin skin = component == null ? null : component.getPlayerSkin();
+            if (skin == null) return null;
+            String bare = registerPlayer(username, skin, null);
+            String helmet = wornHelmet(ref, accessor);
+            return new String[]{bare, helmet == null ? bare : registerPlayer(username, skin, helmet)};
+        } catch (RuntimeException | LinkageError ignored) {
+            return null;
+        }
+    }
+
+    /**
      * Item id of the helmet a player shows, or null: none worn, or hidden by the wearer's own
      * "hide helmet" setting where the world allows hiding (as the server decides for clients).
      */
@@ -565,22 +584,8 @@ public final class DynamicCreatureIcons {
 
     /** Path prefix of every per-player creature icon ("...creature-<player>-<key>-<RRGGBB>.png"). */
     private static final String PLAYER_ICON_PREFIX = "UI/DapperMap/creature-";
-    /**
-     * Path prefix of other players' head icons ("...player-<viewer>-<key>-<RRGGBB>.png"). Kept
-     * apart from creature- so the settings preview draws them as they are (it swaps creature
-     * icons for colour samples) and keyFromPath never mistakes them for creatures.
-     */
+    /** Path prefix of other players' head icons ("...player-<viewer>-<key>-<RRGGBB>.png"), apart from creature- icons. */
     private static final String OTHER_PLAYER_ICON_PREFIX = "UI/DapperMap/player-";
-
-    /**
-     * The creature type (icon key) of a per-player creature icon path, or null for any other
-     * path. Player slugs, keys and colours never contain '-', so the parts split cleanly.
-     */
-    public static String keyFromPath(String path) {
-        if (path == null || !path.startsWith(PLAYER_ICON_PREFIX) || !path.endsWith(".png")) return null;
-        String[] parts = path.substring(PLAYER_ICON_PREFIX.length(), path.length() - 4).split("-");
-        return parts.length == 3 && !parts[1].isEmpty() ? parts[1] : null;
-    }
 
     /**
      * PNG of a creature type's icon edged in {@code rgb}, for the settings preview's colour

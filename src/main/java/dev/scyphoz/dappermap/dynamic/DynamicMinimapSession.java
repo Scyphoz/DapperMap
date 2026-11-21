@@ -256,26 +256,124 @@ public final class DynamicMinimapSession {
     private final DynamicAssetPublisher.ImagePublicationCache terrainPublications = new DynamicAssetPublisher.ImagePublicationCache();
 
     /**
-     * Frozen HUD state for the settings preview. World thread (the settings page is built there).
-     * The live HUD skips readouts for rows (or a whole Info Panel) that are switched off, so they
-     * are worked out here for every row: the preview can then show any row the player turns on.
-     * Runs once per settings page, so it costs nothing per tick.
+     * Frozen HUD state for the settings preview, captured once when the settings page opens. World
+     * thread. The live HUD skips work for anything switched off (hidden readout rows, marker types
+     * that are off), so this runs one full pass with everything on, through the live HUD's own
+     * code: every readout, one creature/player scan, and the world-map, BetterMap and death
+     * markers. The preview then shows or hides each part from the page's settings.
+     *
+     * <p>{@code markersReady} receives an updated snapshot if the world-map markers needed their
+     * own pass (Hytale runs providers off the world thread); it is called on the world thread.
+     * Cost: once per settings page, nothing per tick.
      */
-    public DynamicMinimapRenderer.LiveSnapshot capturePreview(World world) {
+    public DynamicMinimapRenderer.LiveSnapshot capturePreview(World world,
+                                                              java.util.function.Consumer<DynamicMinimapRenderer.LiveSnapshot> markersReady) {
         DynamicMinimapRenderer.LiveSnapshot snapshot = this.hud == null ? null : this.hud.snapshot(this.displayedTerrainPng,
                 this.lastSelfBucket < 0 ? 0.0D : this.lastSelfBucket * (Math.PI * 2 / SELF_BUCKETS));
         if (snapshot == null || world == null) return snapshot;
         try {
-            // A separate cache, so the tick's cached readouts (and clock format) are untouched.
-            ReadoutCache preview = new ReadoutCache();
-            preview.setLang(this.readouts.lang);
-            var position = this.playerRef.getTransform().getPosition(); // Cached transform, as tickSafe reads it.
-            return snapshot.withReadouts(preview.coords(position.x(), position.y(), position.z()),
-                    preview.compass(this.peekYaw()), clockText(world, false, preview), clockText(world, true, preview),
-                    preview.region(this.playerRef));
+            Store<EntityStore> store = world.getEntityStore().getStore();
+            Ref<EntityStore> ref = this.playerRef.getReference();
+            // Readouts for every row, with a separate cache so the tick's cached readouts are untouched.
+            ReadoutCache readout = new ReadoutCache();
+            readout.setLang(this.readouts.lang);
+            var cached = this.playerRef.getTransform().getPosition(); // Cached transform, as tickSafe reads it.
+            // The viewer's own head stands in for other players when none are nearby.
+            String[] heads = ref == null || !ref.isValid() ? null
+                    : DynamicCreatureIcons.previewPlayerKeys(ref, store, this.playerRef.getUsername());
+            snapshot = snapshot.withPreviewData(readout.coords(cached.x(), cached.y(), cached.z()),
+                    readout.compass(this.peekYaw()), clockText(world, false, readout), clockText(world, true, readout),
+                    readout.region(this.playerRef), heads == null ? null : heads[0], heads == null ? null : heads[1]);
+            if (ref == null || !ref.isValid() || Double.isNaN(this.bufferCenterX)) return snapshot;
+            TransformComponent transform = store.getComponent(ref, TransformComponent.getComponentType());
+            if (transform == null) return snapshot;
+
+            List<DynamicMinimapRenderer.PreviewMarker> markers = new ArrayList<>();
+            // Creatures and players: one scan with both on (icons, so creature faces and player
+            // heads are known), no Hostile Only or Critter filter. Fresh key caches, so the live
+            // scan's caches keep their own entries.
+            DynamicMinimapSetting all = this.settings.copy();
+            all.showEntities = true;
+            all.showOtherPlayers = true;
+            all.hostileCreaturesOnly = false;
+            all.critterFilter = DynamicMinimapSetting.CRITTERS_SHOW;
+            all.creatureIcons = true;
+            all.playerIcons = true;
+            for (DynamicMinimapMarker marker : DynamicEntityScanner.scan(store, ref, transform.getPosition(),
+                    this.settings.zoomBlocks + 16.0D, all, this.threatCache, new DynamicCreatureIcons.KeyCache(),
+                    new DynamicCreatureIcons.PlayerKeyCache(), null)) {
+                this.addPreviewMarker(markers, marker);
+            }
+            // World-map, BetterMap and death markers: the live cache when it already covers all
+            // three, else one provider pass (the preview updates when it finishes).
+            boolean betterMap = BetterMapIntegration.isAvailable();
+            if (this.scannedNative && this.scannedDeaths && (this.scannedBetterMap || !betterMap)) {
+                for (DynamicMinimapMarker marker : this.cachedWorldMapMarkers) this.addPreviewMarker(markers, marker);
+            } else if (markersReady != null) {
+                Player player = store.getComponent(ref, Player.getComponentType());
+                NativeWorldMapIntegration.Pass pass = player == null ? null : NativeWorldMapIntegration.requestMarkers(world,
+                        player, this.uuid, this.settings.colours.awt(DynamicMinimapColours.Key.NEUTRAL, 255),
+                        this.settings.colours.awt(DynamicMinimapColours.Key.DEATH, 255), true, betterMap, true);
+                if (pass != null) {
+                    DynamicMinimapRenderer.LiveSnapshot base = snapshot.withMarkers(List.copyOf(markers));
+                    pass.future().thenAccept(found -> {
+                        if (found == null || found.isEmpty()) return;
+                        try {
+                            world.execute(() -> {
+                                List<DynamicMinimapRenderer.PreviewMarker> merged = new ArrayList<>(base.markers());
+                                for (DynamicMinimapMarker marker : found) this.addPreviewMarker(merged, marker);
+                                markersReady.accept(base.withMarkers(List.copyOf(merged)));
+                            });
+                        } catch (RuntimeException ignored) { } // World stopped: the page is gone too.
+                    });
+                }
+            }
+            return snapshot.withMarkers(List.copyOf(markers));
         } catch (RuntimeException failure) {
-            return snapshot; // The live HUD's own text (rows that were off stay blank).
+            return snapshot; // Readouts and markers from the live HUD's state only.
         }
+    }
+
+    /**
+     * Projects one marker the same way as {@link #projectCachedMarkers} (map angle, buffer pan,
+     * edge clamping) and adds it for the preview, centred in map units, when it is on the map.
+     * World thread. Sizes stay unscaled: the preview applies the page's Marker Size.
+     */
+    private void addPreviewMarker(List<DynamicMinimapRenderer.PreviewMarker> out, DynamicMinimapMarker marker) {
+        if (this.hud == null || Double.isNaN(this.bufferCenterX)) return;
+        int kind;
+        if (marker.creature) kind = DynamicMinimapRenderer.MARKER_CREATURE;
+        else if (marker.player) kind = DynamicMinimapRenderer.MARKER_PLAYER;
+        else if (marker.style == Style.BETTERMAP) kind = DynamicMinimapRenderer.MARKER_BETTERMAP;
+        else if (marker.assetPath != null && NativeWorldMapIntegration.DEATH_ICON.equalsIgnoreCase(
+                marker.assetPath.substring(marker.assetPath.lastIndexOf('/') + 1))) kind = DynamicMinimapRenderer.MARKER_DEATH;
+        else kind = DynamicMinimapRenderer.MARKER_MAP; // Hytale world-map icons and imageless world-map dots.
+        double ppb = DynamicMinimapRenderer.pixelsPerBlock(this.settings);
+        double angle = this.acceptedMapAngle(this.peekYaw());
+        double cos = Math.cos(angle), sin = Math.sin(angle);
+        int mapSize = this.settings.sizePixels;
+        double x, y;
+        if (marker.clampToEdge) {
+            // Edge markers: viewport position around the player, held inside the map edge.
+            double playerX = Double.isNaN(this.lastObservedX) ? this.bufferCenterX : this.lastObservedX;
+            double playerZ = Double.isNaN(this.lastObservedZ) ? this.bufferCenterZ : this.lastObservedZ;
+            double rx = (marker.x - playerX) * ppb, rz = (marker.z - playerZ) * ppb;
+            double[] clamped = this.clampMarkerToVisibleMap(mapSize / 2.0 + rx * cos - rz * sin,
+                    mapSize / 2.0 + rx * sin + rz * cos, this.settings.scaledMarkerSize(marker.size));
+            x = clamped[0];
+            y = clamped[1];
+        } else {
+            int bufferPixels = this.hud.bufferPixels();
+            double dx = (marker.x - this.bufferCenterX) * ppb, dz = (marker.z - this.bufferCenterZ) * ppb;
+            double bx = dx * cos - dz * sin + bufferPixels / 2.0D, bz = dx * sin + dz * cos + bufferPixels / 2.0D;
+            int[] pan = this.hud.panOffset(); // Map markers move with the terrain pan, as on the HUD.
+            x = pan[0] + bx;
+            y = pan[1] + bz;
+        }
+        if (x < 0 || y < 0 || x > mapSize || y > mapSize) return; // Off the map.
+        boolean icon = marker.style == Style.CREATURE || marker.style == Style.PLAYER;
+        out.add(new DynamicMinimapRenderer.PreviewMarker(kind, x, y, icon ? marker.assetPath : null,
+                icon ? null : marker.assetPath, marker.rgb(), marker.size));
     }
 
     private double bufferCenterX = Double.NaN;

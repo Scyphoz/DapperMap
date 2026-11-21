@@ -452,6 +452,29 @@ public final class NativeWorldMapIntegration {
         return DynamicAssetPublisher.prepareShared("UI/DapperMap/" + kind + playerSlug + "-" + baseName + "-" + hex + ".png", published);
     }
 
+    /** Spawn and death marker icons, as named by Hytale's own providers (SpawnMarkerProvider, DeathMarkerProvider). */
+    public static final String SPAWN_ICON = "Spawn.png", DEATH_ICON = "Death.png";
+
+    /**
+     * PNG of a map-marker icon tinted {@code rgb} (white keeps the original), for the settings
+     * preview: Hytale's common assets first, then BetterMap's bundled icons, as for live markers.
+     * Null if the icon can't be loaded. Render pool only (an icon's first load may wait for the asset).
+     */
+    public static byte[] previewIcon(String image, int rgb) {
+        if (markerImage(image) == null) return null;
+        byte[] source = registryIcon(image);
+        if (source == null) source = BetterMapIntegration.loaderIcon(fileName(image));
+        if (source == null || (rgb & 0xFFFFFF) == 0xFFFFFF) return source;
+        String cacheKey = "preview" + image + "#" + DapperMapUtil.hex6(rgb);
+        byte[] tinted = TINTED_ICON_BYTES.get(cacheKey);
+        if (tinted == null) {
+            tinted = DapperMapUtil.tintPng(source, rgb);
+            if (tinted == null || tinted.length == 0) return source;
+            DapperMapUtil.putBounded(TINTED_ICON_BYTES, cacheKey, tinted, 256);
+        }
+        return tinted;
+    }
+
     /** Logs each unresolvable icon name once, to help identify missing marker artwork. */
     static void reportMissing(String image) {
         DapperMapUtil.logInfoOnce("marker:" + image,

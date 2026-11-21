@@ -152,11 +152,16 @@ public class DapperMapSessionManager {
         return settings;
     }
 
-    /** Settings preview snapshot; {@code world} is the player's world (the page's world thread). */
+    /**
+     * Settings preview snapshot (one full pass, see DynamicMinimapSession.capturePreview);
+     * {@code world} is the player's world (the page's world thread). {@code markersReady} gets an
+     * updated snapshot if the world-map markers needed their own pass.
+     */
     public dev.scyphoz.dappermap.dynamic.DynamicMinimapRenderer.LiveSnapshot capturePreview(UUID uuid,
-                                                                                            com.hypixel.hytale.server.core.universe.world.World world) {
+                                                                                            com.hypixel.hytale.server.core.universe.world.World world,
+                                                                                            java.util.function.Consumer<dev.scyphoz.dappermap.dynamic.DynamicMinimapRenderer.LiveSnapshot> markersReady) {
         DynamicMinimapSession session = uuid == null ? null : this.sessionsByPlayer.get(uuid);
-        return session == null ? null : session.capturePreview(world);
+        return session == null ? null : session.capturePreview(world, markersReady);
     }
 
     public void setSettings(UUID playerUuid, DynamicMinimapSetting settings) {
